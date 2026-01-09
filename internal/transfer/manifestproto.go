@@ -244,7 +244,7 @@ type fileACKState struct {
 
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
-func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error) (uint32, error) {
+func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error, disableWindow bool) (uint32, error) {
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -361,20 +361,23 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		}
 
 		// Check window: can we send more?
-		ackStateMu.Lock()
-		currentHighestAcked := ackState.highestAcked
+		currentHighestAcked := int32(-1)
 		var inFlight uint32
-		if currentHighestAcked < 0 {
-			inFlight = nextToSend
-		} else {
-			ackedCount := uint32(currentHighestAcked + 1)
-			if nextToSend <= ackedCount {
-				inFlight = 0
+		if !disableWindow {
+			ackStateMu.Lock()
+			currentHighestAcked = ackState.highestAcked
+			if currentHighestAcked < 0 {
+				inFlight = nextToSend
 			} else {
-				inFlight = nextToSend - ackedCount
+				ackedCount := uint32(currentHighestAcked + 1)
+				if nextToSend <= ackedCount {
+					inFlight = 0
+				} else {
+					inFlight = nextToSend - ackedCount
+				}
 			}
+			ackStateMu.Unlock()
 		}
-		ackStateMu.Unlock()
 
 		// Report window stats
 		if windowStatsFn != nil {
@@ -386,7 +389,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		}
 
 		// Wait if window is full
-		if inFlight >= windowSize && nextToSend < totalChunks {
+		if !disableWindow && inFlight >= windowSize && nextToSend < totalChunks {
 			select {
 			case <-ctx.Done():
 				return 0, ctx.Err()
@@ -457,28 +460,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 
 		if progressFn != nil {
 			progressFn(relPath, bytesSent, fileSize)
-		}
-	}
-
-	// Wait for all chunks to be ACKed using event-driven signaling (no polling)
-	if nextToSend > 0 {
-		for {
-			ackStateMu.Lock()
-			currentHighestAcked := ackState.highestAcked
-			allAcked := currentHighestAcked >= int32(nextToSend-1)
-			ackStateMu.Unlock()
-
-			if allAcked {
-				break
-			}
-
-			select {
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			case err := <-ackErrChan:
-				return 0, err
-			case <-ackState.ackNotify:
-			}
 		}
 	}
 
@@ -635,10 +616,13 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 
 	ackTimerCancel()
-	<-ackTimerDone
-	if err := sendAck(highestContiguousIndex); err != nil {
-		return 0, err
+	select {
+	case <-ackTimerDone:
+	default:
 	}
+	go func(index uint32) {
+		_ = sendAck(index)
+	}(highestContiguousIndex)
 
 	eofMagicBuf := make([]byte, len(eofMagic))
 	if _, err := io.ReadFull(s, eofMagicBuf); err != nil {
@@ -724,7 +708,7 @@ func sendFileRecordChunkedWindowed(ctx context.Context, s Stream, relPath string
 		return fmt.Errorf("failed to write chunk size: %w", err)
 	}
 
-	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, ackState, ackStateMu, ackErrChan); err != nil {
+	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, ackState, ackStateMu, ackErrChan, false); err != nil {
 		return err
 	}
 

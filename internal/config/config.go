@@ -28,6 +28,7 @@ type ClientConfig struct {
 	WindowSize       uint32   // Window size in chunks for file transfer (default: 16)
 	ReadAhead        uint32   // Read-ahead depth in chunks (default: window+4, min 1, max 256)
 	MultiStream      bool     // Use multi-stream QUIC transfers (control + per-file data streams)
+	ParallelFiles    int      // Max concurrent file transfers (1..32)
 }
 
 // ParseServerConfig parses server configuration from flags and environment variables.
@@ -70,12 +71,13 @@ func ParseClientConfig(appName string) ClientConfig {
 // parseClientConfigWithFlagSet is an internal helper for testing with isolated flag sets.
 func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig {
 	cfg := ClientConfig{
-		ServerURL:   "http://localhost:8080",
-		LogLevel:    "info",
-		PeerID:      generatePeerID(),
-		JoinCode:    "",
-		Paths:       []string{"."},
-		MultiStream: true,
+		ServerURL:     "http://localhost:8080",
+		LogLevel:      "info",
+		PeerID:        generatePeerID(),
+		JoinCode:      "",
+		Paths:         []string{"."},
+		MultiStream:   true,
+		ParallelFiles: 8,
 	}
 
 	// Read from environment first
@@ -101,6 +103,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.BoolVar(&cfg.QUICTest, "quic-test", false, "enable QUIC connectivity test mode")
 	fs.BoolVar(&cfg.QUICTransferTest, "quic-transfer-test", false, "enable QUIC transfer test mode")
 	fs.BoolVar(&cfg.MultiStream, "multistream", cfg.MultiStream, "use multi-stream QUIC transfer (control + per-file data streams)")
+	fs.IntVar(&cfg.ParallelFiles, "parallel-files", cfg.ParallelFiles, "max concurrent file transfers (1..32)")
 
 	// ChunkSize flag - use uint64 and convert
 	var chunkSizeUint64 uint64
@@ -128,6 +131,13 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	// If paths were provided, use them; otherwise keep default ["."]
 	if len(paths) > 0 {
 		cfg.Paths = paths
+	}
+
+	if cfg.ParallelFiles < 1 {
+		cfg.ParallelFiles = 1
+	}
+	if cfg.ParallelFiles > 32 {
+		cfg.ParallelFiles = 32
 	}
 
 	return cfg

@@ -4,17 +4,18 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 // MockTransport is an in-memory transport implementation for testing.
 // It allows two MockTransport instances to connect to each other.
 type MockTransport struct {
-	mu            sync.Mutex
-	peerID        string
-	acceptChan    chan *mockConn
-	connections   map[*mockConn]bool
+	mu             sync.Mutex
+	peerID         string
+	acceptChan     chan *mockConn
+	connections    map[*mockConn]bool
 	peerAcceptChan chan *mockConn // Channel to send connections to peer
-	closed        bool
+	closed         bool
 }
 
 // NewMockPair creates a pair of MockTransport instances that can connect to each other.
@@ -24,15 +25,15 @@ func NewMockPair() (*MockTransport, *MockTransport) {
 	t2Accept := make(chan *mockConn, 1)
 
 	t1 := &MockTransport{
-		peerID:        "peer1",
-		acceptChan:    t1Accept,
-		connections:   make(map[*mockConn]bool),
+		peerID:         "peer1",
+		acceptChan:     t1Accept,
+		connections:    make(map[*mockConn]bool),
 		peerAcceptChan: t2Accept,
 	}
 	t2 := &MockTransport{
-		peerID:        "peer2",
-		acceptChan:    t2Accept,
-		connections:   make(map[*mockConn]bool),
+		peerID:         "peer2",
+		acceptChan:     t2Accept,
+		connections:    make(map[*mockConn]bool),
 		peerAcceptChan: t1Accept,
 	}
 
@@ -41,20 +42,22 @@ func NewMockPair() (*MockTransport, *MockTransport) {
 
 // mockConn represents a connection between two MockTransport instances.
 type mockConn struct {
-	mu            sync.Mutex
-	transport     *MockTransport
-	other         *mockConn
-	streamChan    chan *mockStream
-	pendingStreams []*mockStream
-	closed        bool
+	mu              sync.Mutex
+	transport       *MockTransport
+	other           *mockConn
+	streamChan      chan *mockStream
+	pendingStreams  []*mockStream
+	closed          bool
+	streamIDCounter uint64
 }
 
 // mockStream represents a bidirectional stream backed by io.Pipe.
 type mockStream struct {
-	mu      sync.Mutex
-	reader  *io.PipeReader
-	writer  *io.PipeWriter
-	closed  bool
+	mu     sync.Mutex
+	reader *io.PipeReader
+	writer *io.PipeWriter
+	closed bool
+	id     uint64
 }
 
 var _ Transport = (*MockTransport)(nil)
@@ -77,7 +80,7 @@ func (t *MockTransport) Dial(ctx context.Context, peerID string) (Conn, error) {
 		pendingStreams: make([]*mockStream, 0),
 	}
 	remoteConn := &mockConn{
-		transport:      nil, // Will be set when accepted by peer
+		transport:      nil,                        // Will be set when accepted by peer
 		streamChan:     make(chan *mockStream, 10), // Buffered to avoid blocking
 		pendingStreams: make([]*mockStream, 0),
 	}
@@ -131,7 +134,7 @@ func (t *MockTransport) Close() error {
 		return nil
 	}
 	t.closed = true
-	
+
 	// Collect connections to close (avoid holding lock while closing)
 	conns := make([]*mockConn, 0, len(t.connections))
 	for conn := range t.connections {
@@ -171,6 +174,9 @@ func (c *mockConn) OpenStream(ctx context.Context) (Stream, error) {
 		reader: localToRemoteReader,
 		writer: remoteToLocalWriter,
 	}
+	streamID := atomic.AddUint64(&c.streamIDCounter, 1) - 1
+	localStream.id = streamID
+	remoteStream.id = streamID
 
 	// Send remote stream to the other side
 	select {
@@ -262,4 +268,11 @@ func (s *mockStream) Close() error {
 	}
 
 	return nil
+}
+
+// StreamID returns the mock stream ID.
+func (s *mockStream) StreamID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id
 }
