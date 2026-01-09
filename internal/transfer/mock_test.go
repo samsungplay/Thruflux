@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 )
@@ -118,7 +119,7 @@ func TestMockStream_ReadWrite(t *testing.T) {
 
 	// Write from stream1, read from stream2
 	testData := []byte("hello, world")
-	
+
 	// Start reading in a goroutine (io.Pipe blocks on Write until there's a reader)
 	readDone := make(chan bool, 1)
 	var readErr error
@@ -177,7 +178,7 @@ func TestMockStream_ReadWrite(t *testing.T) {
 	}
 
 	testData2 := []byte("bidirectional test")
-	
+
 	// Start reading in a goroutine
 	readDone2 := make(chan bool, 1)
 	var readErr2 error
@@ -356,7 +357,7 @@ func TestMockTransport_Close(t *testing.T) {
 	go func() {
 		_, _ = conn1.OpenStream(ctx)
 	}()
-	
+
 	// Give it a moment, then verify connection can still open streams
 	// (though the other side won't accept, so it will hang - but that's expected)
 	time.Sleep(50 * time.Millisecond)
@@ -417,7 +418,7 @@ func TestMockConn_Close(t *testing.T) {
 		// This might fail if the connection close propagated, which is acceptable
 		// The important thing is that OpenStream fails
 	}
-	
+
 	// Don't wait for read - just verify OpenStream fails
 	stream1.Close()
 }
@@ -482,77 +483,137 @@ func TestMockStream_Concurrent(t *testing.T) {
 		t.Fatalf("Accept error: %v", err)
 	}
 
-	// Open multiple streams concurrently
+	// Open and accept multiple streams concurrently, then pair by StreamID.
 	numStreams := 10
-	done := make(chan bool, numStreams)
+	type pair struct {
+		local  Stream
+		remote Stream
+	}
+	pairs := make(map[uint64]pair)
+	var pairsMu sync.Mutex
+	pairCh := make(chan pair, numStreams)
 
+	record := func(id uint64, local Stream, remote Stream) {
+		pairsMu.Lock()
+		current := pairs[id]
+		if local != nil {
+			current.local = local
+		}
+		if remote != nil {
+			current.remote = remote
+		}
+		if current.local != nil && current.remote != nil {
+			delete(pairs, id)
+			pairsMu.Unlock()
+			pairCh <- current
+			return
+		}
+		pairs[id] = current
+		pairsMu.Unlock()
+	}
+
+	var openWg sync.WaitGroup
+	openWg.Add(numStreams)
 	for i := 0; i < numStreams; i++ {
-		go func(id int) {
+		go func() {
+			defer openWg.Done()
 			stream1, err := conn1.OpenStream(ctx)
 			if err != nil {
 				t.Errorf("OpenStream error: %v", err)
-				done <- false
 				return
 			}
+			ider, ok := stream1.(StreamIDer)
+			if !ok {
+				t.Errorf("stream missing StreamID")
+				return
+			}
+			record(ider.StreamID(), stream1, nil)
+		}()
+	}
 
+	var acceptWg sync.WaitGroup
+	acceptWg.Add(numStreams)
+	for i := 0; i < numStreams; i++ {
+		go func() {
+			defer acceptWg.Done()
 			stream2, err := conn2.AcceptStream(ctx)
 			if err != nil {
 				t.Errorf("AcceptStream error: %v", err)
-				done <- false
 				return
 			}
-
-			testData := []byte{byte(id)}
-			
-			// Start reading before writing (io.Pipe blocks on Write until reader is ready)
-			readDone := make(chan struct {
-				data byte
-				err  error
-			}, 1)
-			go func() {
-				buf := make([]byte, 1)
-				_, err := stream2.Read(buf)
-				readDone <- struct {
-					data byte
-					err  error
-				}{data: buf[0], err: err}
-			}()
-
-			// Give reader time to start
-			time.Sleep(10 * time.Millisecond)
-
-			_, err = stream1.Write(testData)
-			if err != nil {
-				t.Errorf("Write error: %v", err)
-				done <- false
+			ider, ok := stream2.(StreamIDer)
+			if !ok {
+				t.Errorf("stream missing StreamID")
 				return
 			}
-
-			stream1.Close()
-
-			select {
-			case result := <-readDone:
-				if result.err != nil && result.err != io.EOF {
-					t.Errorf("Read error: %v", result.err)
-					done <- false
-					return
-				}
-				if result.data != byte(id) {
-					t.Errorf("Read wrong data: got %d, want %d", result.data, id)
-					done <- false
-					return
-				}
-			case <-time.After(1 * time.Second):
-				t.Errorf("Read timed out for stream %d", id)
-				done <- false
-				return
-			}
-
-			done <- true
-		}(i)
+			record(ider.StreamID(), nil, stream2)
+		}()
 	}
 
-	// Wait for all goroutines
+	openWg.Wait()
+	acceptWg.Wait()
+
+	done := make(chan bool, numStreams)
+	for i := 0; i < numStreams; i++ {
+		select {
+		case p := <-pairCh:
+			go func(pair pair) {
+				defer pair.local.Close()
+				defer pair.remote.Close()
+
+				id := byte(0)
+				if ider, ok := pair.local.(StreamIDer); ok {
+					id = byte(ider.StreamID())
+				}
+
+				readDone := make(chan struct {
+					data byte
+					err  error
+				}, 1)
+				go func() {
+					buf := make([]byte, 1)
+					_, err := pair.remote.Read(buf)
+					readDone <- struct {
+						data byte
+						err  error
+					}{data: buf[0], err: err}
+				}()
+
+				time.Sleep(10 * time.Millisecond)
+
+				_, err := pair.local.Write([]byte{id})
+				if err != nil {
+					t.Errorf("Write error: %v", err)
+					done <- false
+					return
+				}
+
+				select {
+				case result := <-readDone:
+					if result.err != nil && result.err != io.EOF {
+						t.Errorf("Read error: %v", result.err)
+						done <- false
+						return
+					}
+					if result.data != id {
+						t.Errorf("Read wrong data: got %d, want %d", result.data, id)
+						done <- false
+						return
+					}
+				case <-time.After(1 * time.Second):
+					t.Errorf("Read timed out for stream")
+					done <- false
+					return
+				}
+
+				done <- true
+			}(p)
+		default:
+			t.Errorf("Missing paired stream")
+			done <- false
+		}
+	}
+
 	successCount := 0
 	for i := 0; i < numStreams; i++ {
 		if <-done {
@@ -564,4 +625,3 @@ func TestMockStream_Concurrent(t *testing.T) {
 		t.Errorf("Only %d/%d streams succeeded", successCount, numStreams)
 	}
 }
-

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"strings"
+	"time"
 )
 
 // ServerConfig holds configuration for the server binary.
@@ -29,6 +30,10 @@ type ClientConfig struct {
 	ReadAhead        uint32   // Read-ahead depth in chunks (default: window+4, min 1, max 256)
 	MultiStream      bool     // Use multi-stream QUIC transfers (control + per-file data streams)
 	ParallelFiles    int      // Max concurrent file transfers (1..32)
+	SmallThreshold   int64    // Bytes threshold for small files
+	MediumThreshold  int64    // Bytes threshold for medium files
+	SmallSlotFrac    float64  // Fraction of slots reserved for small files
+	AgingAfter       time.Duration
 }
 
 // ParseServerConfig parses server configuration from flags and environment variables.
@@ -71,13 +76,17 @@ func ParseClientConfig(appName string) ClientConfig {
 // parseClientConfigWithFlagSet is an internal helper for testing with isolated flag sets.
 func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig {
 	cfg := ClientConfig{
-		ServerURL:     "http://localhost:8080",
-		LogLevel:      "info",
-		PeerID:        generatePeerID(),
-		JoinCode:      "",
-		Paths:         []string{"."},
-		MultiStream:   true,
-		ParallelFiles: 8,
+		ServerURL:       "http://localhost:8080",
+		LogLevel:        "info",
+		PeerID:          generatePeerID(),
+		JoinCode:        "",
+		Paths:           []string{"."},
+		MultiStream:     true,
+		ParallelFiles:   8,
+		SmallThreshold:  4 * 1024 * 1024,
+		MediumThreshold: 64 * 1024 * 1024,
+		SmallSlotFrac:   0.25,
+		AgingAfter:      5 * time.Second,
 	}
 
 	// Read from environment first
@@ -104,6 +113,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.BoolVar(&cfg.QUICTransferTest, "quic-transfer-test", false, "enable QUIC transfer test mode")
 	fs.BoolVar(&cfg.MultiStream, "multistream", cfg.MultiStream, "use multi-stream QUIC transfer (control + per-file data streams)")
 	fs.IntVar(&cfg.ParallelFiles, "parallel-files", cfg.ParallelFiles, "max concurrent file transfers (1..32)")
+	fs.Float64Var(&cfg.SmallSlotFrac, "small-slot-frac", cfg.SmallSlotFrac, "fraction of slots reserved for small files")
+	fs.DurationVar(&cfg.AgingAfter, "aging-after", cfg.AgingAfter, "duration before aging boosts a file")
 
 	// ChunkSize flag - use uint64 and convert
 	var chunkSizeUint64 uint64
@@ -116,6 +127,10 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	// ReadAhead flag - use uint64 and convert
 	var readAheadUint64 uint64
 	fs.Uint64Var(&readAheadUint64, "read-ahead", 0, "read-ahead depth in chunks (default: window+4, min 1, max 256)")
+	var smallThresholdUint64 uint64
+	fs.Uint64Var(&smallThresholdUint64, "small-threshold", uint64(cfg.SmallThreshold), "bytes threshold for small files")
+	var mediumThresholdUint64 uint64
+	fs.Uint64Var(&mediumThresholdUint64, "medium-threshold", uint64(cfg.MediumThreshold), "bytes threshold for medium files")
 
 	// Handle repeatable --path flag
 	paths := make([]string, 0)
@@ -127,6 +142,18 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	cfg.ChunkSize = uint32(chunkSizeUint64)
 	cfg.WindowSize = uint32(windowSizeUint64)
 	cfg.ReadAhead = uint32(readAheadUint64)
+	if smallThresholdUint64 > 0 {
+		cfg.SmallThreshold = int64(smallThresholdUint64)
+	}
+	if mediumThresholdUint64 > 0 {
+		cfg.MediumThreshold = int64(mediumThresholdUint64)
+	}
+	if cfg.SmallSlotFrac <= 0 || cfg.SmallSlotFrac > 1 {
+		cfg.SmallSlotFrac = 0.25
+	}
+	if cfg.AgingAfter <= 0 {
+		cfg.AgingAfter = 5 * time.Second
+	}
 
 	// If paths were provided, use them; otherwise keep default ["."]
 	if len(paths) > 0 {
