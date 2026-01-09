@@ -1,0 +1,117 @@
+package quictransport
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"log/slog"
+	"math/big"
+	"net"
+	"time"
+
+	"github.com/quic-go/quic-go"
+)
+
+const (
+	// ALPNProtocol is the Application-Layer Protocol Negotiation identifier for SheerBytes QUIC
+	ALPNProtocol = "sheerbytes-quic-v1"
+)
+
+// ServerConfig returns a TLS configuration for QUIC server.
+// Uses self-signed certificate for now (insecure).
+func ServerConfig() *tls.Config {
+	// Generate a self-signed certificate
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		panic("failed to generate self-signed certificate: " + err.Error())
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{ALPNProtocol},
+	}
+}
+
+// ClientConfig returns a TLS configuration for QUIC client.
+// Uses InsecureSkipVerify for now (insecure).
+func ClientConfig() *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{ALPNProtocol},
+	}
+}
+
+// generateSelfSignedCert generates a self-signed certificate for testing.
+func generateSelfSignedCert() (tls.Certificate, error) {
+	// Generate RSA private key
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	// Create certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization:  []string{"SheerBytes"},
+			Country:       []string{"US"},
+			Province:      []string{""},
+			Locality:      []string{""},
+			StreetAddress: []string{""},
+			PostalCode:    []string{""},
+		},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	// Create self-signed certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  priv,
+	}, nil
+}
+
+// Listen creates a QUIC listener on the given PacketConn.
+func Listen(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger) (*quic.Listener, error) {
+	tlsConfig := ServerConfig()
+	config := &quic.Config{
+		KeepAlivePeriod: 30, // seconds
+		MaxIncomingStreams: 100,
+	}
+
+	listener, err := quic.Listen(udpConn, tlsConfig, config)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("QUIC listener created", "local_addr", udpConn.LocalAddr())
+	return listener, nil
+}
+
+// Dial creates a QUIC connection to the remote address using the given PacketConn.
+func Dial(ctx context.Context, udpConn net.PacketConn, remoteAddr net.Addr, logger *slog.Logger) (*quic.Conn, error) {
+	tlsConfig := ClientConfig()
+	config := &quic.Config{
+		KeepAlivePeriod: 30, // seconds
+	}
+
+	conn, err := quic.Dial(ctx, udpConn, remoteAddr, tlsConfig, config)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("QUIC connection established", "remote_addr", remoteAddr)
+	return conn, nil
+}
+

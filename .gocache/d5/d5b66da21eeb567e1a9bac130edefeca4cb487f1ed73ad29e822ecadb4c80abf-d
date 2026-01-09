@@ -1,0 +1,16 @@
+./addr.go
+./agent.go
+./attributes.go
+./checks.go
+./client.go
+./errorcode.go
+./errors.go
+./fingerprint.go
+./helpers.go
+./integrity.go
+./message.go
+./stun.go
+./textattrs.go
+./uattrs.go
+./uri.go
+./xoraddr.go
