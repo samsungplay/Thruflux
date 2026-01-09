@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sheerbytes/sheerbytes/internal/scheduler"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 )
 
@@ -19,6 +20,10 @@ type Options struct {
 	WindowSize      uint32
 	ReadAhead       uint32
 	ParallelFiles   int
+	SmallThreshold  int64
+	MediumThreshold int64
+	SmallSlotFrac   float64
+	AgingAfter      time.Duration
 	ProgressFn      ProgressFn
 	WindowStatsFn   WindowStatsFn
 	TransferStatsFn TransferStatsFn
@@ -190,6 +195,44 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	ackCtx, ackCancel := context.WithCancel(ctx)
 	defer ackCancel()
 
+	fileItems := make([]manifest.FileItem, 0, len(m.Items))
+	itemByRelPath := make(map[string]manifest.FileItem)
+	var remainingBytes int64
+	for _, item := range m.Items {
+		if item.IsDir {
+			continue
+		}
+		fileItems = append(fileItems, item)
+		itemByRelPath[item.RelPath] = item
+		remainingBytes += item.Size
+	}
+
+	sched := scheduler.NewHybridScheduler(scheduler.PolicyConfig{
+		ParallelFiles:   parallelFiles,
+		SmallThreshold:  opts.SmallThreshold,
+		MediumThreshold: opts.MediumThreshold,
+		SmallSlotFrac:   opts.SmallSlotFrac,
+		AgingAfter:      opts.AgingAfter,
+	})
+	var schedMu sync.Mutex
+	metaByRelPath := make(map[string]scheduler.FileMeta)
+	keyByRelPath := make(map[string]scheduler.FileKey)
+	keyByStreamID := make(map[uint64]scheduler.FileKey)
+
+	now := time.Now()
+	for _, item := range fileItems {
+		key := scheduler.FileKey{StreamID: 0, RelPath: item.RelPath}
+		meta := scheduler.FileMeta{
+			RelPath:   item.RelPath,
+			Size:      item.Size,
+			Remaining: item.Size,
+			AddedAt:   now,
+		}
+		sched.Add(key, meta)
+		metaByRelPath[item.RelPath] = meta
+		keyByRelPath[item.RelPath] = key
+	}
+
 	go func() {
 		for {
 			select {
@@ -232,6 +275,20 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					st.lastAcked = int32(ack.HighestContiguousChunk)
 				}
 				activeMu.Unlock()
+				schedMu.Lock()
+				if key, ok := keyByStreamID[ack.StreamID]; ok {
+					item := itemByRelPath[key.RelPath]
+					ackedBytes := int64(ack.HighestContiguousChunk+1) * int64(chunkSize)
+					if ackedBytes > item.Size {
+						ackedBytes = item.Size
+					}
+					remaining := item.Size - ackedBytes
+					sched.UpdateRemaining(key, remaining)
+					meta := metaByRelPath[key.RelPath]
+					meta.Remaining = remaining
+					metaByRelPath[key.RelPath] = meta
+				}
+				schedMu.Unlock()
 			case controlTypeFileDone:
 				doneRegistry.deliver(msg.(FileDone))
 			default:
@@ -243,16 +300,6 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			}
 		}
 	}()
-
-	fileItems := make([]manifest.FileItem, 0, len(m.Items))
-	var remainingBytes int64
-	for _, item := range m.Items {
-		if item.IsDir {
-			continue
-		}
-		fileItems = append(fileItems, item)
-		remainingBytes += item.Size
-	}
 
 	var statsMu sync.Mutex
 	activeCount := 0
@@ -266,6 +313,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	}
 
 	sem := make(chan struct{}, parallelFiles)
+	scheduleWake := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	var controlWriteMu sync.Mutex
 	var errMu sync.Mutex
@@ -330,15 +378,60 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}()
 	}
 
+	if opts.WatchdogFn != nil {
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-transferCtx.Done():
+					return
+				case <-ticker.C:
+					statsMu.Lock()
+					completed := completedCount
+					statsMu.Unlock()
+					snapshot := sched.Snapshot()
+					opts.WatchdogFn("scheduler snapshot", "snapshot", snapshot, "completed_files", completed)
+				}
+			}
+		}()
+	}
+
 scheduleLoop:
-	for _, item := range fileItems {
-		if transferCtx.Err() != nil {
+	for {
+		statsMu.Lock()
+		doneCount := completedCount
+		statsMu.Unlock()
+		if doneCount >= totalFiles {
 			break
+		}
+		if transferCtx.Err() != nil {
+			break scheduleLoop
 		}
 
 		select {
 		case sem <- struct{}{}:
 		case <-transferCtx.Done():
+			break scheduleLoop
+		}
+
+		schedMu.Lock()
+		key, ok := sched.Next(time.Now())
+		schedMu.Unlock()
+		if !ok {
+			<-sem
+			select {
+			case <-scheduleWake:
+				continue
+			case <-transferCtx.Done():
+				break scheduleLoop
+			}
+		}
+
+		item, ok := itemByRelPath[key.RelPath]
+		if !ok {
+			setErr(fmt.Errorf("missing manifest item for %s", key.RelPath))
+			<-sem
 			break scheduleLoop
 		}
 
@@ -356,7 +449,7 @@ scheduleLoop:
 		if err != nil {
 			setErr(fmt.Errorf("failed to open data stream: %w", err))
 			<-sem
-			break
+			break scheduleLoop
 		}
 
 		streamID, err := streamIDFromStream(dataStream)
@@ -364,8 +457,22 @@ scheduleLoop:
 			dataStream.Close()
 			setErr(err)
 			<-sem
-			break
+			break scheduleLoop
 		}
+
+		schedMu.Lock()
+		oldKey := keyByRelPath[item.RelPath]
+		meta := metaByRelPath[item.RelPath]
+		now := time.Now()
+		meta.StartedAt = now
+		meta.LastScheduledAt = now
+		sched.Remove(oldKey)
+		newKey := scheduler.FileKey{StreamID: streamID, RelPath: item.RelPath}
+		sched.Add(newKey, meta)
+		metaByRelPath[item.RelPath] = meta
+		keyByRelPath[item.RelPath] = newKey
+		keyByStreamID[streamID] = newKey
+		schedMu.Unlock()
 
 		controlWriteMu.Lock()
 		err = writeFileBegin(controlStream, FileBegin{
@@ -379,7 +486,7 @@ scheduleLoop:
 			dataStream.Close()
 			setErr(err)
 			<-sem
-			break
+			break scheduleLoop
 		}
 
 		fileState := &fileACKState{
@@ -436,6 +543,9 @@ scheduleLoop:
 				setErr(err)
 				return
 			}
+			if opts.WatchdogFn != nil {
+				opts.WatchdogFn("sender data eof written", "relpath", item.RelPath, "stream_id", streamID, "crc32", crc32Value)
+			}
 			if err := dataStream.Close(); err != nil {
 				setErr(err)
 				return
@@ -451,6 +561,9 @@ scheduleLoop:
 				setErr(err)
 				return
 			}
+			if opts.WatchdogFn != nil {
+				opts.WatchdogFn("sender file end sent", "relpath", item.RelPath, "stream_id", streamID)
+			}
 
 			fileDone, err := doneRegistry.wait(transferCtx, streamID)
 			if err != nil {
@@ -465,6 +578,9 @@ scheduleLoop:
 				}
 				return
 			}
+			if opts.WatchdogFn != nil {
+				opts.WatchdogFn("sender file done received", "relpath", item.RelPath, "stream_id", streamID)
+			}
 
 			ackStatesMu.Lock()
 			delete(ackStates, streamID)
@@ -473,6 +589,13 @@ scheduleLoop:
 			activeMu.Lock()
 			delete(activeTransfers, streamID)
 			activeMu.Unlock()
+
+			schedMu.Lock()
+			if key, ok := keyByStreamID[streamID]; ok {
+				sched.Remove(key)
+				delete(keyByStreamID, streamID)
+			}
+			schedMu.Unlock()
 
 			statsMu.Lock()
 			activeCount--
@@ -483,6 +606,10 @@ scheduleLoop:
 			remaining := remainingBytes
 			statsMu.Unlock()
 			updateStats(active, completed, remaining)
+			select {
+			case scheduleWake <- struct{}{}:
+			default:
+			}
 		}(item, streamID, dataStream, fileState)
 	}
 
@@ -557,12 +684,16 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	}()
 
 	fileItems := make([]manifest.FileItem, 0, len(m.Items))
+	expectedFiles := make(map[string]int64)
+	receivedFiles := make(map[string]struct{})
 	for _, item := range m.Items {
-		if !item.IsDir {
-			fileItems = append(fileItems, item)
+		if item.IsDir {
+			continue
 		}
+		fileItems = append(fileItems, item)
+		expectedFiles[item.RelPath] = item.Size
 	}
-	fileIndex := 0
+	remainingFiles := len(fileItems)
 	parallelFiles := opts.ParallelFiles
 	if parallelFiles < 1 {
 		parallelFiles = 1
@@ -807,6 +938,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 						setRecvErr(err)
 						return
 					}
+					if opts.WatchdogFn != nil {
+						opts.WatchdogFn("receiver data eof read", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID, "crc32", crc32Value)
+					}
 
 					stateMu.Lock()
 					state.crc32 = crc32Value
@@ -834,6 +968,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}}:
 					case <-recvCtx.Done():
 						return
+					}
+					if opts.WatchdogFn != nil {
+						opts.WatchdogFn("receiver file done queued", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID)
 					}
 
 					statsMu.Lock()
@@ -878,14 +1015,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			if err := validateRelPath(begin.RelPath); err != nil {
 				return m, err
 			}
-			if fileIndex >= len(fileItems) {
-				return m, fmt.Errorf("received more files than manifest")
+			expectedSize, ok := expectedFiles[begin.RelPath]
+			if !ok {
+				return m, fmt.Errorf("manifest mismatch: unexpected file %s size %d", begin.RelPath, begin.FileSize)
 			}
-			expected := fileItems[fileIndex]
-			if expected.RelPath != begin.RelPath || expected.Size != int64(begin.FileSize) {
-				return m, fmt.Errorf("manifest mismatch: expected %s size %d, got %s size %d", expected.RelPath, expected.Size, begin.RelPath, begin.FileSize)
+			if expectedSize != int64(begin.FileSize) {
+				return m, fmt.Errorf("manifest mismatch: expected %s size %d, got %s size %d", begin.RelPath, expectedSize, begin.RelPath, begin.FileSize)
 			}
-			fileIndex++
+			if _, seen := receivedFiles[begin.RelPath]; seen {
+				return m, fmt.Errorf("duplicate file begin for %s", begin.RelPath)
+			}
+			receivedFiles[begin.RelPath] = struct{}{}
+			remainingFiles--
 
 			state := &recvFileState{
 				begin:        begin,
@@ -926,8 +1067,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				return m, fmt.Errorf("file end for unknown stream %d", end.StreamID)
 			}
 		case controlTypeEnd:
-			if fileIndex != len(fileItems) {
-				return m, fmt.Errorf("received fewer files than manifest: got %d, expected %d", fileIndex, len(fileItems))
+			if remainingFiles != 0 {
+				return m, fmt.Errorf("received fewer files than manifest: remaining %d", remainingFiles)
 			}
 			close(beginQueue)
 			<-schedulerDone
