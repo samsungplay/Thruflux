@@ -87,7 +87,8 @@ func Listen(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger) (*
 	tlsConfig := ServerConfig()
 	config := &quic.Config{
 		KeepAlivePeriod: 30, // seconds
-		MaxIncomingStreams: 100,
+		// Allow many per-file streams without hitting the default 256 stream cap.
+		MaxIncomingStreams: 256,
 	}
 
 	listener, err := quic.Listen(udpConn, tlsConfig, config)
@@ -114,4 +115,3 @@ func Dial(ctx context.Context, udpConn net.PacketConn, remoteAddr net.Addr, logg
 	logger.Info("QUIC connection established", "remote_addr", remoteAddr)
 	return conn, nil
 }
-

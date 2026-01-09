@@ -1,0 +1,12 @@
+./controlproto.go
+./fileproto.go
+./manifestproto.go
+./mock.go
+./multistream.go
+./transport.go
+./controlproto_test.go
+./fileproto_test.go
+./manifestproto_readahead_test.go
+./manifestproto_test.go
+./mock_test.go
+./multistream_test.go
