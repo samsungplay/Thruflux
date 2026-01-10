@@ -1,0 +1,8 @@
+./dash.go
+./fill.go
+./geomx.go
+./gradient.go
+./matrix.go
+./scan.go
+./shapes.go
+./stroke.go

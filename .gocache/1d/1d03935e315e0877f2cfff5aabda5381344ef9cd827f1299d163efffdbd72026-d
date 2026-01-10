@@ -1,0 +1,10 @@
+./animation.go
+./base.go
+./canvas.go
+./circle.go
+./gradient.go
+./image.go
+./line.go
+./raster.go
+./rectangle.go
+./text.go

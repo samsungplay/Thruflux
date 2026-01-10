@@ -1,0 +1,11 @@
+./bundled-emoji.go
+./bundled-fonts.go
+./bundled-icons.go
+./color.go
+./font.go
+./icons.go
+./json.go
+./legacy.go
+./size.go
+./theme.go
+./theme_other.go

@@ -1,0 +1,5 @@
+./chan_go1.21.go
+./chan_struct.go
+./doc.go
+./queue_canvasobject.go
+./vector.go

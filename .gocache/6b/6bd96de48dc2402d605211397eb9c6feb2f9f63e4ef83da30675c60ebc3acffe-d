@@ -1,0 +1,6 @@
+./cff2.go
+./cff_gen.go
+./cff_src.go
+./charsets.go
+./charstring.go
+./parser.go

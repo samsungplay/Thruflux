@@ -1,0 +1,6 @@
+./build.go
+./driver_notflatpak.go
+./driver_notwayland.go
+./hints_disabled.go
+./metadata.go
+./mode_standard.go

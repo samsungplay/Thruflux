@@ -73,6 +73,11 @@ type IceCredentials struct {
 	Pwd   string `json:"pwd"`
 }
 
+// IceCandidates contains all gathered ICE candidates.
+type IceCandidates struct {
+	Candidates []string `json:"candidates"`
+}
+
 // ManifestSummary contains summary information about a file manifest.
 type ManifestSummary struct {
 	ManifestID  string `json:"manifest_id"`
@@ -89,8 +94,24 @@ type ManifestOffer struct {
 
 // ManifestAccept accepts a manifest offer.
 type ManifestAccept struct {
-	ManifestID   string   `json:"manifest_id"`
-	Mode         string   `json:"mode"`
+	ManifestID    string   `json:"manifest_id"`
+	Mode          string   `json:"mode"`
 	SelectedPaths []string `json:"selected_paths,omitempty"`
 }
 
+// TransferStart signals a receiver to begin ICE/QUIC for a snapshot transfer.
+type TransferStart struct {
+	ManifestID     string `json:"manifest_id"`
+	SenderPeerID   string `json:"sender_peer_id"`
+	ReceiverPeerID string `json:"receiver_peer_id"`
+	TransferID     string `json:"transfer_id"`
+}
+
+// TransferQueued indicates a receiver is queued for a transfer slot.
+type TransferQueued struct {
+	ManifestID     string `json:"manifest_id"`
+	ReceiverPeerID string `json:"receiver_peer_id"`
+	Position       int    `json:"position"`
+	Active         int    `json:"active"`
+	Max            int    `json:"max"`
+}

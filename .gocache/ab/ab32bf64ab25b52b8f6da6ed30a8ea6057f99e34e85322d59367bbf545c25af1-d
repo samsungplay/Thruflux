@@ -1,0 +1,9 @@
+./definitions.go
+./draw.go
+./icon_cursor.go
+./path_cursor.go
+./path_style.go
+./public.go
+./svg_icon.go
+./svg_path.go
+./utils.go

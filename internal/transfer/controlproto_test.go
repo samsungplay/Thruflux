@@ -22,6 +22,7 @@ func TestControlProto_RoundTrip(t *testing.T) {
 		FileSize:  1234,
 		ChunkSize: 4096,
 		StreamID:  42,
+		HashAlg:   HashAlgCRC32C,
 	}
 	ack := Ack2{
 		StreamID:               42,
@@ -36,6 +37,18 @@ func TestControlProto_RoundTrip(t *testing.T) {
 		OK:       false,
 		ErrMsg:   "bad crc",
 	}
+	resumeReq := ResumeRequest{
+		FileID:   "abcd1234",
+		StreamID: 42,
+	}
+	resumeInfo := FileResumeInfo{
+		FileID:            "abcd1234",
+		StreamID:          42,
+		TotalChunks:       10,
+		Bitmap:            []byte{0xFF, 0x03},
+		LastVerifiedChunk: 9,
+		LastVerifiedHash:  0xDEADBEEF,
+	}
 
 	if err := writeFileBegin(stream, begin); err != nil {
 		t.Fatalf("write FileBegin: %v", err)
@@ -48,6 +61,12 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	}
 	if err := writeFileDone(stream, done); err != nil {
 		t.Fatalf("write FileDone: %v", err)
+	}
+	if err := writeResumeRequest(stream, resumeReq); err != nil {
+		t.Fatalf("write ResumeRequest: %v", err)
+	}
+	if err := writeFileResumeInfo(stream, resumeInfo); err != nil {
+		t.Fatalf("write FileResumeInfo: %v", err)
 	}
 
 	msgType, msg, err := readControlMessage(stream)
@@ -84,5 +103,28 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	decodedDone := msg.(FileDone)
 	if decodedDone != done {
 		t.Fatalf("FileDone mismatch: got %+v want %+v", decodedDone, done)
+	}
+
+	msgType, msg, err = readControlMessage(stream)
+	if err != nil || msgType != controlTypeResumeRequest {
+		t.Fatalf("read ResumeRequest: type=%v err=%v", msgType, err)
+	}
+	decodedReq := msg.(ResumeRequest)
+	if decodedReq != resumeReq {
+		t.Fatalf("ResumeRequest mismatch: got %+v want %+v", decodedReq, resumeReq)
+	}
+
+	msgType, msg, err = readControlMessage(stream)
+	if err != nil || msgType != controlTypeFileResumeInfo {
+		t.Fatalf("read FileResumeInfo: type=%v err=%v", msgType, err)
+	}
+	decodedInfo := msg.(FileResumeInfo)
+	if decodedInfo.FileID != resumeInfo.FileID ||
+		decodedInfo.StreamID != resumeInfo.StreamID ||
+		decodedInfo.TotalChunks != resumeInfo.TotalChunks ||
+		decodedInfo.LastVerifiedChunk != resumeInfo.LastVerifiedChunk ||
+		decodedInfo.LastVerifiedHash != resumeInfo.LastVerifiedHash ||
+		!bytes.Equal(decodedInfo.Bitmap, resumeInfo.Bitmap) {
+		t.Fatalf("FileResumeInfo mismatch: got %+v want %+v", decodedInfo, resumeInfo)
 	}
 }

@@ -1,0 +1,16 @@
+./glfw_tree_rebuild.go
+_cgo_gotypes.go
+build.cgo1.go
+c_glfw.cgo1.go
+c_glfw_darwin.cgo1.go
+context.cgo1.go
+error.cgo1.go
+glfw.cgo1.go
+input.cgo1.go
+monitor.cgo1.go
+native_darwin.cgo1.go
+time.cgo1.go
+util.cgo1.go
+vulkan.cgo1.go
+window.cgo1.go
+_cgo_import.go

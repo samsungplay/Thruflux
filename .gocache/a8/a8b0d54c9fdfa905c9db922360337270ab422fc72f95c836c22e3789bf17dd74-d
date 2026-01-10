@@ -1,0 +1,10 @@
+./apptabs.go
+./container.go
+./doctabs.go
+./innerwindow.go
+./layouts.go
+./multiplewindows.go
+./scroll.go
+./split.go
+./tabs.go
+./theme.go

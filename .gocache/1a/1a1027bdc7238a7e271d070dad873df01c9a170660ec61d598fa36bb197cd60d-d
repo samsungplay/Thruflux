@@ -1,0 +1,6 @@
+package gl
+//go:cgo_import_dynamic dlsym dlsym ""
+//go:cgo_import_dynamic free free ""
+//go:cgo_import_dynamic malloc malloc ""
+//go:cgo_import_dynamic _ _ "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL"
+//go:cgo_import_dynamic _ _ "/usr/lib/libSystem.B.dylib"

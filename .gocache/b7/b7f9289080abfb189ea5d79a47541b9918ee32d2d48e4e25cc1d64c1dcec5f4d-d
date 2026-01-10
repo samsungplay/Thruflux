@@ -1,0 +1,8 @@
+./bitmap.go
+./controlproto.go
+./fileproto.go
+./hash.go
+./manifestproto.go
+./mock.go
+./multistream.go
+./transport.go

@@ -1,0 +1,13 @@
+./fontconfig.go
+./fontmap.go
+./footprint.go
+./langset.go
+./langset_gen.go
+./lru.go
+./match.go
+./rune_coverage.go
+./scan.go
+./scandir.go
+./serialize.go
+./substitutions.go
+./substitutions_table.go

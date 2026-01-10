@@ -1,0 +1,7 @@
+./bundle.go
+./bundlefs.go
+./doc.go
+./localizer.go
+./message.go
+./message_template.go
+./parse.go

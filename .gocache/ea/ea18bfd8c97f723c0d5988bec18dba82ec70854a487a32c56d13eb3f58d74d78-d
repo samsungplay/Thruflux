@@ -1,0 +1,6 @@
+./doc.go
+./form.go
+./operands.go
+./rule.go
+./rule_gen.go
+./rules.go

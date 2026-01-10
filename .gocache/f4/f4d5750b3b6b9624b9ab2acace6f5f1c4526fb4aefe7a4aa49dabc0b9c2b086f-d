@@ -1,0 +1,5 @@
+./opentype.go
+./reader.go
+./reader_otf.go
+./reader_woff.go
+./writer.go

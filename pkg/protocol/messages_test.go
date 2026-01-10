@@ -7,11 +7,11 @@ import (
 
 func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 	tests := []struct {
-		name      string
-		msgType   string
-		payload   any
-		decodeTo  func() any // factory function to create empty instance
-		verify    func(t *testing.T, decoded, original any)
+		name     string
+		msgType  string
+		payload  any
+		decodeTo func() any // factory function to create empty instance
+		verify   func(t *testing.T, decoded, original any)
 	}{
 		// Peer events
 		{
@@ -67,9 +67,9 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name:    "CreateSessionRequest_empty",
-			msgType: TypeCreateSessionRequest,
-			payload: CreateSessionRequest{},
+			name:     "CreateSessionRequest_empty",
+			msgType:  TypeCreateSessionRequest,
+			payload:  CreateSessionRequest{},
 			decodeTo: func() any { return &CreateSessionRequest{} },
 			verify: func(t *testing.T, decoded, original any) {
 				d := decoded.(*CreateSessionRequest)
@@ -251,6 +251,84 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "TransferStart",
+			msgType: TypeTransferStart,
+			payload: TransferStart{
+				ManifestID:     "manifest123",
+				SenderPeerID:   "sender1",
+				ReceiverPeerID: "receiver1",
+				TransferID:     "transfer-abc",
+			},
+			decodeTo: func() any { return &TransferStart{} },
+			verify: func(t *testing.T, decoded, original any) {
+				d := decoded.(*TransferStart)
+				o := original.(TransferStart)
+				if d.ManifestID != o.ManifestID {
+					t.Errorf("ManifestID = %s, want %s", d.ManifestID, o.ManifestID)
+				}
+				if d.SenderPeerID != o.SenderPeerID {
+					t.Errorf("SenderPeerID = %s, want %s", d.SenderPeerID, o.SenderPeerID)
+				}
+				if d.ReceiverPeerID != o.ReceiverPeerID {
+					t.Errorf("ReceiverPeerID = %s, want %s", d.ReceiverPeerID, o.ReceiverPeerID)
+				}
+				if d.TransferID != o.TransferID {
+					t.Errorf("TransferID = %s, want %s", d.TransferID, o.TransferID)
+				}
+			},
+		},
+		{
+			name:    "TransferQueued",
+			msgType: TypeTransferQueued,
+			payload: TransferQueued{
+				ManifestID:     "manifest123",
+				ReceiverPeerID: "receiver1",
+				Position:       2,
+				Active:         1,
+				Max:            4,
+			},
+			decodeTo: func() any { return &TransferQueued{} },
+			verify: func(t *testing.T, decoded, original any) {
+				d := decoded.(*TransferQueued)
+				o := original.(TransferQueued)
+				if d.ManifestID != o.ManifestID {
+					t.Errorf("ManifestID = %s, want %s", d.ManifestID, o.ManifestID)
+				}
+				if d.ReceiverPeerID != o.ReceiverPeerID {
+					t.Errorf("ReceiverPeerID = %s, want %s", d.ReceiverPeerID, o.ReceiverPeerID)
+				}
+				if d.Position != o.Position {
+					t.Errorf("Position = %d, want %d", d.Position, o.Position)
+				}
+				if d.Active != o.Active {
+					t.Errorf("Active = %d, want %d", d.Active, o.Active)
+				}
+				if d.Max != o.Max {
+					t.Errorf("Max = %d, want %d", d.Max, o.Max)
+				}
+			},
+		},
+		{
+			name:    "IceCandidates",
+			msgType: TypeIceCandidates,
+			payload: IceCandidates{
+				Candidates: []string{"cand1", "cand2"},
+			},
+			decodeTo: func() any { return &IceCandidates{} },
+			verify: func(t *testing.T, decoded, original any) {
+				d := decoded.(*IceCandidates)
+				o := original.(IceCandidates)
+				if len(d.Candidates) != len(o.Candidates) {
+					t.Fatalf("Candidates length = %d, want %d", len(d.Candidates), len(o.Candidates))
+				}
+				for i, cand := range d.Candidates {
+					if cand != o.Candidates[i] {
+						t.Errorf("Candidates[%d] = %s, want %s", i, cand, o.Candidates[i])
+					}
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -309,4 +387,3 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 		})
 	}
 }
-
