@@ -24,10 +24,13 @@ type ICEPeer struct {
 	mu               sync.Mutex
 	onCandidate      func(string)
 	queuedCandidates []string // Candidates gathered before callback is set
+	gatherDone       chan struct{}
+	gatherOnce       sync.Once
 	// Connection info for QUIC
-	conn             *ice.Conn
-	localAddr        net.Addr
-	remoteAddr       net.Addr
+	conn         *ice.Conn
+	localAddr    net.Addr
+	remoteAddr   net.Addr
+	selectedPair *ice.CandidatePair
 }
 
 // NewICEPeer creates a new ICE peer with the given configuration.
@@ -54,8 +57,8 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 
 	config := &ice.AgentConfig{
 		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP4,
-		ice.NetworkTypeUDP6},
-		Urls:         urls,
+			ice.NetworkTypeUDP6},
+		Urls: urls,
 	}
 
 	agent, err := ice.NewAgent(config)
@@ -64,14 +67,16 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	}
 
 	peer := &ICEPeer{
-		agent:  agent,
-		config: cfg,
-		logger: logger,
+		agent:      agent,
+		config:     cfg,
+		logger:     logger,
+		gatherDone: make(chan struct{}),
 	}
 
 	// Set up candidate callback
 	if err := agent.OnCandidate(func(candidate ice.Candidate) {
 		if candidate == nil {
+			peer.gatherOnce.Do(func() { close(peer.gatherDone) })
 			return
 		}
 		candidateStr := candidate.Marshal()
@@ -105,6 +110,13 @@ func (p *ICEPeer) StartGathering(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// GatheringDone returns a channel that is closed when candidate gathering completes.
+func (p *ICEPeer) GatheringDone() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.gatherDone
 }
 
 // LocalCredentials returns the local ICE credentials (username fragment and password).
@@ -198,7 +210,7 @@ func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, er
 		p.mu.Unlock()
 		return nil, fmt.Errorf("remote credentials not set: ufrag=%q pwd=%q", remoteUfrag, remotePwd)
 	}
-	
+
 	// Also verify local credentials
 	localUfrag, localPwd, _ := p.agent.GetLocalUserCredentials()
 	if localUfrag == "" || localPwd == "" {
@@ -208,7 +220,7 @@ func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, er
 	p.mu.Unlock()
 
 	p.logger.Debug("connecting with credentials", "local_ufrag", localUfrag, "remote_ufrag", remoteUfrag, "controlling", isControlling)
-	
+
 	var conn *ice.Conn
 	if isControlling {
 		// Sender calls Dial (controlling agent)
@@ -224,14 +236,14 @@ func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, er
 	// Get the selected candidate pair for logging and storing addresses
 	selectedPair, err := p.agent.GetSelectedCandidatePair()
 	if err == nil && selectedPair != nil {
-		p.logger.Info("ICE connection established",
+		p.logger.Debug("ICE connection established",
 			"local", selectedPair.Local.String(),
 			"remote", selectedPair.Remote.String())
-		
+
 		// Get addresses from the actual connection (more reliable than candidate)
 		connLocalAddr := conn.LocalAddr()
 		connRemoteAddr := conn.RemoteAddr()
-		
+
 		// Parse remote address from candidate (connection RemoteAddr might not be UDP)
 		remoteIP := selectedPair.Remote.Address()
 		remotePort := selectedPair.Remote.Port()
@@ -245,10 +257,11 @@ func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, er
 				}
 			}
 		}
-		
+
 		// Store connection info for QUIC
 		p.mu.Lock()
 		p.conn = conn
+		p.selectedPair = selectedPair
 		// Use connection's local address (actual bound address)
 		if connLocalAddr != nil {
 			if udpAddr, ok := connLocalAddr.(*net.UDPAddr); ok {
@@ -276,11 +289,11 @@ func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, er
 func (p *ICEPeer) PacketConnInfo() (localAddr, remoteAddr net.Addr, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if p.localAddr == nil || p.remoteAddr == nil {
 		return nil, nil, fmt.Errorf("ICE connection not established yet")
 	}
-	
+
 	return p.localAddr, p.remoteAddr, nil
 }
 
@@ -293,13 +306,13 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Parse the address
 	udpAddr, ok := localAddr.(*net.UDPAddr)
 	if !ok {
 		return nil, fmt.Errorf("local address is not a UDP address: %T", localAddr)
 	}
-	
+
 	// Try to bind to the same address first
 	conn, err := net.ListenPacket("udp", udpAddr.String())
 	if err != nil {
@@ -311,16 +324,23 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 			p.conn = nil
 		}
 		p.mu.Unlock()
-		
+
 		// Now try again
 		conn, err = net.ListenPacket("udp", udpAddr.String())
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UDP PacketConn after closing ICE: %w", err)
 		}
 	}
-	
+
 	p.logger.Debug("created PacketConn for QUIC", "local_addr", conn.LocalAddr())
 	return conn, nil
+}
+
+// SelectedCandidatePair returns the chosen ICE candidate pair, if available.
+func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.selectedPair
 }
 
 // Close closes the ICE agent and cleans up resources.
@@ -329,4 +349,3 @@ func (p *ICEPeer) Close() error {
 	defer p.mu.Unlock()
 	return p.agent.Close()
 }
-

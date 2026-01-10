@@ -12,11 +12,13 @@ import (
 const (
 	controlMagic = "SBC1"
 
-	controlTypeFileBegin = byte(0x10)
-	controlTypeAck2      = byte(0x11)
-	controlTypeFileEnd   = byte(0x12)
-	controlTypeFileDone  = byte(0x13)
-	controlTypeEnd       = byte(0xFF)
+	controlTypeFileBegin      = byte(0x10)
+	controlTypeAck2           = byte(0x11)
+	controlTypeFileEnd        = byte(0x12)
+	controlTypeFileDone       = byte(0x13)
+	controlTypeFileResumeInfo = byte(0x14)
+	controlTypeResumeRequest  = byte(0x15)
+	controlTypeEnd            = byte(0xFF)
 )
 
 type FileBegin struct {
@@ -24,6 +26,7 @@ type FileBegin struct {
 	FileSize  uint64
 	ChunkSize uint32
 	StreamID  uint64
+	HashAlg   byte
 }
 
 type Ack2 struct {
@@ -40,6 +43,20 @@ type FileDone struct {
 	StreamID uint64
 	OK       bool
 	ErrMsg   string
+}
+
+type FileResumeInfo struct {
+	FileID            string
+	StreamID          uint64
+	TotalChunks       uint32
+	Bitmap            []byte
+	LastVerifiedChunk uint32
+	LastVerifiedHash  uint64
+}
+
+type ResumeRequest struct {
+	FileID   string
+	StreamID uint64
 }
 
 func writeControlHeader(s Stream, m manifest.Manifest) error {
@@ -117,6 +134,9 @@ func writeFileBegin(s Stream, msg FileBegin) error {
 	if err := binary.Write(s, binary.BigEndian, msg.StreamID); err != nil {
 		return fmt.Errorf("failed to write stream id: %w", err)
 	}
+	if _, err := s.Write([]byte{msg.HashAlg}); err != nil {
+		return fmt.Errorf("failed to write hash alg: %w", err)
+	}
 
 	return nil
 }
@@ -139,6 +159,11 @@ func readFileBegin(s Stream) (FileBegin, error) {
 	if err := binary.Read(s, binary.BigEndian, &msg.StreamID); err != nil {
 		return msg, fmt.Errorf("failed to read stream id: %w", err)
 	}
+	hashBuf := make([]byte, 1)
+	if _, err := io.ReadFull(s, hashBuf); err != nil {
+		return msg, fmt.Errorf("failed to read hash alg: %w", err)
+	}
+	msg.HashAlg = hashBuf[0]
 
 	return msg, nil
 }
@@ -245,6 +270,117 @@ func readFileDone(s Stream) (FileDone, error) {
 	return msg, nil
 }
 
+func writeFileResumeInfo(s Stream, msg FileResumeInfo) error {
+	if _, err := s.Write([]byte{controlTypeFileResumeInfo}); err != nil {
+		return fmt.Errorf("failed to write FileResumeInfo type: %w", err)
+	}
+	fileIDBytes := []byte(msg.FileID)
+	fileIDLen := uint16(len(fileIDBytes))
+	if err := binary.Write(s, binary.BigEndian, fileIDLen); err != nil {
+		return fmt.Errorf("failed to write file id length: %w", err)
+	}
+	if _, err := s.Write(fileIDBytes); err != nil {
+		return fmt.Errorf("failed to write file id: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.StreamID); err != nil {
+		return fmt.Errorf("failed to write stream id: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.TotalChunks); err != nil {
+		return fmt.Errorf("failed to write total chunks: %w", err)
+	}
+	bitmapLen := uint32(len(msg.Bitmap))
+	if err := binary.Write(s, binary.BigEndian, bitmapLen); err != nil {
+		return fmt.Errorf("failed to write bitmap length: %w", err)
+	}
+	if bitmapLen > 0 {
+		if _, err := s.Write(msg.Bitmap); err != nil {
+			return fmt.Errorf("failed to write bitmap: %w", err)
+		}
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.LastVerifiedChunk); err != nil {
+		return fmt.Errorf("failed to write last verified chunk: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.LastVerifiedHash); err != nil {
+		return fmt.Errorf("failed to write last verified hash: %w", err)
+	}
+	return nil
+}
+
+func readFileResumeInfo(s Stream) (FileResumeInfo, error) {
+	var msg FileResumeInfo
+	var fileIDLen uint16
+	if err := binary.Read(s, binary.BigEndian, &fileIDLen); err != nil {
+		return msg, fmt.Errorf("failed to read file id length: %w", err)
+	}
+	if fileIDLen > 0 {
+		fileID := make([]byte, fileIDLen)
+		if _, err := io.ReadFull(s, fileID); err != nil {
+			return msg, fmt.Errorf("failed to read file id: %w", err)
+		}
+		msg.FileID = string(fileID)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.StreamID); err != nil {
+		return msg, fmt.Errorf("failed to read stream id: %w", err)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.TotalChunks); err != nil {
+		return msg, fmt.Errorf("failed to read total chunks: %w", err)
+	}
+	var bitmapLen uint32
+	if err := binary.Read(s, binary.BigEndian, &bitmapLen); err != nil {
+		return msg, fmt.Errorf("failed to read bitmap length: %w", err)
+	}
+	if bitmapLen > 0 {
+		msg.Bitmap = make([]byte, bitmapLen)
+		if _, err := io.ReadFull(s, msg.Bitmap); err != nil {
+			return msg, fmt.Errorf("failed to read bitmap: %w", err)
+		}
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.LastVerifiedChunk); err != nil {
+		return msg, fmt.Errorf("failed to read last verified chunk: %w", err)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.LastVerifiedHash); err != nil {
+		return msg, fmt.Errorf("failed to read last verified hash: %w", err)
+	}
+	return msg, nil
+}
+
+func writeResumeRequest(s Stream, msg ResumeRequest) error {
+	if _, err := s.Write([]byte{controlTypeResumeRequest}); err != nil {
+		return fmt.Errorf("failed to write ResumeRequest type: %w", err)
+	}
+	fileIDBytes := []byte(msg.FileID)
+	fileIDLen := uint16(len(fileIDBytes))
+	if err := binary.Write(s, binary.BigEndian, fileIDLen); err != nil {
+		return fmt.Errorf("failed to write file id length: %w", err)
+	}
+	if _, err := s.Write(fileIDBytes); err != nil {
+		return fmt.Errorf("failed to write file id: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.StreamID); err != nil {
+		return fmt.Errorf("failed to write stream id: %w", err)
+	}
+	return nil
+}
+
+func readResumeRequest(s Stream) (ResumeRequest, error) {
+	var msg ResumeRequest
+	var fileIDLen uint16
+	if err := binary.Read(s, binary.BigEndian, &fileIDLen); err != nil {
+		return msg, fmt.Errorf("failed to read file id length: %w", err)
+	}
+	if fileIDLen > 0 {
+		fileID := make([]byte, fileIDLen)
+		if _, err := io.ReadFull(s, fileID); err != nil {
+			return msg, fmt.Errorf("failed to read file id: %w", err)
+		}
+		msg.FileID = string(fileID)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.StreamID); err != nil {
+		return msg, fmt.Errorf("failed to read stream id: %w", err)
+	}
+	return msg, nil
+}
+
 func writeControlEnd(s Stream) error {
 	if _, err := s.Write([]byte{controlTypeEnd}); err != nil {
 		return fmt.Errorf("failed to write End type: %w", err)
@@ -271,6 +407,12 @@ func readControlMessage(s Stream) (byte, any, error) {
 	case controlTypeFileDone:
 		msg, err := readFileDone(s)
 		return controlTypeFileDone, msg, err
+	case controlTypeFileResumeInfo:
+		msg, err := readFileResumeInfo(s)
+		return controlTypeFileResumeInfo, msg, err
+	case controlTypeResumeRequest:
+		msg, err := readResumeRequest(s)
+		return controlTypeResumeRequest, msg, err
 	case controlTypeEnd:
 		return controlTypeEnd, nil, nil
 	default:

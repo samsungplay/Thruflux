@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,18 +18,26 @@ import (
 
 // Options configures multi-stream manifest transfers.
 type Options struct {
-	ChunkSize       uint32
-	WindowSize      uint32
-	ReadAhead       uint32
-	ParallelFiles   int
-	SmallThreshold  int64
-	MediumThreshold int64
-	SmallSlotFrac   float64
-	AgingAfter      time.Duration
-	ProgressFn      ProgressFn
-	WindowStatsFn   WindowStatsFn
-	TransferStatsFn TransferStatsFn
-	WatchdogFn      WatchdogFn
+	ChunkSize        uint32
+	WindowSize       uint32
+	ReadAhead        uint32
+	ParallelFiles    int
+	SmallThreshold   int64
+	MediumThreshold  int64
+	SmallSlotFrac    float64
+	AgingAfter       time.Duration
+	Resume           bool
+	ResumeTimeout    time.Duration
+	ResumeVerify     string
+	ResumeVerifyTail uint32
+	HashAlg          string
+	NoRootDir        bool
+	ResolveFilePath  func(relPath string) string
+	ProgressFn       ProgressFn
+	WindowStatsFn    WindowStatsFn
+	TransferStatsFn  TransferStatsFn
+	WatchdogFn       WatchdogFn
+	ResumeStatsFn    ResumeStatsFn
 }
 
 // TransferStatsFn reports active/completed file counts and remaining bytes.
@@ -35,6 +45,18 @@ type TransferStatsFn func(activeFiles, completedFiles int, remainingBytes int64)
 
 // WatchdogFn emits periodic watchdog logs for stalled transfers.
 type WatchdogFn func(msg string, args ...any)
+
+// ResumeStatsFn reports resume statistics per file.
+type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32)
+
+func sidecarIdentifier(item manifest.FileItem) string {
+	if item.ID != "" {
+		return item.ID
+	}
+	h := fnv.New64a()
+	h.Write([]byte(item.RelPath))
+	return fmt.Sprintf("%x", h.Sum64())
+}
 
 type streamRegistry struct {
 	mu      sync.Mutex
@@ -131,12 +153,91 @@ func (r *fileDoneRegistry) deliver(msg FileDone) {
 	r.pending[msg.StreamID] = msg
 }
 
+type resumeInfoRegistry struct {
+	mu      sync.Mutex
+	waiters map[uint64]chan FileResumeInfo
+	pending map[uint64]FileResumeInfo
+}
+
+func newResumeInfoRegistry() *resumeInfoRegistry {
+	return &resumeInfoRegistry{
+		waiters: make(map[uint64]chan FileResumeInfo),
+		pending: make(map[uint64]FileResumeInfo),
+	}
+}
+
+func (r *resumeInfoRegistry) wait(ctx context.Context, id uint64) (FileResumeInfo, error) {
+	r.mu.Lock()
+	if msg, ok := r.pending[id]; ok {
+		delete(r.pending, id)
+		r.mu.Unlock()
+		return msg, nil
+	}
+	ch := make(chan FileResumeInfo, 1)
+	r.waiters[id] = ch
+	r.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return FileResumeInfo{}, ctx.Err()
+	case msg := <-ch:
+		return msg, nil
+	}
+}
+
+func (r *resumeInfoRegistry) deliver(msg FileResumeInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if ch, ok := r.waiters[msg.StreamID]; ok {
+		delete(r.waiters, msg.StreamID)
+		ch <- msg
+		close(ch)
+		return
+	}
+
+	r.pending[msg.StreamID] = msg
+}
+
 func streamIDFromStream(s Stream) (uint64, error) {
 	ider, ok := s.(StreamIDer)
 	if !ok {
 		return 0, errors.New("stream ID unavailable")
 	}
 	return ider.StreamID(), nil
+}
+
+func hashFileChunk(filePath string, chunkIndex uint32, chunkSize uint32, fileSize int64, alg byte) (uint64, error) {
+	if alg == HashAlgNone {
+		return 0, nil
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open file for hash: %w", err)
+	}
+	defer file.Close()
+
+	offset := int64(chunkIndex) * int64(chunkSize)
+	if offset >= fileSize {
+		return 0, fmt.Errorf("chunk index %d out of range", chunkIndex)
+	}
+	chunkLen := int64(chunkSize)
+	if remaining := fileSize - offset; remaining < chunkLen {
+		chunkLen = remaining
+	}
+	if chunkLen <= 0 {
+		return 0, fmt.Errorf("invalid chunk length %d", chunkLen)
+	}
+
+	buf := make([]byte, chunkLen)
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return 0, fmt.Errorf("failed to read chunk for hash: %w", err)
+	}
+	if int64(n) != chunkLen {
+		return 0, fmt.Errorf("short chunk read: got %d want %d", n, chunkLen)
+	}
+	return hashChunk(alg, buf)
 }
 
 // SendManifestMultiStream sends a manifest over a dedicated control stream and
@@ -168,6 +269,26 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	if parallelFiles > 32 {
 		parallelFiles = 32
 	}
+	resumeEnabled := opts.Resume
+	resumeTimeout := opts.ResumeTimeout
+	if resumeTimeout <= 0 {
+		resumeTimeout = 1 * time.Second
+	}
+	resumeVerify := opts.ResumeVerify
+	if resumeVerify == "" {
+		resumeVerify = "last"
+	}
+	resumeVerifyTail := opts.ResumeVerifyTail
+	switch resumeVerify {
+	case "last", "none", "all":
+	default:
+		return fmt.Errorf("invalid resume verify mode %q", resumeVerify)
+	}
+
+	hashAlg, err := parseHashAlg(opts.HashAlg)
+	if err != nil {
+		return err
+	}
 
 	controlStream, err := conn.OpenStream(ctx)
 	if err != nil {
@@ -191,6 +312,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	var ackStatesMu sync.Mutex
 	ackErrChan := make(chan error, 1)
 	doneRegistry := newFileDoneRegistry()
+	resumeRegistry := newResumeInfoRegistry()
 
 	ackCtx, ackCancel := context.WithCancel(ctx)
 	defer ackCancel()
@@ -218,6 +340,43 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	metaByRelPath := make(map[string]scheduler.FileMeta)
 	keyByRelPath := make(map[string]scheduler.FileKey)
 	keyByStreamID := make(map[uint64]scheduler.FileKey)
+
+	updateAckState := func(streamID uint64, highest uint32) {
+		ackStatesMu.Lock()
+		if state, ok := ackStates[streamID]; ok {
+			if int32(highest) > state.highestAcked {
+				state.highestAcked = int32(highest)
+				if state.ackNotify != nil {
+					select {
+					case state.ackNotify <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}
+		ackStatesMu.Unlock()
+
+		activeMu.Lock()
+		if st, ok := activeTransfers[streamID]; ok {
+			st.lastAcked = int32(highest)
+		}
+		activeMu.Unlock()
+
+		schedMu.Lock()
+		if key, ok := keyByStreamID[streamID]; ok {
+			item := itemByRelPath[key.RelPath]
+			ackedBytes := int64(highest+1) * int64(chunkSize)
+			if ackedBytes > item.Size {
+				ackedBytes = item.Size
+			}
+			remaining := item.Size - ackedBytes
+			sched.UpdateRemaining(key, remaining)
+			meta := metaByRelPath[key.RelPath]
+			meta.Remaining = remaining
+			metaByRelPath[key.RelPath] = meta
+		}
+		schedMu.Unlock()
+	}
 
 	now := time.Now()
 	for _, item := range fileItems {
@@ -256,41 +415,11 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			switch msgType {
 			case controlTypeAck2:
 				ack := msg.(Ack2)
-				ackStatesMu.Lock()
-				if state, ok := ackStates[ack.StreamID]; ok {
-					oldHighest := state.highestAcked
-					if int32(ack.HighestContiguousChunk) > state.highestAcked {
-						state.highestAcked = int32(ack.HighestContiguousChunk)
-						if state.highestAcked > oldHighest && state.ackNotify != nil {
-							select {
-							case state.ackNotify <- struct{}{}:
-							default:
-							}
-						}
-					}
-				}
-				ackStatesMu.Unlock()
-				activeMu.Lock()
-				if st, ok := activeTransfers[ack.StreamID]; ok {
-					st.lastAcked = int32(ack.HighestContiguousChunk)
-				}
-				activeMu.Unlock()
-				schedMu.Lock()
-				if key, ok := keyByStreamID[ack.StreamID]; ok {
-					item := itemByRelPath[key.RelPath]
-					ackedBytes := int64(ack.HighestContiguousChunk+1) * int64(chunkSize)
-					if ackedBytes > item.Size {
-						ackedBytes = item.Size
-					}
-					remaining := item.Size - ackedBytes
-					sched.UpdateRemaining(key, remaining)
-					meta := metaByRelPath[key.RelPath]
-					meta.Remaining = remaining
-					metaByRelPath[key.RelPath] = meta
-				}
-				schedMu.Unlock()
+				updateAckState(ack.StreamID, ack.HighestContiguousChunk)
 			case controlTypeFileDone:
 				doneRegistry.deliver(msg.(FileDone))
+			case controlTypeFileResumeInfo:
+				resumeRegistry.deliver(msg.(FileResumeInfo))
 			default:
 				select {
 				case ackErrChan <- fmt.Errorf("unexpected control message type: 0x%02x", msgType):
@@ -480,6 +609,7 @@ scheduleLoop:
 			FileSize:  uint64(item.Size),
 			ChunkSize: chunkSize,
 			StreamID:  streamID,
+			HashAlg:   hashAlg,
 		})
 		controlWriteMu.Unlock()
 		if err != nil {
@@ -524,6 +654,11 @@ scheduleLoop:
 			}
 
 			filePath := filepath.Join(rootPath, filepath.FromSlash(item.RelPath))
+			if opts.ResolveFilePath != nil {
+				if resolved := opts.ResolveFilePath(item.RelPath); resolved != "" {
+					filePath = resolved
+				}
+			}
 			progressFn := opts.ProgressFn
 			if opts.WatchdogFn != nil {
 				progressFn = func(relpath string, bytesSent int64, total int64) {
@@ -537,7 +672,122 @@ scheduleLoop:
 					}
 				}
 			}
-			crc32Value, err := sendFileChunksWindowed(transferCtx, dataStream, item.RelPath, filePath, item.Size, chunkSize, windowSize, readAhead, progressFn, opts.WindowStatsFn, fileState, &ackStatesMu, ackErrChan, false)
+
+			var plan *resumePlan
+			if resumeEnabled && item.ID != "" {
+				controlWriteMu.Lock()
+				err = writeResumeRequest(controlStream, ResumeRequest{
+					FileID:   item.ID,
+					StreamID: streamID,
+				})
+				controlWriteMu.Unlock()
+				if err != nil {
+					dataStream.Close()
+					setErr(err)
+					return
+				}
+
+				resumeCtx, resumeCancel := context.WithTimeout(transferCtx, resumeTimeout)
+				info, resumeErr := resumeRegistry.wait(resumeCtx, streamID)
+				resumeCancel()
+				if resumeErr == nil {
+					if info.FileID != "" && info.FileID != item.ID {
+						setErr(fmt.Errorf("resume info file id mismatch for %s", item.RelPath))
+						return
+					}
+					expectedTotal := uint32(0)
+					if chunkSize > 0 {
+						expectedTotal = uint32((item.Size + int64(chunkSize) - 1) / int64(chunkSize))
+					}
+					totalChunks := info.TotalChunks
+					if totalChunks == 0 {
+						totalChunks = expectedTotal
+					}
+					if expectedTotal != 0 && totalChunks != expectedTotal {
+						setErr(fmt.Errorf("resume info total chunks mismatch for %s", item.RelPath))
+						return
+					}
+					if totalChunks > 0 && len(info.Bitmap) > 0 {
+						bitmap, err := BitmapFromBytes(info.Bitmap, int(totalChunks))
+						if err != nil {
+							setErr(err)
+							return
+						}
+						forceSendFrom := uint32(0)
+						verifiedChunk := info.LastVerifiedChunk
+						if verifiedChunk < totalChunks {
+							forceSendFrom = verifiedChunk + 1
+						} else {
+							forceSendFrom = totalChunks
+						}
+
+						verifyMode := resumeVerify
+						if verifyMode == "" {
+							verifyMode = "last"
+						}
+						if verifyMode == "all" {
+							verifyMode = "last"
+						}
+						if verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone {
+							senderHash, err := hashFileChunk(filePath, verifiedChunk, chunkSize, item.Size, hashAlg)
+							if err != nil {
+								setErr(err)
+								return
+							}
+							if senderHash != info.LastVerifiedHash {
+								forceSendFrom = verifiedChunk
+							} else if verifiedChunk+1 <= totalChunks {
+								forceSendFrom = verifiedChunk + 1
+							}
+						}
+
+						tail := resumeVerifyTail
+						if tail > 0 && forceSendFrom > 0 {
+							if tail >= forceSendFrom {
+								forceSendFrom = 0
+							} else {
+								forceSendFrom -= tail
+							}
+						}
+
+						if forceSendFrom > totalChunks {
+							forceSendFrom = totalChunks
+						}
+
+						plan = &resumePlan{
+							bitmap:        bitmap,
+							forceSendFrom: forceSendFrom,
+							totalChunks:   totalChunks,
+							verifiedChunk: verifiedChunk,
+						}
+
+						if opts.ResumeStatsFn != nil {
+							plannedSkipped := uint32(0)
+							if forceSendFrom > 0 {
+								for i := uint32(0); i < forceSendFrom; i++ {
+									if bitmap.Get(int(i)) {
+										plannedSkipped++
+									}
+								}
+							}
+							opts.ResumeStatsFn(item.RelPath, plannedSkipped, totalChunks, verifiedChunk)
+						}
+
+						if highest, ok := bitmap.HighestSetBit(); ok {
+							initialAck := uint32(highest)
+							if forceSendFrom > 0 && forceSendFrom-1 < initialAck {
+								initialAck = forceSendFrom - 1
+							}
+							updateAckState(streamID, initialAck)
+						}
+					}
+				} else if !errors.Is(resumeErr, context.DeadlineExceeded) && !errors.Is(resumeErr, context.Canceled) {
+					setErr(resumeErr)
+					return
+				}
+			}
+
+			crc32Value, err := sendFileChunksWindowed(transferCtx, dataStream, item.RelPath, filePath, item.Size, chunkSize, windowSize, readAhead, progressFn, opts.WindowStatsFn, fileState, &ackStatesMu, ackErrChan, false, plan)
 			if err != nil {
 				dataStream.Close()
 				setErr(err)
@@ -639,11 +889,19 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return m, err
 	}
 
+	baseDir := outDir
+	if !opts.NoRootDir {
+		baseDir = filepath.Join(outDir, m.Root)
+	}
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return m, fmt.Errorf("failed to create output directory %s: %w", baseDir, err)
+	}
+
 	for _, item := range m.Items {
 		if !item.IsDir {
 			continue
 		}
-		dirPath := filepath.Join(outDir, m.Root, filepath.FromSlash(item.RelPath))
+		dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			return m, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 		}
@@ -685,6 +943,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	fileItems := make([]manifest.FileItem, 0, len(m.Items))
 	expectedFiles := make(map[string]int64)
+	itemByRelPath := make(map[string]manifest.FileItem)
+	itemByID := make(map[string]manifest.FileItem)
 	receivedFiles := make(map[string]struct{})
 	for _, item := range m.Items {
 		if item.IsDir {
@@ -692,6 +952,10 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 		fileItems = append(fileItems, item)
 		expectedFiles[item.RelPath] = item.Size
+		itemByRelPath[item.RelPath] = item
+		if item.ID != "" {
+			itemByID[item.ID] = item
+		}
 	}
 	remainingFiles := len(fileItems)
 	parallelFiles := opts.ParallelFiles
@@ -719,9 +983,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		begin        FileBegin
 		crc32        uint32
 		hasCRC       bool
+		skipCRC      bool
 		endCRC       uint32
 		hasEnd       bool
 		lastProgress time.Time
+		resume       *resumeState
+		resumeInfo   *FileResumeInfo
 	}
 	stateMu := sync.Mutex{}
 	stateByStream := make(map[uint64]*recvFileState)
@@ -731,8 +998,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	beginQueue := make(chan FileBegin, len(fileItems))
 	schedulerDone := make(chan struct{})
 	type controlMsg struct {
-		ack  *Ack2
-		done *FileDone
+		ack    *Ack2
+		done   *FileDone
+		resume *FileResumeInfo
 	}
 	controlWriteCh := make(chan controlMsg, parallelFiles*8)
 	ackNotify := make(chan struct{}, 1)
@@ -752,6 +1020,53 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			recvCancel()
 		}
 		recvErrMu.Unlock()
+	}
+
+	buildResumeInfo := func(begin FileBegin, item manifest.FileItem) (*FileResumeInfo, *resumeState, error) {
+		totalChunks := uint32(0)
+		if begin.ChunkSize > 0 {
+			totalChunks = uint32((int64(begin.FileSize) + int64(begin.ChunkSize) - 1) / int64(begin.ChunkSize))
+		}
+
+		info := &FileResumeInfo{
+			FileID:      item.ID,
+			StreamID:    begin.StreamID,
+			TotalChunks: totalChunks,
+		}
+		state := &resumeState{
+			totalChunks: totalChunks,
+			lastFlush:   time.Now(),
+		}
+
+		if !opts.Resume || totalChunks == 0 {
+			info.LastVerifiedChunk = totalChunks
+			return info, state, nil
+		}
+
+		filePath := filepath.Join(baseDir, filepath.FromSlash(begin.RelPath))
+		sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(item))
+		sidecar, err := LoadOrCreateSidecar(sidecarPath, item.ID, int64(begin.FileSize), begin.ChunkSize)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
+		}
+		state.sidecar = sidecar
+		info.Bitmap = sidecar.MarshalBitmap()
+
+		if highest, ok := sidecar.HighestComplete(); ok {
+			info.LastVerifiedChunk = uint32(highest)
+			if begin.HashAlg != HashAlgNone {
+				hashValue, err := hashFileChunk(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg)
+				if err != nil {
+					return nil, nil, err
+				}
+				info.LastVerifiedHash = hashValue
+				state.verifiedChunk = info.LastVerifiedChunk
+				state.hasVerified = true
+			}
+		} else {
+			info.LastVerifiedChunk = totalChunks
+		}
+		return info, state, nil
 	}
 
 	if opts.WatchdogFn != nil {
@@ -833,6 +1148,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 						return
 					}
 				}
+				if msg.resume != nil {
+					if err := writeFileResumeInfo(controlStream, *msg.resume); err != nil {
+						setRecvErr(err)
+						return
+					}
+				}
 			case <-ackNotify:
 				if !flushAcks() {
 					return
@@ -891,7 +1212,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 					defer dataStream.Close()
 
-					filePath := filepath.Join(outDir, m.Root, filepath.FromSlash(state.begin.RelPath))
+					filePath := filepath.Join(baseDir, filepath.FromSlash(state.begin.RelPath))
 					parentDir := filepath.Dir(filePath)
 					dirMu.Lock()
 					err = os.MkdirAll(parentDir, 0755)
@@ -925,7 +1246,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 							}
 						}
 					}
-					crc32Value, err := receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, ackSender)
+					crc32Value, err := receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, ackSender, state.resume)
 					if err != nil {
 						select {
 						case controlWriteCh <- controlMsg{done: &FileDone{
@@ -943,10 +1264,14 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 
 					stateMu.Lock()
-					state.crc32 = crc32Value
-					state.hasCRC = true
-					mismatch := state.hasEnd && state.endCRC != crc32Value
-					deleteState := state.hasEnd
+					skipCRC := state.resume != nil && state.resume.skipCRC
+					state.skipCRC = skipCRC
+					if !skipCRC {
+						state.crc32 = crc32Value
+						state.hasCRC = true
+					}
+					mismatch := !skipCRC && state.hasEnd && state.endCRC != crc32Value
+					deleteState := state.hasEnd && (state.hasCRC || state.skipCRC)
 					stateMu.Unlock()
 					if mismatch {
 						select {
@@ -1000,12 +1325,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			}
 			return m, recvCtx.Err()
 		case err := <-acceptErrChan:
+			if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, len(fileItems)) {
+				return m, nil
+			}
 			return m, err
 		default:
 		}
 
 		msgType, msg, err := readControlMessage(controlStream)
 		if err != nil {
+			if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, len(fileItems)) {
+				return m, nil
+			}
 			return m, err
 		}
 
@@ -1032,6 +1363,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				begin:        begin,
 				lastProgress: time.Now(),
 			}
+			if resumeInfo, resumeState, err := buildResumeInfo(begin, itemByRelPath[begin.RelPath]); err == nil {
+				state.resume = resumeState
+				state.resumeInfo = resumeInfo
+			} else {
+				return m, err
+			}
 			stateMu.Lock()
 			stateByStream[begin.StreamID] = state
 			stateMu.Unlock()
@@ -1041,6 +1378,50 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				return m, recvCtx.Err()
 			}
 
+		case controlTypeResumeRequest:
+			req := msg.(ResumeRequest)
+			stateMu.Lock()
+			state, ok := stateByStream[req.StreamID]
+			stateMu.Unlock()
+			if !ok {
+				return m, fmt.Errorf("resume request for unknown stream %d", req.StreamID)
+			}
+			item, ok := itemByRelPath[state.begin.RelPath]
+			if !ok {
+				return m, fmt.Errorf("missing manifest item for %s", state.begin.RelPath)
+			}
+			if req.FileID != "" && item.ID != "" && req.FileID != item.ID {
+				return m, fmt.Errorf("resume request file id mismatch for %s", state.begin.RelPath)
+			}
+
+			resumeInfo := state.resumeInfo
+			if resumeInfo == nil {
+				resumeInfo, state.resume, err = buildResumeInfo(state.begin, item)
+				if err != nil {
+					return m, err
+				}
+				state.resumeInfo = resumeInfo
+			}
+
+			select {
+			case controlWriteCh <- controlMsg{resume: resumeInfo}:
+			case <-recvCtx.Done():
+				return m, recvCtx.Err()
+			}
+
+			if state.resume != nil && state.resume.sidecar != nil {
+				if highest, ok := state.resume.sidecar.HighestContiguous(); ok && highest >= 0 {
+					select {
+					case controlWriteCh <- controlMsg{ack: &Ack2{
+						StreamID:               req.StreamID,
+						HighestContiguousChunk: uint32(highest),
+					}}:
+					case <-recvCtx.Done():
+						return m, recvCtx.Err()
+					}
+				}
+			}
+
 		case controlTypeFileEnd:
 			end := msg.(FileEnd)
 			stateMu.Lock()
@@ -1048,8 +1429,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			if ok {
 				state.endCRC = end.CRC32
 				state.hasEnd = true
-				mismatch := state.hasCRC && state.crc32 != end.CRC32
-				deleteState := state.hasCRC
+				mismatch := state.hasCRC && !state.skipCRC && state.crc32 != end.CRC32
+				deleteState := state.hasCRC || state.skipCRC
 				stateMu.Unlock()
 				if mismatch {
 					setRecvErr(ErrCRC32Mismatch)
@@ -1081,4 +1462,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return m, fmt.Errorf("unexpected control message type: 0x%02x", msgType)
 		}
 	}
+}
+
+func isGracefulRemoteClose(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Application error 0x0") && strings.Contains(msg, "remote")
+}
+
+func allFilesCompleted(mu *sync.Mutex, completed *int, total int) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return *completed >= total && total > 0
 }

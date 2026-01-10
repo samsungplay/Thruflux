@@ -21,6 +21,8 @@ type ClientConfig struct {
 	LogLevel         string
 	PeerID           string
 	JoinCode         string
+	TargetPeer       string
+	SessionOnly      bool
 	Paths            []string // Paths to scan (sender only, default ["."])
 	ICETest          bool     // Enable ICE connectivity test mode
 	QUICTest         bool     // Enable QUIC connectivity test mode
@@ -34,6 +36,12 @@ type ClientConfig struct {
 	MediumThreshold  int64    // Bytes threshold for medium files
 	SmallSlotFrac    float64  // Fraction of slots reserved for small files
 	AgingAfter       time.Duration
+	Resume           bool
+	ResumeTimeout    time.Duration
+	ResumeVerify     string
+	HashAlg          string
+	Destination      string
+	ResumeVerifyTail uint32
 }
 
 // ParseServerConfig parses server configuration from flags and environment variables.
@@ -76,17 +84,25 @@ func ParseClientConfig(appName string) ClientConfig {
 // parseClientConfigWithFlagSet is an internal helper for testing with isolated flag sets.
 func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig {
 	cfg := ClientConfig{
-		ServerURL:       "http://localhost:8080",
-		LogLevel:        "info",
-		PeerID:          generatePeerID(),
-		JoinCode:        "",
-		Paths:           []string{"."},
-		MultiStream:     true,
-		ParallelFiles:   8,
-		SmallThreshold:  4 * 1024 * 1024,
-		MediumThreshold: 64 * 1024 * 1024,
-		SmallSlotFrac:   0.25,
-		AgingAfter:      5 * time.Second,
+		ServerURL:        "http://localhost:8080",
+		LogLevel:         "info",
+		PeerID:           generatePeerID(),
+		JoinCode:         "",
+		TargetPeer:       "",
+		SessionOnly:      false,
+		Paths:            []string{"."},
+		MultiStream:      true,
+		ParallelFiles:    8,
+		SmallThreshold:   4 * 1024 * 1024,
+		MediumThreshold:  64 * 1024 * 1024,
+		SmallSlotFrac:    0.25,
+		AgingAfter:       5 * time.Second,
+		Resume:           true,
+		ResumeTimeout:    1 * time.Second,
+		ResumeVerify:     "last",
+		HashAlg:          "crc32c",
+		Destination:      "",
+		ResumeVerifyTail: 1,
 	}
 
 	// Read from environment first
@@ -108,6 +124,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level (debug, info, warn, error)")
 	fs.StringVar(&cfg.PeerID, "peer-id", cfg.PeerID, "peer identifier")
 	fs.StringVar(&cfg.JoinCode, "join-code", cfg.JoinCode, "session join code")
+	fs.StringVar(&cfg.TargetPeer, "target-peer", cfg.TargetPeer, "send to a specific receiver peer_id (sender only)")
+	fs.BoolVar(&cfg.SessionOnly, "session-only", cfg.SessionOnly, "create session and wait for receivers without sending")
 	fs.BoolVar(&cfg.ICETest, "ice-test", false, "enable ICE connectivity test mode")
 	fs.BoolVar(&cfg.QUICTest, "quic-test", false, "enable QUIC connectivity test mode")
 	fs.BoolVar(&cfg.QUICTransferTest, "quic-transfer-test", false, "enable QUIC transfer test mode")
@@ -115,6 +133,11 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.IntVar(&cfg.ParallelFiles, "parallel-files", cfg.ParallelFiles, "max concurrent file transfers (1..32)")
 	fs.Float64Var(&cfg.SmallSlotFrac, "small-slot-frac", cfg.SmallSlotFrac, "fraction of slots reserved for small files")
 	fs.DurationVar(&cfg.AgingAfter, "aging-after", cfg.AgingAfter, "duration before aging boosts a file")
+	fs.BoolVar(&cfg.Resume, "resume", cfg.Resume, "enable resume for QUIC transfers")
+	fs.DurationVar(&cfg.ResumeTimeout, "resume-timeout", cfg.ResumeTimeout, "resume response timeout")
+	fs.StringVar(&cfg.ResumeVerify, "resume-verify", cfg.ResumeVerify, "resume verification mode (last|none|all)")
+	fs.StringVar(&cfg.HashAlg, "hash-alg", cfg.HashAlg, "resume hash algorithm (crc32c|xxhash64|none)")
+	fs.StringVar(&cfg.Destination, "destination", cfg.Destination, "receiver output directory for QUIC transfer test")
 
 	// ChunkSize flag - use uint64 and convert
 	var chunkSizeUint64 uint64
@@ -154,6 +177,18 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	if cfg.AgingAfter <= 0 {
 		cfg.AgingAfter = 5 * time.Second
 	}
+	if cfg.ResumeTimeout <= 0 {
+		cfg.ResumeTimeout = 1 * time.Second
+	}
+	switch cfg.ResumeVerify {
+	case "", "last", "none", "all":
+	default:
+		cfg.ResumeVerify = "last"
+	}
+	if cfg.HashAlg == "" {
+		cfg.HashAlg = "crc32c"
+	}
+	cfg.ResumeVerifyTail = 1
 
 	// If paths were provided, use them; otherwise keep default ["."]
 	if len(paths) > 0 {
