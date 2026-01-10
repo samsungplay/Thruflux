@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
+	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
@@ -73,6 +75,9 @@ type SnapshotSender struct {
 	active    map[string]*transferSlot
 	signalCh  map[string]chan protocol.Envelope
 	mu        sync.Mutex
+	progressMu sync.Mutex
+	progress   map[string]*senderProgress
+	snapshotLine string
 	now       func() time.Time
 	onChange  func()
 	exitFn    func(int)
@@ -154,6 +159,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		receivers:    make(map[string]*ReceiverState),
 		active:       make(map[string]*transferSlot),
 		signalCh:     make(map[string]chan protocol.Envelope),
+		progress:     make(map[string]*senderProgress),
 		now:          time.Now,
 		exitFn:       os.Exit,
 	}
@@ -161,6 +167,10 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	s.transferOpts.ResolveFilePath = resolver
 	s.closeConn = func() { conn.Close() }
 	s.onChange = s.logSnapshotState
+	s.logSnapshotState()
+
+	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView)
+	defer uiStop()
 
 	go s.cleanupLoop(ctx)
 	go s.watchHardQuit()
@@ -364,7 +374,7 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 	if err != nil {
 		s.logger.Error("transfer failed", "peer_id", peerID, "error", err)
 	} else {
-		fmt.Printf("transfer complete peer=%s\n", peerID)
+		s.ForceComplete(peerID)
 	}
 
 	s.maybeStartTransfers(ctx)
@@ -375,9 +385,10 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	if signalCh == nil {
 		return fmt.Errorf("no signal channel for %s", peerID)
 	}
+	progressState := s.initSenderProgress(peerID, s.manifest.TotalBytes)
 
 	iceLog := func(stage string) {
-		fmt.Printf("ice sender peer=%s stage=%s\n", peerID, stage)
+		s.setSenderStage(peerID, stage)
 	}
 
 	sendSignal := func(msgType string, payload any) error {
@@ -428,7 +439,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
 		return fmt.Errorf("failed to send candidates: %w", err)
 	}
-	fmt.Printf("ice sender peer=%s stage=local_candidates_sent count=%d\n", peerID, len(localCandidates))
+	s.setSenderStage(peerID, fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
 	remoteCredsCh := make(chan protocol.IceCredentials, 1)
 	remoteCandsCh := make(chan []string, 1)
@@ -493,7 +504,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 			iceLog("remote_creds_received")
 		case cands := <-remoteCandsCh:
 			remoteCands = cands
-			fmt.Printf("ice sender peer=%s stage=remote_candidates_received count=%d\n", peerID, len(cands))
+			s.setSenderStage(peerID, fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
 		case <-waitDeadline:
 			readCancel()
 			return fmt.Errorf("timeout waiting for remote ICE data")
@@ -517,7 +528,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("failed to establish ICE connection: %w", err)
 	}
 	iceLog("connect_ok")
-	logICEPair("sender", peerID, icePeer)
+	if route := iceRouteString("sender", peerID, icePeer); route != "" {
+		s.setSenderRoute(peerID, route)
+	}
 
 	_, remoteAddr, err := icePeer.PacketConnInfo()
 	if err != nil {
@@ -552,13 +565,18 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferConn.Close()
 
 	opts := s.transferOptions()
-	progress := newProgressTicker("sender", peerID, s.manifest.TotalBytes)
-	defer progress.Stop()
-	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
-		progress.Update(relpath, bytesSent)
+	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
+		if skippedChunks == 0 || totalChunks == 0 {
+			return
+		}
+		skippedBytes := int64(skippedChunks) * int64(chunkSize)
+		if totalBytes > 0 && skippedBytes > totalBytes {
+			skippedBytes = totalBytes
+		}
+		s.addSenderSkipped(progressState, relpath, skippedBytes)
 	}
-	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
-		progress.UpdateStats(activeFiles, completedFiles)
+	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
+		s.updateSenderProgress(progressState, relpath, bytesSent)
 	}
 	if err := transfer.SendManifestMultiStream(ctx, transferConn, ".", s.manifest, opts); err != nil {
 		return err
@@ -801,13 +819,169 @@ func (s *SnapshotSender) logSnapshotState() {
 	}
 	s.mu.Unlock()
 
-	fmt.Printf("Snapshot %s | total=%d queued=%d active=%d done=%d failed=%d\n", s.manifestID, total, queued, active, done, failed)
+	s.snapshotLine = fmt.Sprintf("Snapshot %s | total=%d queued=%d active=%d done=%d failed=%d", s.manifestID, total, queued, active, done, failed)
 }
 
 func (s *SnapshotSender) transferOptions() transfer.Options {
 	opts := s.transferOpts
 	opts.Resume = true
 	return opts
+}
+
+type senderProgress struct {
+	meter   *progress.Meter
+	perFile map[string]int64
+	route   string
+	stage   string
+	appliedSkip map[string]bool
+	mu      sync.Mutex
+}
+
+func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *senderProgress {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	if state == nil {
+		state = &senderProgress{
+			meter:   progress.NewMeter(),
+			perFile: make(map[string]int64),
+		}
+		s.progress[peerID] = state
+	}
+	s.progressMu.Unlock()
+
+	state.mu.Lock()
+	state.perFile = make(map[string]int64)
+	state.route = ""
+	state.stage = ""
+	state.appliedSkip = make(map[string]bool)
+	state.mu.Unlock()
+	state.meter.Start(totalBytes)
+
+	return state
+}
+
+func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath string, bytes int64) {
+	if state == nil || relpath == "" {
+		return
+	}
+	state.mu.Lock()
+	prev := state.perFile[relpath]
+	if bytes > prev {
+		state.meter.Add(int(bytes - prev))
+	}
+	state.perFile[relpath] = bytes
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) addSenderSkipped(state *senderProgress, relpath string, skippedBytes int64) {
+	if state == nil || relpath == "" || skippedBytes <= 0 {
+		return
+	}
+	state.mu.Lock()
+	if state.appliedSkip[relpath] {
+		state.mu.Unlock()
+		return
+	}
+	state.appliedSkip[relpath] = true
+	state.mu.Unlock()
+
+	maxInt := int64(^uint(0) >> 1)
+	for skippedBytes > 0 {
+		step := skippedBytes
+		if step > maxInt {
+			step = maxInt
+		}
+		state.meter.Add(int(step))
+		skippedBytes -= step
+	}
+}
+
+func (s *SnapshotSender) setSenderRoute(peerID string, route string) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.route = route
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) setSenderStage(peerID string, stage string) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.stage = stage
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) senderView() progress.SenderView {
+	s.mu.Lock()
+	peerIDs := make([]string, 0, len(s.receivers))
+	statuses := make(map[string]string, len(s.receivers))
+	for peerID, state := range s.receivers {
+		peerIDs = append(peerIDs, peerID)
+		statuses[peerID] = state.Status
+	}
+	s.mu.Unlock()
+
+	sort.Strings(peerIDs)
+	rows := make([]progress.SenderRow, 0, len(peerIDs))
+	for _, peerID := range peerIDs {
+		var stats progress.Stats
+		var route string
+		var stage string
+		s.progressMu.Lock()
+		state := s.progress[peerID]
+		s.progressMu.Unlock()
+		if state != nil {
+			stats = state.meter.Snapshot()
+			state.mu.Lock()
+			route = state.route
+			stage = state.stage
+			state.mu.Unlock()
+		} else {
+			stats = progress.Stats{Total: s.manifest.TotalBytes}
+		}
+		rows = append(rows, progress.SenderRow{
+			Peer:   shortPeerID(peerID),
+			Status: statuses[peerID],
+			Stats:  stats,
+			Route:  route,
+			Stage:  stage,
+		})
+	}
+	return progress.SenderView{
+		Header: s.snapshotLine,
+		Rows:   rows,
+	}
+}
+
+func (s *SnapshotSender) ForceComplete(peerID string) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	stats := state.meter.Snapshot()
+	remaining := s.manifest.TotalBytes - stats.BytesDone
+	if remaining <= 0 {
+		return
+	}
+	state.meter.Add(int(remaining))
+}
+
+func shortPeerID(peerID string) string {
+	if len(peerID) <= 8 {
+		return peerID
+	}
+	return peerID[:8]
 }
 
 func hashManifestJSON(m manifest.Manifest) (string, error) {

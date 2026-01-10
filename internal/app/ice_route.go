@@ -8,14 +8,21 @@ import (
 )
 
 func logICEPair(role, peerID string, peer *ice.ICEPeer) {
+	route := iceRouteString(role, peerID, peer)
+	if route != "" {
+		fmt.Println(route)
+	}
+}
+
+func iceRouteString(role, peerID string, peer *ice.ICEPeer) string {
 	if peer == nil {
-		return
+		return ""
 	}
 	pair := peer.SelectedCandidatePair()
 	if pair == nil {
-		return
+		return ""
 	}
-	fmt.Printf("route %s peer=%s local=%s remote=%s\n", role, peerID, formatCandidate(pair.Local), formatCandidate(pair.Remote))
+	return fmt.Sprintf("route %s peer=%s local=%s remote=%s", role, peerID, formatCandidate(pair.Local), formatCandidate(pair.Remote))
 }
 
 func formatCandidate(c pionice.Candidate) string {

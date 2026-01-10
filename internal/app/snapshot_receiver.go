@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/ice"
+	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
@@ -88,6 +90,7 @@ type snapshotReceiver struct {
 	manifest   string
 	sessionID  string
 	totalBytes int64
+	fileTotal  int
 	signalCh   chan protocol.Envelope
 	transfer   chan protocol.TransferStart
 }
@@ -110,6 +113,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		}
 		r.manifest = offer.Summary.ManifestID
 		r.totalBytes = offer.Summary.TotalBytes
+		r.fileTotal = offer.Summary.FileCount
 		r.senderID = env.From
 		r.sendAccept(offer.Summary.ManifestID)
 	case protocol.TypePeerLeft:
@@ -119,7 +123,6 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			return
 		}
 		if r.senderID != "" && peerLeft.PeerID == r.senderID {
-			fmt.Println("Sender disconnected. Exiting.")
 			os.Exit(1)
 		}
 	case protocol.TypeTransferStart:
@@ -175,12 +178,17 @@ func (r *snapshotReceiver) sendAccept(manifestID string) {
 }
 
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
-	fmt.Printf("Receiving snapshot %s\n", start.ManifestID)
-	fmt.Printf("Saving to %s\n", r.outDir)
-
 	baseCtx := context.Background()
+	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir)
+	stopUI := progress.RenderReceiver(baseCtx, os.Stdout, progressState.View)
+	defer stopUI()
+	exitWith := func(code int) {
+		stopUI()
+		os.Exit(code)
+	}
+
 	iceLog := func(stage string) {
-		fmt.Printf("ice receiver stage=%s\n", stage)
+		progressState.SetIceStage(stage)
 	}
 
 	sendSignal := func(msgType string, payload any) error {
@@ -222,7 +230,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if err != nil {
 			attemptCancel()
 			r.logger.Error("failed to create ICE peer", "error", err)
-			os.Exit(1)
+			exitWith(1)
 		}
 
 		var localCandidates []string
@@ -235,7 +243,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			attemptCancel()
 			icePeer.Close()
 			r.logger.Error("failed to start gathering", "error", err)
-			os.Exit(1)
+			exitWith(1)
 		}
 		select {
 		case <-icePeer.GatheringDone():
@@ -243,7 +251,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		case <-time.After(10 * time.Second):
 			attemptCancel()
 			icePeer.Close()
-			fmt.Printf("ice receiver stage=restart attempt=%d\n", attempt+1)
+			progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -253,16 +261,16 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			attemptCancel()
 			icePeer.Close()
 			r.logger.Error("failed to send credentials", "error", err)
-			os.Exit(1)
+			exitWith(1)
 		}
 		iceLog("local_creds_sent")
 		if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
 			attemptCancel()
 			icePeer.Close()
 			r.logger.Error("failed to send candidates", "error", err)
-			os.Exit(1)
+			exitWith(1)
 		}
-		fmt.Printf("ice receiver stage=local_candidates_sent count=%d\n", len(localCandidates))
+		progressState.SetIceStage(fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
 		remoteCredsCh := make(chan protocol.IceCredentials, 1)
 		remoteCandsCh := make(chan []string, 1)
@@ -321,24 +329,24 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				readCancel()
 				icePeer.Close()
 				r.logger.Error("transfer canceled")
-				os.Exit(1)
+				exitWith(1)
 			case err := <-readErr:
 				readCancel()
 				attemptCancel()
 				icePeer.Close()
 				r.logger.Error("signal error", "error", err)
-				os.Exit(1)
+				exitWith(1)
 			case creds := <-remoteCredsCh:
 				remoteCreds = &creds
 				iceLog("remote_creds_received")
 			case cands := <-remoteCandsCh:
 				remoteCands = cands
-				fmt.Printf("ice receiver stage=remote_candidates_received count=%d\n", len(cands))
+				progressState.SetIceStage(fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
 			case <-waitDeadline:
 				readCancel()
 				attemptCancel()
 				icePeer.Close()
-				fmt.Printf("ice receiver stage=restart attempt=%d\n", attempt+1)
+				progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
 				time.Sleep(200 * time.Millisecond)
 				restart = true
 				break
@@ -356,7 +364,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			attemptCancel()
 			icePeer.Close()
 			r.logger.Error("failed to set remote credentials", "error", err)
-			os.Exit(1)
+			exitWith(1)
 		}
 		for _, cand := range remoteCands {
 			_ = icePeer.AddRemoteCandidate(cand)
@@ -372,32 +380,34 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			break
 		}
 		icePeer.Close()
-		fmt.Printf("ice receiver stage=restart attempt=%d\n", attempt+1)
+		progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
 		time.Sleep(200 * time.Millisecond)
 		continue
 	}
 	iceLog("connect_ok")
-	logICEPair("receiver", r.peerID, icePeer)
+	if route := iceRouteString("receiver", r.peerID, icePeer); route != "" {
+		progressState.SetRoute(route)
+	}
 
 	_, _, err = icePeer.PacketConnInfo()
 	if err != nil {
 		iceConn.Close()
 		r.logger.Error("failed to get PacketConn info", "error", err)
-		os.Exit(1)
+		exitWith(1)
 	}
 	iceConn.Close()
 
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {
 		r.logger.Error("failed to create PacketConn", "error", err)
-		os.Exit(1)
+		exitWith(1)
 	}
 	defer udpConn.Close()
 
 	quicListener, err := quictransport.Listen(baseCtx, udpConn, r.logger)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)
-		os.Exit(1)
+		exitWith(1)
 	}
 	defer quicListener.Close()
 
@@ -407,37 +417,194 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	transferConn, err := quicTransport.Accept(baseCtx)
 	if err != nil {
 		r.logger.Error("failed to accept transfer connection", "error", err)
-		os.Exit(1)
+		exitWith(1)
 	}
 	defer transferConn.Close()
 
-	progress := newProgressTicker("receiver", r.senderID, r.totalBytes)
-	defer progress.Stop()
 	opts := transfer.Options{
 		Resume:    true,
 		NoRootDir: true,
 		HashAlg:   "crc32c",
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
-			progress.Update(relpath, bytesReceived)
+			progressState.Update(relpath, bytesReceived, total)
 		},
 		TransferStatsFn: func(activeFiles, completedFiles int, remainingBytes int64) {
-			progress.UpdateStats(activeFiles, completedFiles)
+			progressState.UpdateStats(activeFiles, completedFiles)
+		},
+		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
+			progressState.RecordResume(relpath, skippedChunks, totalChunks, totalBytes)
 		},
 	}
 	_, err = transfer.RecvManifestMultiStream(baseCtx, transferConn, r.outDir, opts)
 	if err != nil {
 		r.logger.Error("transfer failed", "error", err)
-		os.Exit(1)
+		exitWith(1)
 	}
 
-	fmt.Println("Transfer complete. Exiting.")
-	os.Exit(0)
+	progressState.ForceComplete()
+	exitWith(0)
+}
+
+type receiverProgress struct {
+	meter       *progress.Meter
+	perFile     map[string]int64
+	totals      map[string]int64
+	appliedSkip map[string]bool
+	pendingSkip map[string]resumeSkip
+	currentFile string
+	fileDone    int
+	fileTotal   int
+	route       string
+	iceStage    string
+	snapshotID  string
+	outDir      string
+	mu          sync.Mutex
+}
+
+type resumeSkip struct {
+	skippedChunks uint32
+	totalChunks   uint32
+}
+
+func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string) *receiverProgress {
+	meter := progress.NewMeter()
+	meter.Start(totalBytes)
+	return &receiverProgress{
+		meter:      meter,
+		perFile:    make(map[string]int64),
+		totals:     make(map[string]int64),
+		appliedSkip: make(map[string]bool),
+		pendingSkip: make(map[string]resumeSkip),
+		fileTotal:  fileTotal,
+		snapshotID: snapshotID,
+		outDir:     outDir,
+	}
+}
+
+func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
+	if relpath == "" {
+		return
+	}
+	p.mu.Lock()
+	prev := p.perFile[relpath]
+	if bytes > prev {
+		p.addBytesLocked(bytes - prev)
+	}
+	p.perFile[relpath] = bytes
+	p.currentFile = relpath
+	if total > 0 {
+		p.totals[relpath] = total
+	}
+	if skip, ok := p.pendingSkip[relpath]; ok && !p.appliedSkip[relpath] {
+		p.applySkipLocked(relpath, p.totals[relpath], skip)
+		delete(p.pendingSkip, relpath)
+	}
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) UpdateStats(active, completed int) {
+	p.mu.Lock()
+	p.fileDone = completed
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) ForceComplete() {
+	p.mu.Lock()
+	p.fileDone = p.fileTotal
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetRoute(route string) {
+	p.mu.Lock()
+	p.route = route
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetIceStage(stage string) {
+	p.mu.Lock()
+	p.iceStage = stage
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChunks uint32, totalBytes int64) {
+	if relpath == "" || skippedChunks == 0 || totalChunks == 0 {
+		return
+	}
+	p.mu.Lock()
+	if p.appliedSkip[relpath] {
+		p.mu.Unlock()
+		return
+	}
+	if totalBytes > 0 {
+		p.totals[relpath] = totalBytes
+		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks})
+	} else {
+		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks}
+	}
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) applySkipLocked(relpath string, totalBytes int64, skip resumeSkip) {
+	if skip.totalChunks == 0 {
+		p.pendingSkip[relpath] = skip
+		return
+	}
+	chunkSize := (totalBytes + int64(skip.totalChunks) - 1) / int64(skip.totalChunks)
+	var skippedBytes int64
+	if skip.skippedChunks == skip.totalChunks {
+		skippedBytes = totalBytes
+	} else {
+		skippedBytes = int64(skip.skippedChunks) * chunkSize
+		if skippedBytes > totalBytes {
+			skippedBytes = totalBytes
+		}
+	}
+	if skippedBytes > 0 {
+		p.addBytesLocked(skippedBytes)
+		p.appliedSkip[relpath] = true
+	}
+}
+
+func (p *receiverProgress) addBytesLocked(n int64) {
+	if n <= 0 {
+		return
+	}
+	maxInt := int64(^uint(0) >> 1)
+	for n > 0 {
+		step := n
+		if step > maxInt {
+			step = maxInt
+		}
+		p.meter.Add(int(step))
+		n -= step
+	}
+}
+
+func (p *receiverProgress) View() progress.ReceiverView {
+	p.mu.Lock()
+	current := p.currentFile
+	done := p.fileDone
+	total := p.fileTotal
+	route := p.route
+	stage := p.iceStage
+	snapshotID := p.snapshotID
+	outDir := p.outDir
+	p.mu.Unlock()
+	return progress.ReceiverView{
+		SnapshotID: snapshotID,
+		OutDir:     outDir,
+		IceStage:   stage,
+		Stats:      p.meter.Snapshot(),
+		CurrentFile: current,
+		FileDone:   done,
+		FileTotal:  total,
+		Route:      route,
+	}
 }
 
 func (r *snapshotReceiver) watchInterrupt() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
-	fmt.Println("Interrupted. You may resume by re-running.")
 	os.Exit(1)
 }
