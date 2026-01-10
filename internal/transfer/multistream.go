@@ -47,7 +47,7 @@ type TransferStatsFn func(activeFiles, completedFiles int, remainingBytes int64)
 type WatchdogFn func(msg string, args ...any)
 
 // ResumeStatsFn reports resume statistics per file.
-type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32)
+type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32)
 
 func sidecarIdentifier(item manifest.FileItem) string {
 	if item.ID != "" {
@@ -770,7 +770,7 @@ scheduleLoop:
 									}
 								}
 							}
-							opts.ResumeStatsFn(item.RelPath, plannedSkipped, totalChunks, verifiedChunk)
+							opts.ResumeStatsFn(item.RelPath, plannedSkipped, totalChunks, verifiedChunk, item.Size, chunkSize)
 						}
 
 						if highest, ok := bitmap.HighestSetBit(); ok {
@@ -981,11 +981,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	type recvFileState struct {
 		begin        FileBegin
-		crc32        uint32
-		hasCRC       bool
-		skipCRC      bool
-		endCRC       uint32
 		hasEnd       bool
+		hasData      bool
 		lastProgress time.Time
 		resume       *resumeState
 		resumeInfo   *FileResumeInfo
@@ -1051,7 +1048,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 		state.sidecar = sidecar
 		info.Bitmap = sidecar.MarshalBitmap()
-
 		if highest, ok := sidecar.HighestComplete(); ok {
 			info.LastVerifiedChunk = uint32(highest)
 			if begin.HashAlg != HashAlgNone {
@@ -1065,6 +1061,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			}
 		} else {
 			info.LastVerifiedChunk = totalChunks
+		}
+		if opts.ResumeStatsFn != nil && totalChunks > 0 {
+			skippedChunks := uint32(sidecar.bitmap.CountSet())
+			if skippedChunks > totalChunks {
+				skippedChunks = totalChunks
+			}
+			opts.ResumeStatsFn(begin.RelPath, skippedChunks, totalChunks, info.LastVerifiedChunk, int64(begin.FileSize), begin.ChunkSize)
 		}
 		return info, state, nil
 	}
@@ -1083,7 +1086,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					stateMu.Lock()
 					for streamID, st := range stateByStream {
 						if now.Sub(st.lastProgress) > 5*time.Second {
-							stalled = append(stalled, fmt.Sprintf("%d:%s:crc=%t:end=%t:idle=%s", streamID, st.begin.RelPath, st.hasCRC, st.hasEnd, now.Sub(st.lastProgress).Truncate(time.Second)))
+						stalled = append(stalled, fmt.Sprintf("%d:%s:data=%t:end=%t:idle=%s", streamID, st.begin.RelPath, st.hasData, st.hasEnd, now.Sub(st.lastProgress).Truncate(time.Second)))
 						}
 					}
 					stateCount := len(stateByStream)
@@ -1246,7 +1249,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 							}
 						}
 					}
-					crc32Value, err := receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, ackSender, state.resume)
+					_, err = receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, ackSender, state.resume)
 					if err != nil {
 						select {
 						case controlWriteCh <- controlMsg{done: &FileDone{
@@ -1260,31 +1263,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 						return
 					}
 					if opts.WatchdogFn != nil {
-						opts.WatchdogFn("receiver data eof read", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID, "crc32", crc32Value)
+						opts.WatchdogFn("receiver data eof read", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID)
 					}
 
 					stateMu.Lock()
-					skipCRC := state.resume != nil && state.resume.skipCRC
-					state.skipCRC = skipCRC
-					if !skipCRC {
-						state.crc32 = crc32Value
-						state.hasCRC = true
-					}
-					mismatch := !skipCRC && state.hasEnd && state.endCRC != crc32Value
-					deleteState := state.hasEnd && (state.hasCRC || state.skipCRC)
+					state.hasData = true
+					deleteState := state.hasEnd && state.hasData
 					stateMu.Unlock()
-					if mismatch {
-						select {
-						case controlWriteCh <- controlMsg{done: &FileDone{
-							StreamID: state.begin.StreamID,
-							OK:       false,
-							ErrMsg:   ErrCRC32Mismatch.Error(),
-						}}:
-						case <-recvCtx.Done():
-						}
-						setRecvErr(ErrCRC32Mismatch)
-						return
-					}
 
 					select {
 					case controlWriteCh <- controlMsg{done: &FileDone{
@@ -1427,15 +1412,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			stateMu.Lock()
 			state, ok := stateByStream[end.StreamID]
 			if ok {
-				state.endCRC = end.CRC32
 				state.hasEnd = true
-				mismatch := state.hasCRC && !state.skipCRC && state.crc32 != end.CRC32
-				deleteState := state.hasCRC || state.skipCRC
+				deleteState := state.hasData
 				stateMu.Unlock()
-				if mismatch {
-					setRecvErr(ErrCRC32Mismatch)
-					return m, ErrCRC32Mismatch
-				}
 				if deleteState {
 					stateMu.Lock()
 					delete(stateByStream, end.StreamID)

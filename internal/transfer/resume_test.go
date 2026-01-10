@@ -134,7 +134,7 @@ func TestResumeSkipsChunks(t *testing.T) {
 		ResumeVerify:     "last",
 		HashAlg:          "crc32c",
 		ResumeVerifyTail: 1,
-		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32) {
+		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 			statsCh <- stats{skipped: skippedChunks, total: totalChunks, verified: verifiedChunk}
 		},
 	})
@@ -214,7 +214,7 @@ func TestResumeResendsCorruptChunk(t *testing.T) {
 		ResumeVerify:     "last",
 		HashAlg:          "crc32c",
 		ResumeVerifyTail: 1,
-		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32) {
+		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 			statsCh <- skippedChunks
 		},
 	})
