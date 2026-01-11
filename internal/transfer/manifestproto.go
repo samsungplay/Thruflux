@@ -240,6 +240,7 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 type fileACKState struct {
 	highestAcked int32
 	ackNotify    chan struct{} // Buffered channel for ACK progress notifications
+	chunkSize    uint32
 }
 
 type resumePlan struct {
@@ -261,7 +262,7 @@ type resumeState struct {
 
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
-func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error, disableWindow bool, resume *resumePlan) (uint32, error) {
+func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error, disableWindow bool, resume *resumePlan, readStallFn func(time.Duration)) (uint32, error) {
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -524,6 +525,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		// Get chunk from read-ahead queue
 		var chunk chunkData
 		var ok bool
+		waitStart := time.Now()
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
@@ -539,6 +541,12 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				break
 			}
 		}
+		if readStallFn != nil {
+			waited := time.Since(waitStart)
+			if waited > 20*time.Millisecond {
+				readStallFn(waited)
+			}
+		}
 
 		if !ok {
 			break
@@ -550,50 +558,50 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			return 0, fmt.Errorf("chunk index mismatch: expected %d, got %d", nextToSend, chunk.index)
 		}
 
-	sendChunk := true
-	if resume != nil && resume.bitmap != nil {
-		if resume.bitmap.Get(int(nextToSend)) && nextToSend < resume.forceSendFrom {
-			sendChunk = false
-		}
-	}
-
-	if sendChunk {
-		chunkCRC := crc32.Checksum(chunk.buf[:chunk.n], crc32cTable)
-
-		// Write chunk_index (uint32, big endian)
-		if err := binary.Write(s, binary.BigEndian, nextToSend); err != nil {
-			bufPool.Put(chunk.buf)
-			return 0, fmt.Errorf("failed to write chunk index: %w", err)
+		sendChunk := true
+		if resume != nil && resume.bitmap != nil {
+			if resume.bitmap.Get(int(nextToSend)) && nextToSend < resume.forceSendFrom {
+				sendChunk = false
+			}
 		}
 
-		// Write chunk_len (uint32, big endian)
-		if err := binary.Write(s, binary.BigEndian, uint32(chunk.n)); err != nil {
-			bufPool.Put(chunk.buf)
-			return 0, fmt.Errorf("failed to write chunk length: %w", err)
-		}
+		if sendChunk {
+			chunkCRC := crc32.Checksum(chunk.buf[:chunk.n], crc32cTable)
 
-		// Write chunk_crc32 (uint32, big endian)
-		if err := binary.Write(s, binary.BigEndian, chunkCRC); err != nil {
-			bufPool.Put(chunk.buf)
-			return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
-		}
+			// Write chunk_index (uint32, big endian)
+			if err := binary.Write(s, binary.BigEndian, nextToSend); err != nil {
+				bufPool.Put(chunk.buf)
+				return 0, fmt.Errorf("failed to write chunk index: %w", err)
+			}
 
-		// Write chunk bytes
-		if _, err := s.Write(chunk.buf[:chunk.n]); err != nil {
-			bufPool.Put(chunk.buf)
-			return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
-		}
-	} else if resume != nil {
-		resume.skippedChunks++
+			// Write chunk_len (uint32, big endian)
+			if err := binary.Write(s, binary.BigEndian, uint32(chunk.n)); err != nil {
+				bufPool.Put(chunk.buf)
+				return 0, fmt.Errorf("failed to write chunk length: %w", err)
+			}
+
+			// Write chunk_crc32 (uint32, big endian)
+			if err := binary.Write(s, binary.BigEndian, chunkCRC); err != nil {
+				bufPool.Put(chunk.buf)
+				return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
+			}
+
+			// Write chunk bytes
+			if _, err := s.Write(chunk.buf[:chunk.n]); err != nil {
+				bufPool.Put(chunk.buf)
+				return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
+			}
+		} else if resume != nil {
+			resume.skippedChunks++
 		}
 
 		// Return buffer to pool after sending (QUIC ensures delivery)
 		bufPool.Put(chunk.buf)
 
-	if sendChunk {
-		bytesProcessed += int64(chunk.n)
-	}
-	nextToSend++
+		if sendChunk {
+			bytesProcessed += int64(chunk.n)
+		}
+		nextToSend++
 
 		if progressFn != nil {
 			progressFn(relPath, bytesProcessed, fileSize)
@@ -857,7 +865,7 @@ func sendFileRecordChunkedWindowed(ctx context.Context, s Stream, relPath string
 		return fmt.Errorf("failed to write chunk size: %w", err)
 	}
 
-	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, ackState, ackStateMu, ackErrChan, false, nil); err != nil {
+	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, ackState, ackStateMu, ackErrChan, false, nil, nil); err != nil {
 		return err
 	}
 

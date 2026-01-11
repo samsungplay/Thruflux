@@ -43,6 +43,15 @@ func NewHybridScheduler(cfg PolicyConfig) *HybridScheduler {
 	}
 }
 
+func (s *HybridScheduler) SetParallelFiles(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.mu.Lock()
+	s.cfg.ParallelFiles = n
+	s.mu.Unlock()
+}
+
 func (s *HybridScheduler) Add(file FileKey, meta FileMeta) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
