@@ -180,6 +180,21 @@ The receiver will:
 
 Use Ctrl+C to gracefully disconnect.
 
+## Profiling
+
+Enable pprof on sender/receiver to capture hot-path profiles during a transfer:
+
+```bash
+# Sender (profile at :6060)
+go run ./cmd/sheerbytes-sender <paths...> --pprof --pprof-addr 127.0.0.1:6060
+
+# Receiver (use a different port if running on the same machine)
+go run ./cmd/sheerbytes-receiver <join-code> --out <dir> --pprof --pprof-addr 127.0.0.1:6061
+
+# Capture a 10s CPU profile and open in browser
+go tool pprof -http=:8081 "http://127.0.0.1:6060/debug/pprof/profile?seconds=10"
+```
+
 ## Configuration
 
 Configuration can be set via command-line flags or environment variables. Flags take precedence over environment variables.
@@ -260,4 +275,3 @@ SHEERBYTES_SERVER_URL=http://localhost:9090 SHEERBYTES_JOIN_CODE=ABCDEFGH SHEERB
    - The sender logs the acceptance
 
 Both sender and receiver will log peer presence events as peers join and leave the session.
-

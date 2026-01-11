@@ -280,7 +280,14 @@ func hashFileChunk(filePath string, chunkIndex uint32, chunkSize uint32, fileSiz
 		return 0, fmt.Errorf("invalid chunk length %d", chunkLen)
 	}
 
-	buf := make([]byte, chunkLen)
+	bufPool := chunkPoolFor(chunkSize)
+	var buf []byte
+	if bufPool != nil {
+		buf = bufPool.Get()
+		defer bufPool.Put(buf)
+	} else {
+		buf = make([]byte, chunkSize)
+	}
 	n, err := file.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
 		return 0, fmt.Errorf("failed to read chunk for hash: %w", err)
@@ -288,7 +295,7 @@ func hashFileChunk(filePath string, chunkIndex uint32, chunkSize uint32, fileSiz
 	if int64(n) != chunkLen {
 		return 0, fmt.Errorf("short chunk read: got %d want %d", n, chunkLen)
 	}
-	return hashChunk(alg, buf)
+	return hashChunk(alg, buf[:chunkLen])
 }
 
 // SendManifestMultiStream sends a manifest over a dedicated control stream and

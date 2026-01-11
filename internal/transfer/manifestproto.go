@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
@@ -167,11 +168,11 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 			// Signal waiters when ACK progress is made (event-driven, no polling)
 			ackStateMu.Lock()
 			if currentFileState != nil {
-				oldHighest := currentFileState.highestAcked
-				if int32(ackedIndex) > currentFileState.highestAcked {
-					currentFileState.highestAcked = int32(ackedIndex)
+				oldHighest := atomic.LoadInt32(&currentFileState.highestAcked)
+				if int32(ackedIndex) > oldHighest {
+					atomic.StoreInt32(&currentFileState.highestAcked, int32(ackedIndex))
 					// Signal waiters if we made progress (non-blocking send)
-					if currentFileState.highestAcked > oldHighest && currentFileState.ackNotify != nil {
+					if int32(ackedIndex) > oldHighest && currentFileState.ackNotify != nil {
 						select {
 						case currentFileState.ackNotify <- struct{}{}:
 						default:
@@ -284,7 +285,14 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	if useResumeSkip {
 		var nextToSend uint32
 		bytesProcessed := int64(0)
-		buf := make([]byte, chunkSize)
+		bufPool := chunkPoolFor(chunkSize)
+		var buf []byte
+		if bufPool != nil {
+			buf = bufPool.Get()
+			defer bufPool.Put(buf)
+		} else {
+			buf = make([]byte, chunkSize)
+		}
 		for nextToSend < totalChunks {
 			select {
 			case <-ctx.Done():
@@ -297,8 +305,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			currentHighestAcked := int32(-1)
 			var inFlight uint32
 			if !disableWindow {
-				ackStateMu.Lock()
-				currentHighestAcked = ackState.highestAcked
+				currentHighestAcked = atomic.LoadInt32(&ackState.highestAcked)
 				if currentHighestAcked < 0 {
 					inFlight = nextToSend
 				} else {
@@ -309,7 +316,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 						inFlight = nextToSend - ackedCount
 					}
 				}
-				ackStateMu.Unlock()
 			}
 
 			if windowStatsFn != nil {
@@ -394,7 +400,10 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	}
 
 	// Create buffer pool for chunk buffers
-	bufPool := bufpool.New(int(chunkSize))
+	bufPool := chunkPoolFor(chunkSize)
+	if bufPool == nil {
+		bufPool = bufpool.New(int(chunkSize))
+	}
 
 	// Chunk data structure for read-ahead queue
 	type chunkData struct {
@@ -484,8 +493,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		currentHighestAcked := int32(-1)
 		var inFlight uint32
 		if !disableWindow {
-			ackStateMu.Lock()
-			currentHighestAcked = ackState.highestAcked
+			currentHighestAcked = atomic.LoadInt32(&ackState.highestAcked)
 			if currentHighestAcked < 0 {
 				inFlight = nextToSend
 			} else {
@@ -496,7 +504,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 					inFlight = nextToSend - ackedCount
 				}
 			}
-			ackStateMu.Unlock()
 		}
 
 		// Report window stats
@@ -628,7 +635,14 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	if err := outFile.Truncate(int64(fileSize)); err != nil {
 	}
 
-	buffer := make([]byte, chunkSize)
+	bufPool := chunkPoolFor(chunkSize)
+	var buffer []byte
+	if bufPool != nil {
+		buffer = bufPool.Get()
+		defer bufPool.Put(buffer)
+	} else {
+		buffer = make([]byte, chunkSize)
+	}
 	var highestContiguousIndex uint32
 	bytesReceived := uint64(0)
 	initialBytes := uint64(0)
