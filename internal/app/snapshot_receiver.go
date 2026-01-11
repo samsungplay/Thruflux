@@ -17,15 +17,21 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
+	"github.com/sheerbytes/sheerbytes/internal/transport"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
 
 // SnapshotReceiverConfig configures the snapshot receiver.
 type SnapshotReceiverConfig struct {
-	ServerURL string
-	JoinCode  string
-	OutDir    string
+	ServerURL              string
+	JoinCode               string
+	OutDir                 string
+	UDPReadBufferBytes     int
+	UDPWriteBufferBytes    int
+	QuicConnWindowBytes    int
+	QuicStreamWindowBytes  int
+	QuicMaxIncomingStreams int
 }
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
@@ -38,6 +44,21 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	}
 	if cfg.OutDir == "" {
 		cfg.OutDir = "."
+	}
+	if cfg.UDPReadBufferBytes <= 0 {
+		cfg.UDPReadBufferBytes = 8 * 1024 * 1024
+	}
+	if cfg.UDPWriteBufferBytes <= 0 {
+		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
+	}
+	if cfg.QuicConnWindowBytes <= 0 {
+		cfg.QuicConnWindowBytes = 64 * 1024 * 1024
+	}
+	if cfg.QuicStreamWindowBytes <= 0 {
+		cfg.QuicStreamWindowBytes = 32 * 1024 * 1024
+	}
+	if cfg.QuicMaxIncomingStreams <= 0 {
+		cfg.QuicMaxIncomingStreams = 256
 	}
 	absOut, err := filepath.Abs(cfg.OutDir)
 	if err != nil {
@@ -61,13 +82,18 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	defer conn.Close()
 
 	s := &snapshotReceiver{
-		logger:    logger,
-		conn:      conn,
-		peerID:    peerID,
-		outDir:    cfg.OutDir,
-		signalCh:  make(chan protocol.Envelope, 64),
-		transfer:  make(chan protocol.TransferStart, 1),
-		sessionID: "",
+		logger:                 logger,
+		conn:                   conn,
+		peerID:                 peerID,
+		outDir:                 cfg.OutDir,
+		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
+		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
+		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
+		quicStreamWindowBytes:  cfg.QuicStreamWindowBytes,
+		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
+		signalCh:               make(chan protocol.Envelope, 64),
+		transfer:               make(chan protocol.TransferStart, 1),
+		sessionID:              "",
 	}
 
 	go s.watchInterrupt()
@@ -82,17 +108,22 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 }
 
 type snapshotReceiver struct {
-	logger     *slog.Logger
-	conn       *wsclient.Conn
-	peerID     string
-	outDir     string
-	senderID   string
-	manifest   string
-	sessionID  string
-	totalBytes int64
-	fileTotal  int
-	signalCh   chan protocol.Envelope
-	transfer   chan protocol.TransferStart
+	logger                 *slog.Logger
+	conn                   *wsclient.Conn
+	peerID                 string
+	outDir                 string
+	udpReadBufferBytes     int
+	udpWriteBufferBytes    int
+	quicConnWindowBytes    int
+	quicStreamWindowBytes  int
+	quicMaxIncomingStreams int
+	senderID               string
+	manifest               string
+	sessionID              string
+	totalBytes             int64
+	fileTotal              int
+	signalCh               chan protocol.Envelope
+	transfer               chan protocol.TransferStart
 }
 
 func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
@@ -404,7 +435,27 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	defer udpConn.Close()
 
-	quicListener, err := quictransport.Listen(baseCtx, udpConn, r.logger)
+	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
+	if udpTyped, ok := udpConn.(*net.UDPConn); ok {
+		udpTune = transport.ApplyUDPBeyondBestEffort(udpTyped, r.udpReadBufferBytes, r.udpWriteBufferBytes)
+	}
+	quicCfg, quicTune := transport.BuildQuicConfig(
+		quictransport.DefaultServerQUICConfig(),
+		r.quicConnWindowBytes,
+		r.quicStreamWindowBytes,
+		r.quicMaxIncomingStreams,
+	)
+	transportSummary := formatTransportSummary(udpTune, quicTune)
+	transportLines := []string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)}
+	progressState.SetTransportLines(append([]string{transportSummary}, transportLines...))
+	if !progress.IsTTY(os.Stdout) {
+		fmt.Fprintln(os.Stdout, transportSummary)
+		for _, line := range transportLines {
+			fmt.Fprintln(os.Stdout, line)
+		}
+	}
+
+	quicListener, err := quictransport.ListenWithConfig(baseCtx, udpConn, r.logger, quicCfg)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)
 		exitWith(1)
@@ -446,19 +497,20 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 }
 
 type receiverProgress struct {
-	meter       *progress.Meter
-	perFile     map[string]int64
-	totals      map[string]int64
-	appliedSkip map[string]bool
-	pendingSkip map[string]resumeSkip
-	currentFile string
-	fileDone    int
-	fileTotal   int
-	route       string
-	iceStage    string
-	snapshotID  string
-	outDir      string
-	mu          sync.Mutex
+	meter          *progress.Meter
+	perFile        map[string]int64
+	totals         map[string]int64
+	appliedSkip    map[string]bool
+	pendingSkip    map[string]resumeSkip
+	currentFile    string
+	fileDone       int
+	fileTotal      int
+	route          string
+	iceStage       string
+	transportLines []string
+	snapshotID     string
+	outDir         string
+	mu             sync.Mutex
 }
 
 type resumeSkip struct {
@@ -470,14 +522,14 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 	meter := progress.NewMeter()
 	meter.Start(totalBytes)
 	return &receiverProgress{
-		meter:      meter,
-		perFile:    make(map[string]int64),
-		totals:     make(map[string]int64),
+		meter:       meter,
+		perFile:     make(map[string]int64),
+		totals:      make(map[string]int64),
 		appliedSkip: make(map[string]bool),
 		pendingSkip: make(map[string]resumeSkip),
-		fileTotal:  fileTotal,
-		snapshotID: snapshotID,
-		outDir:     outDir,
+		fileTotal:   fileTotal,
+		snapshotID:  snapshotID,
+		outDir:      outDir,
 	}
 }
 
@@ -523,6 +575,12 @@ func (p *receiverProgress) SetRoute(route string) {
 func (p *receiverProgress) SetIceStage(stage string) {
 	p.mu.Lock()
 	p.iceStage = stage
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetTransportLines(lines []string) {
+	p.mu.Lock()
+	p.transportLines = append([]string(nil), lines...)
 	p.mu.Unlock()
 }
 
@@ -587,18 +645,20 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	total := p.fileTotal
 	route := p.route
 	stage := p.iceStage
+	transportLines := append([]string(nil), p.transportLines...)
 	snapshotID := p.snapshotID
 	outDir := p.outDir
 	p.mu.Unlock()
 	return progress.ReceiverView{
-		SnapshotID: snapshotID,
-		OutDir:     outDir,
-		IceStage:   stage,
-		Stats:      p.meter.Snapshot(),
-		CurrentFile: current,
-		FileDone:   done,
-		FileTotal:  total,
-		Route:      route,
+		SnapshotID:     snapshotID,
+		OutDir:         outDir,
+		IceStage:       stage,
+		TransportLines: transportLines,
+		Stats:          p.meter.Snapshot(),
+		CurrentFile:    current,
+		FileDone:       done,
+		FileTotal:      total,
+		Route:          route,
 	}
 }
 

@@ -44,6 +44,21 @@ func ClientConfig() *tls.Config {
 	}
 }
 
+// DefaultServerQUICConfig returns the default QUIC server config.
+func DefaultServerQUICConfig() *quic.Config {
+	return &quic.Config{
+		KeepAlivePeriod:    30, // seconds
+		MaxIncomingStreams: 256,
+	}
+}
+
+// DefaultClientQUICConfig returns the default QUIC client config.
+func DefaultClientQUICConfig() *quic.Config {
+	return &quic.Config{
+		KeepAlivePeriod: 30, // seconds
+	}
+}
+
 // generateSelfSignedCert generates a self-signed certificate for testing.
 func generateSelfSignedCert() (tls.Certificate, error) {
 	// Generate RSA private key
@@ -63,10 +78,10 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 			StreetAddress: []string{""},
 			PostalCode:    []string{""},
 		},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
 
@@ -84,11 +99,14 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 
 // Listen creates a QUIC listener on the given PacketConn.
 func Listen(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger) (*quic.Listener, error) {
+	return ListenWithConfig(ctx, udpConn, logger, nil)
+}
+
+// ListenWithConfig creates a QUIC listener on the given PacketConn using a custom config.
+func ListenWithConfig(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger, config *quic.Config) (*quic.Listener, error) {
 	tlsConfig := ServerConfig()
-	config := &quic.Config{
-		KeepAlivePeriod: 30, // seconds
-		// Allow many per-file streams without hitting the default 256 stream cap.
-		MaxIncomingStreams: 256,
+	if config == nil {
+		config = DefaultServerQUICConfig()
 	}
 
 	listener, err := quic.Listen(udpConn, tlsConfig, config)
@@ -102,9 +120,14 @@ func Listen(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger) (*
 
 // Dial creates a QUIC connection to the remote address using the given PacketConn.
 func Dial(ctx context.Context, udpConn net.PacketConn, remoteAddr net.Addr, logger *slog.Logger) (*quic.Conn, error) {
+	return DialWithConfig(ctx, udpConn, remoteAddr, logger, nil)
+}
+
+// DialWithConfig creates a QUIC connection to the remote address using a custom config.
+func DialWithConfig(ctx context.Context, udpConn net.PacketConn, remoteAddr net.Addr, logger *slog.Logger, config *quic.Config) (*quic.Conn, error) {
 	tlsConfig := ClientConfig()
-	config := &quic.Config{
-		KeepAlivePeriod: 30, // seconds
+	if config == nil {
+		config = DefaultClientQUICConfig()
 	}
 
 	conn, err := quic.Dial(ctx, udpConn, remoteAddr, tlsConfig, config)

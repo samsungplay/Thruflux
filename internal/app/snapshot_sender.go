@@ -8,19 +8,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
+	"github.com/sheerbytes/sheerbytes/internal/perf"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
+	"github.com/sheerbytes/sheerbytes/internal/transport"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
@@ -43,13 +47,23 @@ type ReceiverState struct {
 	Status   string
 }
 
+// FixedTuneParams specifies which tuning knobs are fixed by user flags.
+type FixedTuneParams = perf.FixedParams
+
 // SnapshotSenderConfig configures the snapshot sender.
 type SnapshotSenderConfig struct {
-	ServerURL    string
-	Paths        []string
-	MaxReceivers int
-	ReceiverTTL  time.Duration
-	TransferOpts transfer.Options
+	ServerURL              string
+	Paths                  []string
+	MaxReceivers           int
+	ReceiverTTL            time.Duration
+	TransferOpts           transfer.Options
+	AutoTune               bool
+	FixedTune              FixedTuneParams
+	UDPReadBufferBytes     int
+	UDPWriteBufferBytes    int
+	QuicConnWindowBytes    int
+	QuicStreamWindowBytes  int
+	QuicMaxIncomingStreams int
 }
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
@@ -69,19 +83,35 @@ type SnapshotSender struct {
 	manifestID string
 	summary    protocol.ManifestSummary
 
-	conn      *wsclient.Conn
-	receivers map[string]*ReceiverState
-	queue     []string
-	active    map[string]*transferSlot
-	signalCh  map[string]chan protocol.Envelope
-	mu        sync.Mutex
-	progressMu sync.Mutex
-	progress   map[string]*senderProgress
-	snapshotLine string
-	now       func() time.Time
-	onChange  func()
-	exitFn    func(int)
-	closeConn func()
+	conn                   *wsclient.Conn
+	receivers              map[string]*ReceiverState
+	queue                  []string
+	active                 map[string]*transferSlot
+	signalCh               map[string]chan protocol.Envelope
+	mu                     sync.Mutex
+	progressMu             sync.Mutex
+	progress               map[string]*senderProgress
+	snapshotLine           string
+	tuneLine               string
+	tuneTTY                bool
+	paramsMu               sync.RWMutex
+	params                 perf.Params
+	autoTune               bool
+	autoTuneOnce           sync.Once
+	autoTuneDone           bool
+	fixedTune              perf.FixedParams
+	udpReadBufferBytes     int
+	udpWriteBufferBytes    int
+	quicConnWindowBytes    int
+	quicStreamWindowBytes  int
+	quicMaxIncomingStreams int
+	transportSummary       string
+	transportLines         []string
+	transportLogged        bool
+	now                    func() time.Time
+	onChange               func()
+	exitFn                 func(int)
+	closeConn              func()
 }
 
 type transferSlot struct {
@@ -103,6 +133,21 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 	if cfg.ReceiverTTL <= 0 {
 		cfg.ReceiverTTL = 10 * time.Minute
+	}
+	if cfg.UDPReadBufferBytes <= 0 {
+		cfg.UDPReadBufferBytes = 8 * 1024 * 1024
+	}
+	if cfg.UDPWriteBufferBytes <= 0 {
+		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
+	}
+	if cfg.QuicConnWindowBytes <= 0 {
+		cfg.QuicConnWindowBytes = 64 * 1024 * 1024
+	}
+	if cfg.QuicStreamWindowBytes <= 0 {
+		cfg.QuicStreamWindowBytes = 32 * 1024 * 1024
+	}
+	if cfg.QuicMaxIncomingStreams <= 0 {
+		cfg.QuicMaxIncomingStreams = 256
 	}
 
 	m, err := manifest.ScanPaths(cfg.Paths)
@@ -143,31 +188,40 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 
 	s := &SnapshotSender{
-		logger:       logger,
-		serverURL:    cfg.ServerURL,
-		paths:        cfg.Paths,
-		maxRecv:      cfg.MaxReceivers,
-		receiverTTL:  cfg.ReceiverTTL,
-		transferOpts: cfg.TransferOpts,
-		peerID:       peerID,
-		sessionID:    sessionID,
-		joinCode:     joinCode,
-		manifest:     m,
-		manifestID:   manifestID,
-		summary:      summary,
-		conn:         conn,
-		receivers:    make(map[string]*ReceiverState),
-		active:       make(map[string]*transferSlot),
-		signalCh:     make(map[string]chan protocol.Envelope),
-		progress:     make(map[string]*senderProgress),
-		now:          time.Now,
-		exitFn:       os.Exit,
+		logger:                 logger,
+		serverURL:              cfg.ServerURL,
+		paths:                  cfg.Paths,
+		maxRecv:                cfg.MaxReceivers,
+		receiverTTL:            cfg.ReceiverTTL,
+		transferOpts:           cfg.TransferOpts,
+		autoTune:               cfg.AutoTune,
+		fixedTune:              cfg.FixedTune,
+		peerID:                 peerID,
+		sessionID:              sessionID,
+		joinCode:               joinCode,
+		manifest:               m,
+		manifestID:             manifestID,
+		summary:                summary,
+		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
+		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
+		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
+		quicStreamWindowBytes:  cfg.QuicStreamWindowBytes,
+		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
+		conn:                   conn,
+		receivers:              make(map[string]*ReceiverState),
+		active:                 make(map[string]*transferSlot),
+		signalCh:               make(map[string]chan protocol.Envelope),
+		progress:               make(map[string]*senderProgress),
+		now:                    time.Now,
+		exitFn:                 os.Exit,
 	}
 	s.transferFn = s.runICEQUICTransfer
 	s.transferOpts.ResolveFilePath = resolver
 	s.closeConn = func() { conn.Close() }
 	s.onChange = s.logSnapshotState
 	s.logSnapshotState()
+	s.tuneTTY = progress.IsTTY(os.Stdout)
+	s.initParams()
 
 	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView)
 	defer uiStop()
@@ -545,7 +599,22 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	defer udpConn.Close()
 
-	quicConn, err := quictransport.Dial(ctx, udpConn, remoteAddr, s.logger)
+	udpTune := transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	if udpTyped, ok := udpConn.(*net.UDPConn); ok {
+		udpTune = transport.ApplyUDPBeyondBestEffort(udpTyped, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	}
+	quicCfg, quicTune := transport.BuildQuicConfig(
+		quictransport.DefaultClientQUICConfig(),
+		s.quicConnWindowBytes,
+		s.quicStreamWindowBytes,
+		s.quicMaxIncomingStreams,
+	)
+	s.setTransportLines(
+		formatTransportSummary(udpTune, quicTune),
+		[]string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)},
+	)
+
+	quicConn, err := quictransport.DialWithConfig(ctx, udpConn, remoteAddr, s.logger, quicCfg)
 	if err != nil {
 		return fmt.Errorf("failed to dial QUIC connection: %w", err)
 	}
@@ -565,6 +634,16 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferConn.Close()
 
 	opts := s.transferOptions()
+	var stallCount int64
+	stallReset := func() {
+		atomic.StoreInt64(&stallCount, 0)
+	}
+	stallCheck := func() bool {
+		return atomic.LoadInt64(&stallCount) > 0
+	}
+	opts.ReadStallFn = func(time.Duration) {
+		atomic.AddInt64(&stallCount, 1)
+	}
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {
 			return
@@ -578,6 +657,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
 		s.updateSenderProgress(progressState, relpath, bytesSent)
 	}
+	tuneCtx, tuneCancel := context.WithCancel(ctx)
+	defer tuneCancel()
+	s.maybeStartAutoTune(tuneCtx, peerID, stallReset, stallCheck)
 	if err := transfer.SendManifestMultiStream(ctx, transferConn, ".", s.manifest, opts); err != nil {
 		return err
 	}
@@ -825,16 +907,99 @@ func (s *SnapshotSender) logSnapshotState() {
 func (s *SnapshotSender) transferOptions() transfer.Options {
 	opts := s.transferOpts
 	opts.Resume = true
+	opts.ParamSource = s.runtimeParams
 	return opts
 }
 
+func (s *SnapshotSender) initParams() {
+	runtime := transfer.NormalizeParams(transfer.RuntimeParams{
+		ChunkSize:     s.transferOpts.ChunkSize,
+		WindowSize:    s.transferOpts.WindowSize,
+		ReadAhead:     s.transferOpts.ReadAhead,
+		ParallelFiles: s.transferOpts.ParallelFiles,
+	}, s.transferOpts)
+	s.paramsMu.Lock()
+	s.params = perf.Params{
+		ChunkSize:     int(runtime.ChunkSize),
+		Window:        int(runtime.WindowSize),
+		ReadAhead:     int(runtime.ReadAhead),
+		ParallelFiles: runtime.ParallelFiles,
+	}
+	s.paramsMu.Unlock()
+}
+
+func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {
+	s.paramsMu.RLock()
+	params := s.params
+	s.paramsMu.RUnlock()
+	return transfer.RuntimeParams{
+		ChunkSize:     uint32(params.ChunkSize),
+		WindowSize:    uint32(params.Window),
+		ReadAhead:     uint32(params.ReadAhead),
+		ParallelFiles: params.ParallelFiles,
+	}
+}
+
+func (s *SnapshotSender) setParams(params perf.Params) {
+	s.paramsMu.Lock()
+	s.params = params
+	s.paramsMu.Unlock()
+}
+
+func (s *SnapshotSender) getParams() perf.Params {
+	s.paramsMu.RLock()
+	params := s.params
+	s.paramsMu.RUnlock()
+	return params
+}
+
+func (s *SnapshotSender) setTuneLine(line string) {
+	s.paramsMu.Lock()
+	s.tuneLine = line
+	s.paramsMu.Unlock()
+}
+
+func (s *SnapshotSender) tuneHeaderLine() string {
+	s.paramsMu.RLock()
+	line := s.tuneLine
+	s.paramsMu.RUnlock()
+	return line
+}
+
+func (s *SnapshotSender) setTransportLines(summary string, lines []string) {
+	s.paramsMu.Lock()
+	s.transportSummary = summary
+	s.transportLines = append([]string(nil), lines...)
+	if !s.tuneTTY && !s.transportLogged && summary != "" {
+		fmt.Fprintln(os.Stdout, summary)
+		for _, line := range lines {
+			fmt.Fprintln(os.Stdout, line)
+		}
+		s.transportLogged = true
+	}
+	s.paramsMu.Unlock()
+}
+
+func (s *SnapshotSender) transportHeaderLines() []string {
+	s.paramsMu.RLock()
+	defer s.paramsMu.RUnlock()
+	if s.transportSummary == "" {
+		return nil
+	}
+	lines := make([]string, 0, 1+len(s.transportLines))
+	lines = append(lines, s.transportSummary)
+	lines = append(lines, s.transportLines...)
+	return lines
+}
+
 type senderProgress struct {
-	meter   *progress.Meter
-	perFile map[string]int64
-	route   string
-	stage   string
+	meter       *progress.Meter
+	perFile     map[string]int64
+	route       string
+	stage       string
 	appliedSkip map[string]bool
-	mu      sync.Mutex
+	sentBytes   int64
+	mu          sync.Mutex
 }
 
 func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *senderProgress {
@@ -854,6 +1019,7 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	state.route = ""
 	state.stage = ""
 	state.appliedSkip = make(map[string]bool)
+	state.sentBytes = 0
 	state.mu.Unlock()
 	state.meter.Start(totalBytes)
 
@@ -867,7 +1033,9 @@ func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath str
 	state.mu.Lock()
 	prev := state.perFile[relpath]
 	if bytes > prev {
-		state.meter.Add(int(bytes - prev))
+		delta := bytes - prev
+		state.meter.Add(int(delta))
+		state.sentBytes += delta
 	}
 	state.perFile[relpath] = bytes
 	state.mu.Unlock()
@@ -920,6 +1088,115 @@ func (s *SnapshotSender) setSenderStage(peerID string, stage string) {
 	state.mu.Unlock()
 }
 
+func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return 0
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.sentBytes
+}
+
+func (s *SnapshotSender) maybeStartAutoTune(ctx context.Context, peerID string, stallReset func(), stallCheck func() bool) {
+	if !s.autoTune {
+		return
+	}
+	s.autoTuneOnce.Do(func() {
+		go s.runAutoTune(ctx, peerID, stallReset, stallCheck)
+	})
+}
+
+func (s *SnapshotSender) runAutoTune(ctx context.Context, peerID string, stallReset func(), stallCheck func() bool) {
+	initial := s.getParams()
+	measurer := func() int64 {
+		return s.senderSentBytes(peerID)
+	}
+	apply := func(p perf.Params) error {
+		s.setParams(p)
+		return nil
+	}
+	stopFn := func() bool {
+		s.mu.Lock()
+		queued := len(s.queue) > 0
+		s.mu.Unlock()
+		return queued
+	}
+
+	cfg := perf.AutoTuneConfig{
+		Enabled:          true,
+		MaxTime:          10 * time.Second,
+		ImproveThreshold: 0.05,
+		ProbeDuration:    1 * time.Second,
+		Warmup:           200 * time.Millisecond,
+		Alpha:            0.2,
+		MaxInflightBytes: 256 * 1024 * 1024,
+		StopFn:           stopFn,
+		StallReset:       stallReset,
+		StallCheck:       stallCheck,
+		OnState:          s.updateTuneState,
+		Fixed:            s.fixedTune,
+	}
+
+	_, _ = perf.RunAutoTune(ctx, cfg, measurer, apply, initial, perf.WorkloadInfo{
+		NumFiles:   s.manifest.FileCount,
+		TotalBytes: s.manifest.TotalBytes,
+	})
+}
+
+func (s *SnapshotSender) updateTuneState(state perf.AutoTuneState) {
+	if state.Done {
+		line := fmt.Sprintf("Tuned: %s", formatTuneParams(state.BestParams))
+		s.setTuneLine(line)
+		s.paramsMu.Lock()
+		s.autoTuneDone = true
+		s.paramsMu.Unlock()
+		if !s.tuneTTY {
+			fmt.Fprintln(os.Stdout, "Auto-tuned:", formatTuneParams(state.BestParams))
+		}
+		return
+	}
+
+	line := fmt.Sprintf(
+		"Tuning: %s trying %s score=%.1fMB/s best=%.1fMB/s",
+		state.Phase,
+		formatTuneParams(state.Trying),
+		state.ScoreMbps,
+		state.BestMbps,
+	)
+	s.setTuneLine(line)
+	if !s.tuneTTY {
+		fmt.Fprintf(os.Stdout, "[tune] phase=%s trying=%s score=%.1fMB/s best=%.1fMB/s\n",
+			state.Phase,
+			formatTuneParams(state.Trying),
+			state.ScoreMbps,
+			state.BestMbps,
+		)
+	}
+}
+
+func formatTuneParams(p perf.Params) string {
+	return fmt.Sprintf("chunk=%s window=%d readahead=%d parallel=%d",
+		formatMiB(p.ChunkSize),
+		p.Window,
+		p.ReadAhead,
+		p.ParallelFiles,
+	)
+}
+
+func formatMiB(bytes int) string {
+	if bytes <= 0 {
+		return "0B"
+	}
+	const mib = 1024 * 1024
+	if bytes%mib == 0 {
+		return fmt.Sprintf("%dMiB", bytes/mib)
+	}
+	return fmt.Sprintf("%dB", bytes)
+}
+
 func (s *SnapshotSender) senderView() progress.SenderView {
 	s.mu.Lock()
 	peerIDs := make([]string, 0, len(s.receivers))
@@ -956,8 +1233,17 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			Stage:  stage,
 		})
 	}
+	header := s.snapshotLine
+	if tune := s.tuneHeaderLine(); tune != "" {
+		header = header + "\n" + tune
+	}
+	if s.tuneTTY {
+		if lines := s.transportHeaderLines(); len(lines) > 0 {
+			header = header + "\n" + strings.Join(lines, "\n")
+		}
+	}
 	return progress.SenderView{
-		Header: s.snapshotLine,
+		Header: header,
 		Rows:   rows,
 	}
 }

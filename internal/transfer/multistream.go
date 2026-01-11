@@ -38,6 +38,9 @@ type Options struct {
 	TransferStatsFn  TransferStatsFn
 	WatchdogFn       WatchdogFn
 	ResumeStatsFn    ResumeStatsFn
+	ParamSource      func() RuntimeParams
+	OnFileStart      func(relpath string, size int64, params RuntimeParams)
+	ReadStallFn      func(waited time.Duration)
 }
 
 // TransferStatsFn reports active/completed file counts and remaining bytes.
@@ -62,6 +65,54 @@ type streamRegistry struct {
 	mu      sync.Mutex
 	streams map[uint64]Stream
 	waiters map[uint64][]chan Stream
+}
+
+type dynamicLimiter struct {
+	mu       sync.Mutex
+	limit    int
+	inFlight int
+}
+
+func newDynamicLimiter(limit int) *dynamicLimiter {
+	if limit < 1 {
+		limit = 1
+	}
+	return &dynamicLimiter{limit: limit}
+}
+
+func (l *dynamicLimiter) SetLimit(limit int) {
+	if limit < 1 {
+		limit = 1
+	}
+	l.mu.Lock()
+	l.limit = limit
+	l.mu.Unlock()
+}
+
+func (l *dynamicLimiter) Acquire(ctx context.Context) error {
+	for {
+		l.mu.Lock()
+		if l.inFlight < l.limit {
+			l.inFlight++
+			l.mu.Unlock()
+			return nil
+		}
+		l.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func (l *dynamicLimiter) Release() {
+	l.mu.Lock()
+	if l.inFlight > 0 {
+		l.inFlight--
+	}
+	l.mu.Unlock()
 }
 
 func newStreamRegistry() *streamRegistry {
@@ -243,32 +294,15 @@ func hashFileChunk(filePath string, chunkIndex uint32, chunkSize uint32, fileSiz
 // SendManifestMultiStream sends a manifest over a dedicated control stream and
 // transfers each file over its own data stream (sequentially).
 func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m manifest.Manifest, opts Options) error {
-	chunkSize := opts.ChunkSize
-	if chunkSize == 0 {
-		chunkSize = DefaultChunkSize
+	resolveParams := func() RuntimeParams {
+		var p RuntimeParams
+		if opts.ParamSource != nil {
+			p = opts.ParamSource()
+		}
+		return NormalizeParams(p, opts)
 	}
-	windowSize := opts.WindowSize
-	if windowSize == 0 {
-		windowSize = DefaultWindowSize
-	}
-
-	readAhead := opts.ReadAhead
-	if readAhead == 0 {
-		readAhead = windowSize + 4
-	}
-	if readAhead < 1 {
-		readAhead = 1
-	}
-	if readAhead > 256 {
-		readAhead = 256
-	}
-	parallelFiles := opts.ParallelFiles
-	if parallelFiles < 1 {
-		parallelFiles = 1
-	}
-	if parallelFiles > 32 {
-		parallelFiles = 32
-	}
+	currentParams := resolveParams()
+	parallelFiles := currentParams.ParallelFiles
 	resumeEnabled := opts.Resume
 	resumeTimeout := opts.ResumeTimeout
 	if resumeTimeout <= 0 {
@@ -342,8 +376,10 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	keyByStreamID := make(map[uint64]scheduler.FileKey)
 
 	updateAckState := func(streamID uint64, highest uint32) {
+		var streamChunkSize uint32
 		ackStatesMu.Lock()
 		if state, ok := ackStates[streamID]; ok {
+			streamChunkSize = state.chunkSize
 			if int32(highest) > state.highestAcked {
 				state.highestAcked = int32(highest)
 				if state.ackNotify != nil {
@@ -365,7 +401,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		schedMu.Lock()
 		if key, ok := keyByStreamID[streamID]; ok {
 			item := itemByRelPath[key.RelPath]
-			ackedBytes := int64(highest+1) * int64(chunkSize)
+			ackedBytes := int64(highest+1) * int64(streamChunkSize)
 			if ackedBytes > item.Size {
 				ackedBytes = item.Size
 			}
@@ -441,7 +477,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}
 	}
 
-	sem := make(chan struct{}, parallelFiles)
+	limiter := newDynamicLimiter(parallelFiles)
 	scheduleWake := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	var controlWriteMu sync.Mutex
@@ -538,9 +574,14 @@ scheduleLoop:
 			break scheduleLoop
 		}
 
-		select {
-		case sem <- struct{}{}:
-		case <-transferCtx.Done():
+		params := resolveParams()
+		if params.ParallelFiles != currentParams.ParallelFiles {
+			currentParams.ParallelFiles = params.ParallelFiles
+			limiter.SetLimit(params.ParallelFiles)
+			sched.SetParallelFiles(params.ParallelFiles)
+		}
+
+		if err := limiter.Acquire(transferCtx); err != nil {
 			break scheduleLoop
 		}
 
@@ -548,7 +589,7 @@ scheduleLoop:
 		key, ok := sched.Next(time.Now())
 		schedMu.Unlock()
 		if !ok {
-			<-sem
+			limiter.Release()
 			select {
 			case <-scheduleWake:
 				continue
@@ -560,9 +601,17 @@ scheduleLoop:
 		item, ok := itemByRelPath[key.RelPath]
 		if !ok {
 			setErr(fmt.Errorf("missing manifest item for %s", key.RelPath))
-			<-sem
+			limiter.Release()
 			break scheduleLoop
 		}
+
+		fileParams := resolveParams()
+		if opts.OnFileStart != nil {
+			opts.OnFileStart(item.RelPath, item.Size, fileParams)
+		}
+		chunkSize := fileParams.ChunkSize
+		windowSize := fileParams.WindowSize
+		readAhead := fileParams.ReadAhead
 
 		var openTimer *time.Timer
 		if opts.WatchdogFn != nil {
@@ -577,7 +626,7 @@ scheduleLoop:
 		}
 		if err != nil {
 			setErr(fmt.Errorf("failed to open data stream: %w", err))
-			<-sem
+			limiter.Release()
 			break scheduleLoop
 		}
 
@@ -585,7 +634,7 @@ scheduleLoop:
 		if err != nil {
 			dataStream.Close()
 			setErr(err)
-			<-sem
+			limiter.Release()
 			break scheduleLoop
 		}
 
@@ -615,13 +664,14 @@ scheduleLoop:
 		if err != nil {
 			dataStream.Close()
 			setErr(err)
-			<-sem
+			limiter.Release()
 			break scheduleLoop
 		}
 
 		fileState := &fileACKState{
 			highestAcked: -1,
 			ackNotify:    make(chan struct{}, 1),
+			chunkSize:    chunkSize,
 		}
 		ackStatesMu.Lock()
 		ackStates[streamID] = fileState
@@ -647,7 +697,7 @@ scheduleLoop:
 		wg.Add(1)
 		go func(item manifest.FileItem, streamID uint64, dataStream Stream, fileState *fileACKState) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			defer limiter.Release()
 
 			if transferCtx.Err() != nil {
 				return
@@ -787,7 +837,7 @@ scheduleLoop:
 				}
 			}
 
-			crc32Value, err := sendFileChunksWindowed(transferCtx, dataStream, item.RelPath, filePath, item.Size, chunkSize, windowSize, readAhead, progressFn, opts.WindowStatsFn, fileState, &ackStatesMu, ackErrChan, false, plan)
+			crc32Value, err := sendFileChunksWindowed(transferCtx, dataStream, item.RelPath, filePath, item.Size, chunkSize, windowSize, readAhead, progressFn, opts.WindowStatsFn, fileState, &ackStatesMu, ackErrChan, false, plan, opts.ReadStallFn)
 			if err != nil {
 				dataStream.Close()
 				setErr(err)
@@ -1086,7 +1136,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					stateMu.Lock()
 					for streamID, st := range stateByStream {
 						if now.Sub(st.lastProgress) > 5*time.Second {
-						stalled = append(stalled, fmt.Sprintf("%d:%s:data=%t:end=%t:idle=%s", streamID, st.begin.RelPath, st.hasData, st.hasEnd, now.Sub(st.lastProgress).Truncate(time.Second)))
+							stalled = append(stalled, fmt.Sprintf("%d:%s:data=%t:end=%t:idle=%s", streamID, st.begin.RelPath, st.hasData, st.hasEnd, now.Sub(st.lastProgress).Truncate(time.Second)))
 						}
 					}
 					stateCount := len(stateByStream)

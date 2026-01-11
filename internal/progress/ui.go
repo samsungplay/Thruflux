@@ -11,9 +11,10 @@ import (
 )
 
 type ReceiverView struct {
-	SnapshotID    string
-	OutDir        string
-	IceStage      string
+	SnapshotID     string
+	OutDir         string
+	IceStage       string
+	TransportLines []string
 	Stats          Stats
 	CurrentFile    string
 	FileDone       int
@@ -83,6 +84,12 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 				fmt.Fprintf(w, "ice %s\n", v.IceStage)
 				lines++
 			}
+			if len(v.TransportLines) > 0 {
+				for _, line := range v.TransportLines {
+					fmt.Fprintln(w, line)
+					lines++
+				}
+			}
 			if v.Route != "" {
 				fmt.Fprintf(w, "%s\n", v.Route)
 				lines++
@@ -145,10 +152,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				fmt.Fprint(w, "\033[J")
 			}
 			lines := 0
-			if v.Header != "" {
-				fmt.Fprintln(w, v.Header)
-				lines++
-			}
+			lines += writeHeader(w, v.Header)
 			fmt.Fprintln(w, "peer       status   %    rate     ETA")
 			lines++
 			for _, row := range v.Rows {
@@ -166,9 +170,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 			}
 			lastLines = lines
 		} else {
-			if v.Header != "" {
-				fmt.Fprintln(w, v.Header)
-			}
+			writeHeader(w, v.Header)
 			for _, row := range v.Rows {
 				fmt.Fprintf(w, "peer=%s status=%s %.1f%% %s ETA %s\n",
 					row.Peer, row.Status, row.Stats.Percent, formatRate(row.Stats.RateBps), formatETA(row.Stats.ETA))
@@ -197,6 +199,18 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 			fmt.Fprint(w, "\033[?25h")
 		}
 	}
+}
+
+func writeHeader(w io.Writer, header string) int {
+	header = strings.TrimSuffix(header, "\n")
+	if header == "" {
+		return 0
+	}
+	lines := strings.Split(header, "\n")
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+	return len(lines)
 }
 
 func formatReceiverLine(v ReceiverView) string {
