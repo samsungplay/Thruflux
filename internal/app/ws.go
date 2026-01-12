@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func buildWebSocketURL(serverURL, joinCode, peerID, role string) (string, error) {
+func buildWebSocketURL(serverURL, joinCode, peerID, role string, maxReceivers int) (string, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return "", err
@@ -17,11 +17,16 @@ func buildWebSocketURL(serverURL, joinCode, peerID, role string) (string, error)
 		scheme = "wss"
 	}
 
+	query := fmt.Sprintf("join_code=%s&peer_id=%s&role=%s", url.QueryEscape(joinCode), url.QueryEscape(peerID), url.QueryEscape(role))
+	if maxReceivers > 0 {
+		query = fmt.Sprintf("%s&max_receivers=%d", query, maxReceivers)
+	}
+
 	wsURL := url.URL{
 		Scheme:   scheme,
 		Host:     u.Host,
 		Path:     "/ws",
-		RawQuery: fmt.Sprintf("join_code=%s&peer_id=%s&role=%s", url.QueryEscape(joinCode), url.QueryEscape(peerID), url.QueryEscape(role)),
+		RawQuery: query,
 	}
 
 	return wsURL.String(), nil

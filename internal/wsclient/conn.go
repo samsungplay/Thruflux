@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -38,8 +39,16 @@ func Dial(ctx context.Context, wsURL string, logger *slog.Logger) (*Conn, error)
 	headers := http.Header{}
 
 	// Dial with context
-	conn, _, err := dialer.DialContext(ctx, u.String(), headers)
+	conn, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
+		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if len(body) > 0 {
+				return nil, fmt.Errorf("websocket upgrade failed (%d): %s", resp.StatusCode, string(body))
+			}
+			return nil, fmt.Errorf("websocket upgrade failed (%d)", resp.StatusCode)
+		}
 		return nil, err
 	}
 
@@ -158,4 +167,3 @@ func (c *Conn) Close() error {
 	<-c.done // Wait for write loop to finish
 	return c.conn.Close()
 }
-

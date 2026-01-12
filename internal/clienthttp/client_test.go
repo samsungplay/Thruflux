@@ -35,7 +35,7 @@ func TestCreateSession_Success(t *testing.T) {
 
 	// Call CreateSession
 	ctx := context.Background()
-	sessionID, joinCode, expiresAt, err := CreateSession(ctx, server.URL)
+	sessionID, joinCode, expiresAt, err := CreateSession(ctx, server.URL, 0)
 
 	if err != nil {
 		t.Fatalf("CreateSession() error = %v", err)
@@ -62,7 +62,7 @@ func TestCreateSession_Non2xx(t *testing.T) {
 
 	// Call CreateSession
 	ctx := context.Background()
-	_, _, _, err := CreateSession(ctx, server.URL)
+	_, _, _, err := CreateSession(ctx, server.URL, 0)
 
 	if err == nil {
 		t.Fatal("CreateSession() expected error, got nil")
@@ -85,7 +85,7 @@ func TestCreateSession_InvalidJSON(t *testing.T) {
 
 	// Call CreateSession
 	ctx := context.Background()
-	_, _, _, err := CreateSession(ctx, server.URL)
+	_, _, _, err := CreateSession(ctx, server.URL, 0)
 
 	if err == nil {
 		t.Fatal("CreateSession() expected error, got nil")
@@ -109,10 +109,9 @@ func TestCreateSession_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	// Call CreateSession
-	_, _, _, err := CreateSession(ctx, server.URL)
+	_, _, _, err := CreateSession(ctx, server.URL, 0)
 
 	if err == nil {
 		t.Fatal("CreateSession() expected error, got nil")
 	}
 }
-

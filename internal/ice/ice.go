@@ -13,7 +13,17 @@ import (
 // ICEConfig holds configuration for ICE peer.
 type ICEConfig struct {
 	StunServers []string
+	TurnServers []string
 	Lite        bool // false for now
+}
+
+// DefaultStunServers is the STUN list used when no servers provided.
+var DefaultStunServers = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:stun1.l.google.com:19302",
+	"stun:stun2.l.google.com:19302",
+	"stun:stun.cloudflare.com:3478",
+	"stun:stun.ekiga.net:3478",
 }
 
 // ICEPeer manages ICE connection establishment.
@@ -40,25 +50,25 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	}
 
 	// Default STUN server if none provided
-	stunServers := cfg.StunServers
-	if len(stunServers) == 0 {
-		stunServers = []string{"stun:stun.l.google.com:19302"}
+	servers := append([]string{}, cfg.StunServers...)
+	servers = append(servers, cfg.TurnServers...)
+	if len(servers) == 0 {
+		servers = append([]string{}, DefaultStunServers...)
 	}
 
 	// Convert to pion format
 	var urls []*ice.URL
-	for _, server := range stunServers {
+	for _, server := range servers {
 		url, err := ice.ParseURL(server)
 		if err != nil {
-			return nil, fmt.Errorf("invalid STUN server URL %s: %w", server, err)
+			return nil, fmt.Errorf("invalid ICE server URL %s: %w", server, err)
 		}
 		urls = append(urls, url)
 	}
 
 	config := &ice.AgentConfig{
-		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP6,ice.NetworkTypeUDP4,
-			},
-		Urls: urls,
+		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP6, ice.NetworkTypeUDP4},
+		Urls:         urls,
 	}
 
 	agent, err := ice.NewAgent(config)

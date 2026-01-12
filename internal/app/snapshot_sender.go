@@ -60,6 +60,8 @@ type SnapshotSenderConfig struct {
 	QuicConnWindowBytes    int
 	QuicStreamWindowBytes  int
 	QuicMaxIncomingStreams int
+	StunServers            []string
+	TurnServers            []string
 }
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
@@ -100,6 +102,8 @@ type SnapshotSender struct {
 	quicConnWindowBytes    int
 	quicStreamWindowBytes  int
 	quicMaxIncomingStreams int
+	stunServers            []string
+	turnServers            []string
 	transportSummary       string
 	transportLines         []string
 	transportLogged        bool
@@ -166,14 +170,14 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 
 	peerID := randomPeerID()
-	sessionID, joinCode, _, err := clienthttp.CreateSession(ctx, cfg.ServerURL)
+	sessionID, joinCode, _, err := clienthttp.CreateSession(ctx, cfg.ServerURL, cfg.MaxReceivers)
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 
 	fmt.Printf("\n=== Join Code: %s ===\n\n", joinCode)
 
-	wsURL, err := buildWebSocketURL(cfg.ServerURL, joinCode, peerID, "sender")
+	wsURL, err := buildWebSocketURL(cfg.ServerURL, joinCode, peerID, "sender", cfg.MaxReceivers)
 	if err != nil {
 		return err
 	}
@@ -201,6 +205,8 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
 		quicStreamWindowBytes:  cfg.QuicStreamWindowBytes,
 		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
+		stunServers:            cfg.StunServers,
+		turnServers:            cfg.TurnServers,
 		conn:                   conn,
 		receivers:              make(map[string]*ReceiverState),
 		active:                 make(map[string]*transferSlot),
@@ -461,7 +467,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 
 	iceCfg := ice.ICEConfig{
-		StunServers: []string{"stun:stun.l.google.com:19302"},
+		StunServers: s.stunServers,
+		TurnServers: s.turnServers,
 		Lite:        false,
 	}
 	icePeer, err := ice.NewICEPeer(iceCfg, s.logger)
@@ -641,9 +648,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	opts.WatchdogFn = func(msg string, args ...any) {
 		if isErrorEvent(args...) {
 			s.logger.Error(msg, args...)
-			return
 		}
-		s.logger.Info(msg, args...)
 	}
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {

@@ -5,14 +5,25 @@ import (
 	"encoding/hex"
 	"flag"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // ServerConfig holds configuration for the server binary.
 type ServerConfig struct {
-	Addr     string
-	LogLevel string
+	Port                  int
+	MaxSessions           int
+	MaxReceiversPerSender int
+	MaxMessageBytes       int
+	WSConnectsPerMin      int
+	WSConnectsBurst       int
+	WSMsgsPerSec          int
+	WSMsgsBurst           int
+	SessionCreatesPerMin  int
+	SessionCreatesBurst   int
+	MaxWSConnections      int
+	WSIdleTimeout         time.Duration
 }
 
 // ClientConfig holds configuration for client binaries (sender/receiver).
@@ -52,22 +63,45 @@ func ParseServerConfig() ServerConfig {
 // parseServerConfigWithFlagSet is an internal helper for testing with isolated flag sets.
 func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig {
 	cfg := ServerConfig{
-		Addr:     ":8080",
-		LogLevel: "info",
+		Port:                  8080,
+		MaxSessions:           1000,
+		MaxReceiversPerSender: 10,
+		MaxMessageBytes:       64 * 1024,
+		WSConnectsPerMin:      30,
+		WSConnectsBurst:       10,
+		WSMsgsPerSec:          50,
+		WSMsgsBurst:           100,
+		SessionCreatesPerMin:  10,
+		SessionCreatesBurst:   5,
+		MaxWSConnections:      2000,
+		WSIdleTimeout:         10 * time.Minute,
 	}
 
 	// Read from environment first
-	if addr := os.Getenv("SHEERBYTES_ADDR"); addr != "" {
-		cfg.Addr = addr
-	}
-	if logLevel := os.Getenv("SHEERBYTES_LOG_LEVEL"); logLevel != "" {
-		cfg.LogLevel = logLevel
+	if port := os.Getenv("SHEERBYTES_PORT"); port != "" {
+		if parsed, err := strconv.Atoi(port); err == nil {
+			cfg.Port = parsed
+		}
 	}
 
 	// Flags override environment
-	fs.StringVar(&cfg.Addr, "addr", cfg.Addr, "server address")
-	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level (debug, info, warn, error)")
+	fs.IntVar(&cfg.Port, "port", cfg.Port, "server port (1-65535)")
+	fs.IntVar(&cfg.MaxSessions, "max-sessions", cfg.MaxSessions, "max concurrent sessions (0 disables limit)")
+	fs.IntVar(&cfg.MaxReceiversPerSender, "max-receivers-per-sender", cfg.MaxReceiversPerSender, "max receivers per sender (0 disables limit)")
+	fs.IntVar(&cfg.MaxMessageBytes, "max-message-bytes", cfg.MaxMessageBytes, "max websocket message size in bytes")
+	fs.IntVar(&cfg.WSConnectsPerMin, "ws-connects-per-min", cfg.WSConnectsPerMin, "max websocket connections per minute per IP")
+	fs.IntVar(&cfg.WSConnectsBurst, "ws-connects-burst", cfg.WSConnectsBurst, "burst websocket connections per IP")
+	fs.IntVar(&cfg.WSMsgsPerSec, "ws-msgs-per-sec", cfg.WSMsgsPerSec, "max websocket messages per second per connection")
+	fs.IntVar(&cfg.WSMsgsBurst, "ws-msgs-burst", cfg.WSMsgsBurst, "burst websocket messages per connection")
+	fs.IntVar(&cfg.SessionCreatesPerMin, "session-creates-per-min", cfg.SessionCreatesPerMin, "max session creates per minute per IP")
+	fs.IntVar(&cfg.SessionCreatesBurst, "session-creates-burst", cfg.SessionCreatesBurst, "burst session creates per IP")
+	fs.IntVar(&cfg.MaxWSConnections, "max-ws-connections", cfg.MaxWSConnections, "max concurrent websocket connections (0 disables limit)")
+	fs.DurationVar(&cfg.WSIdleTimeout, "ws-idle-timeout", cfg.WSIdleTimeout, "websocket idle timeout (0 disables)")
 	fs.Parse(args)
+
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		cfg.Port = 8080
+	}
 
 	return cfg
 }

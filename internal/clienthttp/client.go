@@ -19,11 +19,14 @@ type SessionResponse struct {
 // CreateSession creates a new session by calling POST /session on the server.
 // Returns sessionID, joinCode, expiresAt, and any error.
 // Uses a 5 second timeout for the HTTP request.
-func CreateSession(ctx context.Context, serverURL string) (sessionID, joinCode string, expiresAt time.Time, err error) {
+func CreateSession(ctx context.Context, serverURL string, maxReceivers int) (sessionID, joinCode string, expiresAt time.Time, err error) {
 	// Build the URL
 	url := serverURL + "/session"
 	if url[:4] != "http" {
 		url = "http://" + url
+	}
+	if maxReceivers > 0 {
+		url = fmt.Sprintf("%s?max_receivers=%d", url, maxReceivers)
 	}
 
 	// Create HTTP client with timeout
@@ -73,4 +76,3 @@ func CreateSession(ctx context.Context, serverURL string) (sessionID, joinCode s
 
 	return sessionResp.SessionID, sessionResp.JoinCode, expiresAt, nil
 }
-
