@@ -5,14 +5,14 @@ import (
 	"os"
 )
 
-// New creates a new structured logger with JSON output.
-// app: application name (e.g., "sheerbytes-server")
+// New creates a new structured logger with text output.
+// app: application name (e.g., "thruserv")
 // level: one of "debug", "info", "warn", "error" (default: "info")
 func New(app string, level string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level: parseLevel(level),
 	}
-	handler := slog.NewJSONHandler(os.Stdout, opts)
+	handler := slog.NewTextHandler(os.Stdout, opts)
 	logger := slog.New(handler)
 
 	// Add default attributes: app and pid
@@ -36,4 +36,3 @@ func parseLevel(level string) slog.Level {
 		return slog.LevelInfo
 	}
 }
-

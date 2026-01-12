@@ -34,6 +34,8 @@ type SnapshotReceiverConfig struct {
 	QuicConnWindowBytes    int
 	QuicStreamWindowBytes  int
 	QuicMaxIncomingStreams int
+	StunServers            []string
+	TurnServers            []string
 }
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
@@ -72,7 +74,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	}
 
 	peerID := randomPeerID()
-	wsURL, err := buildWebSocketURL(cfg.ServerURL, cfg.JoinCode, peerID, "receiver")
+	wsURL, err := buildWebSocketURL(cfg.ServerURL, cfg.JoinCode, peerID, "receiver", 0)
 	if err != nil {
 		return err
 	}
@@ -94,6 +96,8 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
 		quicStreamWindowBytes:  cfg.QuicStreamWindowBytes,
 		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
+		stunServers:            cfg.StunServers,
+		turnServers:            cfg.TurnServers,
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
@@ -121,6 +125,8 @@ type snapshotReceiver struct {
 	quicConnWindowBytes    int
 	quicStreamWindowBytes  int
 	quicMaxIncomingStreams int
+	stunServers            []string
+	turnServers            []string
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -248,7 +254,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	iceCfg := ice.ICEConfig{
-		StunServers: []string{"stun:stun.l.google.com:19302"},
+		StunServers: r.stunServers,
+		TurnServers: r.turnServers,
 		Lite:        false,
 	}
 	var (
@@ -493,9 +500,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		WatchdogFn: func(msg string, args ...any) {
 			if isErrorEventReceiver(args...) {
 				r.logger.Error(msg, args...)
-				return
 			}
-			r.logger.Info(msg, args...)
 		},
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			progressState.Update(relpath, bytesReceived, total)

@@ -1,277 +1,162 @@
-# SheerBytes
+# Thruflux
 
-Speed-first P2P file transfer application. The server component serves as a signaling-only service.
+Thruflux is a high-throughput, low-latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) brokers ICE/QUIC handshakes, and the unified `thru` CLI lets you become a host or joiner without friction. Files stream over QUIC with smart resume, verbose diagnostics, and optional STUN/TURN fallback—without sacrificing directness. Startup sayings keep morale high; every transfer begins with a good omen.
 
-## Building
+## Features
 
-Build all binaries:
+- **Speed-first**: QUIC data streams over ICE/NAT-traversed peers deliver multi-gigabit transfers with per-file parallelism.
+- **Resilient resume**: Hosts and joiners negotiate manifests, verify chunks, and restart mid-file if interrupted.
+- **Minimal control plane**: `thruserv` only handles session discovery; data skips relays whenever possible.
+- **Unified CLI**: `thru host …` and `thru join …` share a single binary with helpful banners, version output, and spicy startup messages.
+- **Observability**: Sender and receiver log peer events, transfer stats, and error contexts (`snapshot sender failed`, `transfer failed: control stream timeout`, etc.).
+- **Extensible networking**: Supply custom STUN/TURN endpoints, fine-tune QUIC windows, and adjust transfer concurrency with flags.
+
+## Quickstart
 
 ```bash
+# build every binary (thru, thruserv, etc.)
 go build ./...
+
+# start the server (listening on localhost:8080)
+thruserv
+
+# host files (runs sender logic)
+thru host ./photos ./videos --server-url http://localhost:8080
+
+# join a session (runs receiver logic)
+thru join ABCDEFGH --out ./downloads --server-url http://localhost:8080
 ```
 
-## Running
+You can also run the server via `go run ./cmd/thruserv` and the legacy host/join wrappers (`go run ./cmd/thruflux-sender …`, `go run ./cmd/thruflux-receiver …`), but `thru` centralizes everything while keeping the old entry points for compatibility.
 
-### Server
+## Command reference
 
-Run the server:
-
-```bash
-go run ./cmd/sheerbytes-server
-```
-
-The server will start on `:8080` by default and exposes the following endpoints:
-
-#### Health Check
-
-```bash
-curl http://localhost:8080/health
-# Output: {"ok":true}
-```
-
-#### Create Session
-
-Create a new signaling session:
-
-```bash
-curl -X POST http://localhost:8080/session
-```
-
-Sample response:
-
-```json
-{
-  "session_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-  "join_code": "ABCDEFGH",
-  "expires_at": "2024-01-01T12:30:00Z"
-}
-```
-
-Sessions expire after 30 minutes and are automatically cleaned up every minute.
-
-#### WebSocket Join
-
-Join a session via WebSocket:
-
-```bash
-wscat -c "ws://localhost:8080/ws?join_code=ABCDEFGH&peer_id=peer123&role=sender"
-```
-
-Query parameters:
-- `join_code` (required): The join code from the session creation response
-- `peer_id` (required): Unique identifier for this peer
-- `role` (required): Either `"sender"` or `"receiver"`
-
-On successful connection:
-- You'll receive a `peer_list` message with all current peers in the session
-- All peers in the session will receive a `peer_joined` notification
-- When you disconnect, all peers will receive a `peer_left` notification
-
-Example using wscat:
-
-```bash
-# Terminal 1: Create a session
-curl -X POST http://localhost:8080/session
-# Response: {"session_id":"...","join_code":"ABCDEFGH","expires_at":"..."}
-
-# Terminal 2: Join as sender
-wscat -c "ws://localhost:8080/ws?join_code=ABCDEFGH&peer_id=sender1&role=sender"
-
-# Terminal 3: Join as receiver
-wscat -c "ws://localhost:8080/ws?join_code=ABCDEFGH&peer_id=receiver1&role=receiver"
-```
-
-#### Message Routing
-
-Once connected via WebSocket, you can send messages as JSON envelopes. The server routes messages based on the `To` field:
-
-- **Targeted send**: If `To` is set to a peer_id, the message is sent only to that peer
-- **Broadcast**: If `To` is empty, the message is broadcast to all peers in the session except the sender
-
-Example: Sending an offer message (targeted):
-
-```json
-{
-  "v": 1,
-  "type": "offer",
-  "msg_id": "msg1234567890abcd",
-  "session_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-  "from": "sender1",
-  "to": "receiver1",
-  "payload": {
-    "sdp": "v=0\r\no=- 123456789 123456789 IN IP4 127.0.0.1\r\n..."
-  }
-}
-```
-
-Example: Broadcasting a message to all peers:
-
-```json
-{
-  "v": 1,
-  "type": "ice_candidate",
-  "msg_id": "msg0987654321dcba",
-  "session_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-  "from": "sender1",
-  "payload": {
-    "candidate": "candidate:1 1 UDP 2130706431 192.168.1.100 54321 typ host"
-  }
-}
-```
-
-**Note**: The server automatically:
-- Sets `From` to match the `peer_id` query parameter
-- Sets `SessionID` if missing
-- Validates message size (max 64KB)
-- Rejects invalid envelopes
-- Returns an error if target peer is not found (for targeted sends)
-
-### Sender
-
-Run the sender to create a session and connect:
-
-```bash
-go run ./cmd/sheerbytes-sender --server-url http://localhost:8080 --path ./someFolder
-```
-
-The sender will:
-1. Create a session via HTTP POST
-2. Display the join code prominently to stdout (e.g., `=== Join Code: ABCDEFGH ===`)
-3. Connect via WebSocket
-4. Scan the specified path (default: current directory) and create a manifest
-5. Broadcast manifest offer to all peers in the session
-6. Log peer presence events (peer_list, peer_joined, peer_left)
-7. Log manifest acceptances from receivers
-
-Example output:
+### `thruserv` (signaling server)
 
 ```
-=== Join Code: ABCDEFGH ===
-
+thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D]
 ```
 
-The sender logs all peer events in JSON format to stderr (structured logging), while the join code is printed to stdout for easy copying.
+| Flag | Description |
+|---|---|
+| `--port` | TCP port to listen on (default `8080`). |
+| `--max-sessions` | Max concurrent signaling sessions (default `1000`, `0` disables). |
+| `--max-receivers-per-sender` | Limits how many receivers a sender may invite (default `10`). |
+| `--max-message-bytes` | Max WebSocket payload size (default `65536`). |
+| `--ws-connects-per-min` / `--ws-connects-burst` | Per-IP connect rate cap (default `30`/`10`). |
+| `--ws-msgs-per-sec` / `--ws-msgs-burst` | Per-connection message throttle (default `50`/`100`). |
+| `--session-creates-per-min` / `--session-creates-burst` | Per-IP session creation throttle (default `10`/`5`). |
+| `--max-ws-connections` | Total WebSocket cap (default `2000`, `0` disables). |
+| `--ws-idle-timeout` | Idle connection timeout (default `10m`, `0` disables). |
+| `--version`, `-v` | Print the Thruflux server version. |
 
-Use Ctrl+C to gracefully disconnect.
+Environment variables: `SHEERBYTES_PORT`.
 
-### Receiver
+### `thru host` (sender)
 
-Run the receiver to join an existing session:
-
-```bash
-go run ./cmd/sheerbytes-receiver --server-url http://localhost:8080 --join-code ABCDEFGH --peer-id bob
+```
+thru host <paths...> [flags]
 ```
 
-Or omit the join code to be prompted interactively:
+| Flag | Description |
+|---|---|
+| `--server-url` | Signaling server URL (default `http://localhost:8080`). |
+| `--max-receivers` | Max concurrent receivers to invite (default `4`). |
+| `--stun-server` | Comma-separated STUN URLs (default `stun:stun.l.google.com:19302,...`). |
+| `--turn-server` | Comma-separated TURN URLs (default none). |
+| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow-control knobs (defaults `1GiB` / `32MiB`). |
+| `--quic-max-incoming-streams` | Max QUIC incoming streams (default `100`). |
+| `--chunk-size` | Chunk size in bytes (default auto). |
+| `--parallel-files` | Concurrent file transfers (1..8). |
+| `--benchmark` | Print throughput stats. |
+| `--version`, `-v` | Print the Thruflux CLI version. |
 
-```bash
-go run ./cmd/sheerbytes-receiver --server-url http://localhost:8080 --peer-id bob
-# Will prompt: "Enter join code: "
+Environment variables: `SHEERBYTES_SERVER_URL`, `SHEERBYTES_PEER_ID`.
+
+### `thru join` (receiver)
+
+```
+thru join <join-code> [flags]
 ```
 
-The receiver will:
-1. Connect to the server via WebSocket using the join code
-2. Log peer presence events (peer_list, peer_joined, peer_left)
-3. Automatically accept any manifest offers with Mode="all"
+| Flag | Description |
+|---|---|
+| `--out` | Output directory (default `.`). |
+| `--server-url` | Signaling server URL. |
+| `--stun-server` / `--turn-server` | ICE servers just like `thru host`. |
+| `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs. |
+| `--benchmark` | Print throughput stats. |
+| `--version`, `-v` | Print the Thruflux CLI version. |
 
-**Note**: The join code is printed to stdout by the sender when it creates a session (e.g., `=== Join Code: ABCDEFGH ===`). Copy this code and use it with the receiver.
+Environment variables: `SHEERBYTES_SERVER_URL`, `SHEERBYTES_JOIN_CODE`, `SHEERBYTES_PEER_ID`.
 
-**Manifest Negotiation**: When a receiver receives a manifest offer, it automatically responds with an accept message (Mode="all"). The sender logs all acceptances and tracks accepted receivers.
+## Self-hosting guide (Ubuntu 24)
 
-Use Ctrl+C to gracefully disconnect.
-
-## Profiling
-
-Enable pprof on sender/receiver to capture hot-path profiles during a transfer:
-
-```bash
-# Sender (profile at :6060)
-go run ./cmd/sheerbytes-sender <paths...> --pprof --pprof-addr 127.0.0.1:6060
-
-# Receiver (use a different port if running on the same machine)
-go run ./cmd/sheerbytes-receiver <join-code> --out <dir> --pprof --pprof-addr 127.0.0.1:6061
-
-# Capture a 10s CPU profile and open in browser
-go tool pprof -http=:8081 "http://127.0.0.1:6060/debug/pprof/profile?seconds=10"
-```
-
-## Configuration
-
-Configuration can be set via command-line flags or environment variables. Flags take precedence over environment variables.
-
-### Server Configuration
-
-Flags:
-- `--addr`: server address (default: `:8080`)
-- `--log-level`: log level - debug, info, warn, error (default: `info`)
-
-Environment variables:
-- `SHEERBYTES_ADDR`: server address
-- `SHEERBYTES_LOG_LEVEL`: log level
-
-Example:
-
-```bash
-# Using flags
-go run ./cmd/sheerbytes-server --addr :9090 --log-level debug
-
-# Using environment variables
-SHEERBYTES_ADDR=:9090 SHEERBYTES_LOG_LEVEL=debug go run ./cmd/sheerbytes-server
-```
-
-### Client Configuration (Sender/Receiver)
-
-Flags:
-- `--server-url`: server URL (default: `http://localhost:8080`)
-- `--log-level`: log level - debug, info, warn, error (default: `info`)
-- `--peer-id`: peer identifier (default: random 10-character hex string)
-- `--join-code`: session join code (receiver only, optional - prompts if empty)
-- `--path`: path to scan and send (sender only, default: current directory)
-
-Environment variables:
-- `SHEERBYTES_SERVER_URL`: server URL
-- `SHEERBYTES_LOG_LEVEL`: log level
-- `SHEERBYTES_PEER_ID`: peer identifier
-- `SHEERBYTES_JOIN_CODE`: session join code (receiver only)
-
-Example:
-
-```bash
-# Sender - scan a folder
-go run ./cmd/sheerbytes-sender --server-url http://localhost:9090 --peer-id mypeer123 --path ./myFolder
-
-# Sender - using environment variables
-SHEERBYTES_SERVER_URL=http://localhost:9090 SHEERBYTES_PEER_ID=mypeer123 go run ./cmd/sheerbytes-sender --path ./myFolder
-
-# Receiver - with join code
-go run ./cmd/sheerbytes-receiver --server-url http://localhost:9090 --join-code ABCDEFGH --peer-id bob
-
-# Receiver - with environment variable
-SHEERBYTES_SERVER_URL=http://localhost:9090 SHEERBYTES_JOIN_CODE=ABCDEFGH SHEERBYTES_PEER_ID=bob go run ./cmd/sheerbytes-receiver
-```
-
-#### Example Workflow
-
-1. **Start the server:**
+1. **Prepare the machine**
    ```bash
-   go run ./cmd/sheerbytes-server
+   sudo apt update && sudo apt upgrade -y
+   sudo apt install -y build-essential curl git
+   curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh # optional
+   sudo snap install --classic go
    ```
 
-2. **Start the sender** (in Terminal 1):
+2. **Build the binaries**
    ```bash
-   go run ./cmd/sheerbytes-sender --server-url http://localhost:8080 --path ./someFolder
-   ```
-   Output shows: `=== Join Code: ABCDEFGH ===`
-
-3. **Start the receiver** (in Terminal 2):
-   ```bash
-   go run ./cmd/sheerbytes-receiver --server-url http://localhost:8080 --join-code ABCDEFGH --peer-id bob
+   git clone <repo>
+   cd sheerbytes
+   go build ./cmd/thru ./cmd/thruserv
+   sudo mv thruserv /usr/local/bin/
+   sudo mv thru /usr/local/bin/
    ```
 
-4. The receiver will:
-   - Connect to the session
-   - Receive the manifest offer from the sender
-   - Automatically accept it (Mode="all")
-   - The sender logs the acceptance
+3. **Optional TLS + WSS (recommended)**
+   - Install Caddy or Nginx; Caddy example:
+     ```bash
+     sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/deb/debian/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
+     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/deb/debian/codename.list' \
+       | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+     sudo apt update
+     sudo apt install caddy
+     ```
+   - Configure `/etc/caddy/Caddyfile`:
+     ```
+     your.domain {
+       reverse_proxy localhost:8080
+     }
+     ```
+   - Reload: `sudo systemctl reload caddy`.
 
-Both sender and receiver will log peer presence events as peers join and leave the session.
+4. **Run `thruserv`**
+   - Create a non-root user, then a systemd unit `/etc/systemd/system/thruserv.service`:
+     ```
+     [Unit]
+     Description=Thruflux signaling server
+     After=network.target
+
+     [Service]
+     ExecStart=/usr/local/bin/thruserv --port 8080
+     Restart=on-failure
+     User=thruflux
+     WorkingDirectory=/opt/thruflux
+
+     [Install]
+     WantedBy=multi-user.target
+     ```
+   - Enable and start:
+     ```bash
+     sudo systemctl daemon-reload
+     sudo systemctl enable --now thruserv
+     ```
+
+5. **Point clients to `https://your.domain`**
+   - Use `thru host … --server-url https://your.domain`.
+   - Receivers connect via `thru join ABCDEFGH --server-url https://your.domain`.
+
+### Monitoring & troubleshooting
+
+- `sudo journalctl -u thruserv -f` streams server logs.
+- Use `thru --version` to verify the shipped revision.
+- When `thru host` or `thru join` fail to complete ICE, the CLI logs `snapshot sender/receiver failed` with the wrapped cause (timeouts, `failed to establish ICE connection`, etc.).
+
+May TURN never be needed!

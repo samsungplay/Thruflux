@@ -83,6 +83,13 @@ func (s *Store) Delete(sessionID string) {
 	delete(s.byCode, session.JoinCode)
 }
 
+// Count returns the number of active sessions.
+func (s *Store) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
 // generateSessionID generates a random 32-character hex string for session identification.
 func generateSessionID() string {
 	b := make([]byte, 16) // 16 bytes = 32 hex characters

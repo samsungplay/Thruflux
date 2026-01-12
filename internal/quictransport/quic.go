@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	// ALPNProtocol is the Application-Layer Protocol Negotiation identifier for SheerBytes QUIC
-	ALPNProtocol = "sheerbytes-quic-v1"
+	// ALPNProtocol is the Application-Layer Protocol Negotiation identifier for Thruflux QUIC.
+	ALPNProtocol = "thruflux-quic-v1"
 )
 
 // ServerConfig returns a TLS configuration for QUIC server.
@@ -71,7 +71,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization:  []string{"SheerBytes"},
+			Organization:  []string{"Thruflux"},
 			Country:       []string{"US"},
 			Province:      []string{""},
 			Locality:      []string{""},
