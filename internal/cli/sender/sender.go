@@ -24,6 +24,14 @@ import (
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
 
+const senderDefaultServerURL = "https://bytepipe.app:8080"
+
+var senderDefaultStunServers = []string{
+	"stun:stun.l.google.com:19302",
+	"stun:stun.cloudflare.com:3478",
+	"stun:stun.bytepipe.app:3478",
+}
+
 func Run(args []string) {
 	if len(args) == 0 {
 		printSenderUsage()
@@ -171,7 +179,10 @@ func Run(args []string) {
 		serverURL = os.Getenv("SHEERBYTES_SERVER_URL")
 	}
 	if strings.TrimSpace(serverURL) == "" {
-		serverURL = "http://localhost:8080"
+		serverURL = senderDefaultServerURL
+	}
+	if len(stunServers) == 0 {
+		stunServers = append([]string{}, senderDefaultStunServers...)
 	}
 
 	logLevel := "error"
