@@ -10,9 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
@@ -32,15 +32,188 @@ const (
 	maxRelPathLength = 1024
 
 	// Chunked transfer constants
-	DefaultChunkSize  = 4 * 1024 * 1024 // 4 MiB default chunk size
-	DefaultWindowSize = 16              // Default window size in chunks
-	ackMagic          = "ACK2"          // ACK magic bytes (cumulative ACK)
-	eofMagic          = "EOF1"          // EOF magic bytes
-
-	// Receiver ACK policy constants
-	ackEveryNChunks = 8  // Send ACK every N chunks
-	ackEveryTMs     = 50 // Send ACK every T milliseconds
+	DefaultChunkSize    = 4 * 1024 * 1024 // 4 MiB default chunk size
+	DefaultSendQueueMax = 16              // Bounded sender read-ahead queue depth
+	eofMagic            = "EOF1"          // EOF magic bytes
 )
+
+type readJob struct {
+	file   *os.File
+	offset int64
+	buf    []byte
+	result chan readResult
+}
+
+type readResult struct {
+	n   int
+	err error
+}
+
+type readPool struct {
+	jobs chan readJob
+}
+
+var (
+	globalReadPool     *readPool
+	globalReadPoolOnce sync.Once
+)
+
+func defaultReadWorkers() int {
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 4 {
+		workers = 4
+	}
+	return workers
+}
+
+func newReadPool(workers int) *readPool {
+	if workers < 1 {
+		workers = 1
+	}
+	pool := &readPool{jobs: make(chan readJob, workers*4)}
+	for i := 0; i < workers; i++ {
+		go func() {
+			for job := range pool.jobs {
+				n, err := job.file.ReadAt(job.buf, job.offset)
+				job.result <- readResult{n: n, err: err}
+			}
+		}()
+	}
+	return pool
+}
+
+func getReadPool() *readPool {
+	globalReadPoolOnce.Do(func() {
+		globalReadPool = newReadPool(defaultReadWorkers())
+	})
+	return globalReadPool
+}
+
+
+func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	resultCh := make(chan readResult, 1)
+	job := readJob{
+		file:   file,
+		offset: offset,
+		buf:    buf,
+		result: resultCh,
+	}
+	select {
+	case getReadPool().jobs <- job:
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "sender read queue timeout after 10s: offset=%d len=%d\n", offset, len(buf))
+		os.Exit(1)
+		return 0, fmt.Errorf("sender read queue timeout after 10s")
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	select {
+	case res := <-resultCh:
+		return res.n, res.err
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "sender read timeout after 10s: offset=%d len=%d\n", offset, len(buf))
+		os.Exit(1)
+		return 0, fmt.Errorf("sender read timeout after 10s")
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		n, err := io.ReadFull(s, buf)
+		resultCh <- readResult{n: n, err: err}
+	}()
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.n != len(buf) {
+			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
+		}
+		return nil
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "receiver read timeout after 10s: file=%s phase=%s\n", relPath, phase)
+		os.Exit(1)
+		return fmt.Errorf("receiver read timeout after 10s")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
+	type writeResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan writeResult, 1)
+	go func() {
+		n, err := s.Write(buf)
+		resultCh <- writeResult{n: n, err: err}
+	}()
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.n != len(buf) {
+			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
+		}
+		return nil
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "sender write timeout after 10s: file=%s phase=%s\n", relPath, phase)
+		os.Exit(1)
+		return fmt.Errorf("sender write timeout after 10s")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func writeUint32WithTimeout(ctx context.Context, s Stream, value uint32, relPath string, phase string) error {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], value)
+	return writeFullWithTimeout(ctx, s, buf[:], relPath, phase)
+}
+
+func writeAtWithTimeout(ctx context.Context, f *os.File, buf []byte, offset int64, relPath string) error {
+	type writeResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan writeResult, 1)
+	go func() {
+		n, err := f.WriteAt(buf, offset)
+		resultCh <- writeResult{n: n, err: err}
+	}()
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.n != len(buf) {
+			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
+		}
+		return nil
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "receiver write timeout after 10s: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
+		os.Exit(1)
+		return fmt.Errorf("receiver write timeout after 10s")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 var (
 	// ErrInvalidManifestMagic indicates the magic bytes don't match
@@ -53,8 +226,6 @@ var (
 	ErrInvalidRecordType = errors.New("invalid record type")
 	// ErrManifestMismatch indicates the received manifest doesn't match expectations
 	ErrManifestMismatch = errors.New("manifest mismatch")
-	// ErrInvalidACK indicates an invalid ACK was received
-	ErrInvalidACK = errors.New("invalid ACK")
 	// ErrInvalidEOF indicates an invalid EOF marker was received
 	ErrInvalidEOF = errors.New("invalid EOF marker")
 )
@@ -63,24 +234,14 @@ var (
 // It receives the relative path, bytes transferred so far, and total bytes.
 type ProgressFn func(relpath string, bytesSent int64, total int64)
 
-// WindowStatsFn is a callback function for reporting window statistics.
-// It receives window size, chunk size, in-flight chunks, and highest ACKed chunk index.
-type WindowStatsFn func(window, chunkSize, inflightChunks, highestAcked uint32)
-
 // SendManifest sends a manifest and all its files/directories over the stream.
 // It writes the protocol header (magic + manifest JSON), then sends each item
 // in the manifest sequentially (directories first, then files with their content).
 // If chunkSize is 0, DefaultChunkSize is used.
-// If windowSize is 0, DefaultWindowSize is used.
-// If readAhead is 0, it defaults to windowSize+4.
 // If progressFn is not nil, it will be called periodically to report progress.
-// If windowStatsFn is not nil, it will be called periodically to report window statistics.
-func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Manifest, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn) error {
+func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Manifest, chunkSize uint32, progressFn ProgressFn) error {
 	if chunkSize == 0 {
 		chunkSize = DefaultChunkSize
-	}
-	if windowSize == 0 {
-		windowSize = DefaultWindowSize
 	}
 	// Write magic bytes
 	if _, err := s.Write([]byte(manifestMagicBytes)); err != nil {
@@ -104,95 +265,12 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 		return fmt.Errorf("failed to write manifest JSON: %w", err)
 	}
 
-	// Shared state for ACKs - track current file being sent
-	// Use a SINGLE persistent ACK reader for the entire manifest
-	var ackStateMu sync.Mutex
-	var currentFileState *fileACKState
-	ackErrChan := make(chan error, 1)
-	ackCtx, ackCancel := context.WithCancel(ctx)
-	defer ackCancel()
-
-	// Start a SINGLE ACK reader goroutine for the entire manifest transfer
-	// This reader persists across all files and never restarts between files
-	go func() {
-		for {
-			select {
-			case <-ackCtx.Done():
-				return
-			default:
-			}
-
-			// Read ACK2 magic
-			ackMagicBuf := make([]byte, len(ackMagic))
-			n, err := io.ReadFull(s, ackMagicBuf)
-			if err != nil {
-				if err == io.EOF || errors.Is(err, context.Canceled) {
-					return
-				}
-				select {
-				case ackErrChan <- fmt.Errorf("failed to read ACK magic: %w", err):
-				default:
-				}
-				return
-			}
-			if n != len(ackMagic) {
-				select {
-				case ackErrChan <- fmt.Errorf("incomplete ACK magic: read %d bytes, expected %d", n, len(ackMagic)):
-				default:
-				}
-				return
-			}
-			if string(ackMagicBuf) != ackMagic {
-				// Log what we actually got for debugging
-				select {
-				case ackErrChan <- fmt.Errorf("%w: expected %s, got %q (bytes: %v)", ErrInvalidACK, ackMagic, string(ackMagicBuf), ackMagicBuf):
-				default:
-				}
-				return
-			}
-
-			// Read cumulative ACK index
-			var ackedIndex uint32
-			if err := binary.Read(s, binary.BigEndian, &ackedIndex); err != nil {
-				if err == io.EOF || errors.Is(err, context.Canceled) {
-					return
-				}
-				select {
-				case ackErrChan <- fmt.Errorf("failed to read ACK index: %w", err):
-				default:
-				}
-				return
-			}
-
-			// Update highestAcked for the current file (whichever file is active)
-			// Signal waiters when ACK progress is made (event-driven, no polling)
-			ackStateMu.Lock()
-			if currentFileState != nil {
-				oldHighest := atomic.LoadInt32(&currentFileState.highestAcked)
-				if int32(ackedIndex) > oldHighest {
-					atomic.StoreInt32(&currentFileState.highestAcked, int32(ackedIndex))
-					// Signal waiters if we made progress (non-blocking send)
-					if int32(ackedIndex) > oldHighest && currentFileState.ackNotify != nil {
-						select {
-						case currentFileState.ackNotify <- struct{}{}:
-						default:
-							// Channel already has a notification, skip (prevents blocking)
-						}
-					}
-				}
-			}
-			ackStateMu.Unlock()
-		}
-	}()
-
 	// Process each item in the manifest
 	for _, item := range m.Items {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case err := <-ackErrChan:
-			return err
 		default:
 		}
 
@@ -202,28 +280,11 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 				return fmt.Errorf("failed to send dir record for %s: %w", item.RelPath, err)
 			}
 		} else {
-			// Create ACK state for this file and set it as current
-			// The persistent ACK reader will update this state
-			// Use buffered channel for event-driven signaling (no polling)
-			// Channel size of 1 allows non-blocking sends
-			fileState := &fileACKState{
-				highestAcked: -1,
-				ackNotify:    make(chan struct{}, 1),
-			}
-			ackStateMu.Lock()
-			currentFileState = fileState
-			ackStateMu.Unlock()
-
-			// Send file record with content (chunked, windowed, with read-ahead)
+			// Send file record with content (chunked)
 			filePath := filepath.Join(rootPath, filepath.FromSlash(item.RelPath))
-			if err := sendFileRecordChunkedWindowed(ctx, s, item.RelPath, filePath, item.Size, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, fileState, &ackStateMu, ackErrChan); err != nil {
+			if err := sendFileRecordChunked(ctx, s, item.RelPath, filePath, item.Size, chunkSize, progressFn); err != nil {
 				return fmt.Errorf("failed to send file record for %s: %w", item.RelPath, err)
 			}
-
-			// Clear current file state after completion (file is done, ACKs processed)
-			ackStateMu.Lock()
-			currentFileState = nil
-			ackStateMu.Unlock()
 		}
 	}
 
@@ -233,15 +294,6 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 	}
 
 	return nil
-}
-
-// fileACKState tracks ACK state for a single file
-// Uses a buffered channel for event-driven signaling when ACKs arrive (replaces polling)
-// Channel-based approach chosen over sync.Cond to support context cancellation in select statements
-type fileACKState struct {
-	highestAcked int32
-	ackNotify    chan struct{} // Buffered channel for ACK progress notifications
-	chunkSize    uint32
 }
 
 type resumePlan struct {
@@ -263,7 +315,7 @@ type resumeState struct {
 
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
-func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error, disableWindow bool, resume *resumePlan, readStallFn func(time.Duration)) (uint32, error) {
+func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, resume *resumePlan) (uint32, error) {
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -297,44 +349,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			select {
 			case <-ctx.Done():
 				return 0, ctx.Err()
-			case err := <-ackErrChan:
-				return 0, err
 			default:
-			}
-
-			currentHighestAcked := int32(-1)
-			var inFlight uint32
-			if !disableWindow {
-				currentHighestAcked = atomic.LoadInt32(&ackState.highestAcked)
-				if currentHighestAcked < 0 {
-					inFlight = nextToSend
-				} else {
-					ackedCount := uint32(currentHighestAcked + 1)
-					if nextToSend <= ackedCount {
-						inFlight = 0
-					} else {
-						inFlight = nextToSend - ackedCount
-					}
-				}
-			}
-
-			if windowStatsFn != nil {
-				acked := uint32(0)
-				if currentHighestAcked >= 0 {
-					acked = uint32(currentHighestAcked)
-				}
-				windowStatsFn(windowSize, chunkSize, inFlight, acked)
-			}
-
-			if !disableWindow && inFlight >= windowSize && nextToSend < totalChunks {
-				select {
-				case <-ctx.Done():
-					return 0, ctx.Err()
-				case err := <-ackErrChan:
-					return 0, err
-				case <-time.After(10 * time.Millisecond):
-					continue
-				}
 			}
 
 			sendChunk := true
@@ -349,7 +364,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				if chunkLen > remaining {
 					chunkLen = remaining
 				}
-				n, err := file.ReadAt(buf[:chunkLen], offset)
+				n, err := readAtWithPool(ctx, file, offset, buf[:chunkLen])
 				if err != nil && err != io.EOF {
 					return 0, fmt.Errorf("failed to read file: %w", err)
 				}
@@ -357,16 +372,16 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 					return 0, fmt.Errorf("incomplete chunk read: got %d, want %d", n, chunkLen)
 				}
 				chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-				if err := binary.Write(s, binary.BigEndian, nextToSend); err != nil {
+				if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
 					return 0, fmt.Errorf("failed to write chunk index: %w", err)
 				}
-				if err := binary.Write(s, binary.BigEndian, uint32(n)); err != nil {
+				if err := writeUint32WithTimeout(ctx, s, uint32(n), relPath, "chunk-length"); err != nil {
 					return 0, fmt.Errorf("failed to write chunk length: %w", err)
 				}
-				if err := binary.Write(s, binary.BigEndian, chunkCRC); err != nil {
+				if err := writeUint32WithTimeout(ctx, s, chunkCRC, relPath, "chunk-crc32"); err != nil {
 					return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
 				}
-				if _, err := s.Write(buf[:n]); err != nil {
+				if err := writeFullWithTimeout(ctx, s, buf[:n], relPath, "chunk-data"); err != nil {
 					return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
 				}
 				bytesProcessed += int64(n)
@@ -380,24 +395,15 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			nextToSend++
 		}
 
-		if _, err := s.Write([]byte(eofMagic)); err != nil {
+		if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
 			return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 		}
 
 		return 0, nil
 	}
 
-	// Determine read-ahead depth (default: window+4, bounded)
-	maxReadAhead := readAhead
-	if maxReadAhead == 0 {
-		maxReadAhead = windowSize + 4
-	}
-	if maxReadAhead < 1 {
-		maxReadAhead = 1
-	}
-	if maxReadAhead > 256 {
-		maxReadAhead = 256
-	}
+	// Determine read-ahead depth (bounded, fixed)
+	maxReadAhead := uint32(DefaultSendQueueMax)
 
 	// Create buffer pool for chunk buffers
 	bufPool := chunkPoolFor(chunkSize)
@@ -445,8 +451,8 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			// Get buffer from pool
 			buf := bufPool.Get()
 
-			// Read chunk from file
-			n, err := io.ReadFull(file, buf[:chunkLen])
+			// Read chunk from file via global read pool
+			n, err := readAtWithPool(readAheadCtx, file, fileOffset, buf[:chunkLen])
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 				readAheadErrChan <- fmt.Errorf("failed to read file: %w", err)
 				bufPool.Put(buf) // Return buffer on error
@@ -465,7 +471,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				return
 			case chunkChan <- chunkData{index: nextToRead, n: n, buf: buf}:
 			}
-
 			fileOffset += int64(n)
 			nextToRead++
 		}
@@ -482,62 +487,17 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case err := <-ackErrChan:
-			return 0, err
 		case err := <-readAheadErrChan:
 			return 0, err
 		default:
 		}
 
-		// Check window: can we send more?
-		currentHighestAcked := int32(-1)
-		var inFlight uint32
-		if !disableWindow {
-			currentHighestAcked = atomic.LoadInt32(&ackState.highestAcked)
-			if currentHighestAcked < 0 {
-				inFlight = nextToSend
-			} else {
-				ackedCount := uint32(currentHighestAcked + 1)
-				if nextToSend <= ackedCount {
-					inFlight = 0
-				} else {
-					inFlight = nextToSend - ackedCount
-				}
-			}
-		}
-
-		// Report window stats
-		if windowStatsFn != nil {
-			acked := uint32(0)
-			if currentHighestAcked >= 0 {
-				acked = uint32(currentHighestAcked)
-			}
-			windowStatsFn(windowSize, chunkSize, inFlight, acked)
-		}
-
-		// Wait if window is full
-		if !disableWindow && inFlight >= windowSize && nextToSend < totalChunks {
-			select {
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			case err := <-ackErrChan:
-				return 0, err
-			case err := <-readAheadErrChan:
-				return 0, err
-			case <-time.After(10 * time.Millisecond):
-				continue
-			}
-		}
-
 		// Get chunk from read-ahead queue
 		var chunk chunkData
 		var ok bool
-		waitStart := time.Now()
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case err := <-ackErrChan:
-			return 0, err
 		case err := <-readAheadErrChan:
 			return 0, err
 		case chunk, ok = <-chunkChan:
@@ -548,13 +508,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				break
 			}
 		}
-		if readStallFn != nil {
-			waited := time.Since(waitStart)
-			if waited > 20*time.Millisecond {
-				readStallFn(waited)
-			}
-		}
-
 		if !ok {
 			break
 		}
@@ -576,25 +529,25 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			chunkCRC := crc32.Checksum(chunk.buf[:chunk.n], crc32cTable)
 
 			// Write chunk_index (uint32, big endian)
-			if err := binary.Write(s, binary.BigEndian, nextToSend); err != nil {
+			if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk index: %w", err)
 			}
 
 			// Write chunk_len (uint32, big endian)
-			if err := binary.Write(s, binary.BigEndian, uint32(chunk.n)); err != nil {
+			if err := writeUint32WithTimeout(ctx, s, uint32(chunk.n), relPath, "chunk-length"); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk length: %w", err)
 			}
 
 			// Write chunk_crc32 (uint32, big endian)
-			if err := binary.Write(s, binary.BigEndian, chunkCRC); err != nil {
+			if err := writeUint32WithTimeout(ctx, s, chunkCRC, relPath, "chunk-crc32"); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
 			}
 
 			// Write chunk bytes
-			if _, err := s.Write(chunk.buf[:chunk.n]); err != nil {
+			if err := writeFullWithTimeout(ctx, s, chunk.buf[:chunk.n], relPath, "chunk-data"); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
 			}
@@ -616,16 +569,16 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	}
 
 	// Write EOF marker: "EOF1"
-	if _, err := s.Write([]byte(eofMagic)); err != nil {
+	if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}
 
 	return 0, nil
 }
 
-// receiveFileChunksWindowed receives file chunks, writes to disk, sends cumulative ACKs,
+// receiveFileChunksWindowed receives file chunks, writes to disk,
 // and returns the computed CRC32.
-func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, ackSender func(uint32) error, resume *resumeState) (uint32, error) {
+func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, resume *resumeState) (uint32, error) {
 	outFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open output file %s: %w", filePath, err)
@@ -635,15 +588,13 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	if err := outFile.Truncate(int64(fileSize)); err != nil {
 	}
 
-	bufPool := chunkPoolFor(chunkSize)
-	var buffer []byte
-	if bufPool != nil {
-		buffer = bufPool.Get()
-		defer bufPool.Put(buffer)
-	} else {
-		buffer = make([]byte, chunkSize)
+	if chunkSize == 0 {
+		return 0, fmt.Errorf("invalid chunk size %d", chunkSize)
 	}
-	var highestContiguousIndex uint32
+	bufPool := chunkPoolFor(chunkSize)
+	if bufPool == nil {
+		bufPool = bufpool.New(int(chunkSize))
+	}
 	bytesReceived := uint64(0)
 	initialBytes := uint64(0)
 
@@ -657,150 +608,125 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 		}
 	}
 
-	var ackMu sync.Mutex
-	chunksSinceLastAck := uint32(0)
-	lastAckTime := time.Now()
-	ackErrChan := make(chan error, 1)
-
-	ackTimerCtx, ackTimerCancel := context.WithCancel(ctx)
-	defer ackTimerCancel()
-	ackTimerDone := make(chan struct{})
+	type recvChunk struct {
+		index uint32
+		n     int
+		crc   uint32
+		buf   []byte
+	}
+	const recvQueueDepth = 8
+	readErrChan := make(chan error, 1)
+	chunkChan := make(chan recvChunk, recvQueueDepth)
+	readerCtx, readerCancel := context.WithCancel(ctx)
+	defer readerCancel()
+	sendReadErr := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case readErrChan <- err:
+		default:
+		}
+	}
 	go func() {
-		defer close(ackTimerDone)
-		ticker := time.NewTicker(ackEveryTMs * time.Millisecond)
-		defer ticker.Stop()
+		defer close(chunkChan)
+		header := make([]byte, 4)
+		lenBuf := make([]byte, 4)
+		crcBuf := make([]byte, 4)
 		for {
 			select {
-			case <-ackTimerCtx.Done():
+			case <-readerCtx.Done():
 				return
-			case <-ticker.C:
-				ackMu.Lock()
-				shouldAck := chunksSinceLastAck > 0 && time.Since(lastAckTime) >= ackEveryTMs*time.Millisecond
-				ackIndex := highestContiguousIndex
-				ackMu.Unlock()
-				if shouldAck {
-					ackMu.Lock()
-					chunksSinceLastAck = 0
-					lastAckTime = time.Now()
-					ackMu.Unlock()
-					if err := ackSender(ackIndex); err != nil {
-						select {
-						case ackErrChan <- err:
-						default:
-						}
-						return
-					}
-				}
+			default:
+			}
+			if err := readFullWithTimeout(readerCtx, s, header, relPath, "header"); err != nil {
+				sendReadErr(fmt.Errorf("failed to read chunk header: %w", err))
+				return
+			}
+			if string(header) == eofMagic {
+				return
+			}
+			chunkIndex := binary.BigEndian.Uint32(header)
+			if resume != nil && resume.totalChunks > 0 && chunkIndex >= resume.totalChunks {
+				sendReadErr(fmt.Errorf("chunk index %d out of range", chunkIndex))
+				return
+			}
+			if err := readFullWithTimeout(readerCtx, s, lenBuf, relPath, "length"); err != nil {
+				sendReadErr(fmt.Errorf("failed to read chunk length: %w", err))
+				return
+			}
+			chunkLen := binary.BigEndian.Uint32(lenBuf)
+			if chunkLen > chunkSize {
+				sendReadErr(fmt.Errorf("chunk length %d exceeds chunk size %d", chunkLen, chunkSize))
+				return
+			}
+			if err := readFullWithTimeout(readerCtx, s, crcBuf, relPath, "crc32"); err != nil {
+				sendReadErr(fmt.Errorf("failed to read chunk crc32: %w", err))
+				return
+			}
+			chunkCRC := binary.BigEndian.Uint32(crcBuf)
+			buf := bufPool.Get()
+			if int(chunkLen) > len(buf) {
+				bufPool.Put(buf)
+				sendReadErr(fmt.Errorf("chunk length %d exceeds buffer size %d", chunkLen, len(buf)))
+				return
+			}
+			if err := readFullWithTimeout(readerCtx, s, buf[:chunkLen], relPath, "data"); err != nil {
+				bufPool.Put(buf)
+				sendReadErr(fmt.Errorf("failed to read chunk bytes: %w", err))
+				return
+			}
+			chunk := recvChunk{index: chunkIndex, n: int(chunkLen), crc: chunkCRC, buf: buf}
+			select {
+			case chunkChan <- chunk:
+			case <-readerCtx.Done():
+				bufPool.Put(buf)
+				return
 			}
 		}
 	}()
 
-	sendAck := func(index uint32) error {
-		if err := ackSender(index); err != nil {
-			return err
-		}
-		ackMu.Lock()
-		chunksSinceLastAck = 0
-		lastAckTime = time.Now()
-		ackMu.Unlock()
-		return nil
-	}
-
-	header := make([]byte, 4)
 	for {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case err := <-ackErrChan:
+		case err := <-readErrChan:
 			return 0, err
-		default:
-		}
-
-		if _, err := io.ReadFull(s, header); err != nil {
-			return 0, fmt.Errorf("failed to read chunk header: %w", err)
-		}
-		if string(header) == eofMagic {
-			break
-		}
-
-		chunkIndex := binary.BigEndian.Uint32(header)
-		if chunkSize == 0 {
-			return 0, fmt.Errorf("invalid chunk size %d", chunkSize)
-		}
-		if resume != nil && resume.totalChunks > 0 && chunkIndex >= resume.totalChunks {
-			return 0, fmt.Errorf("chunk index %d out of range", chunkIndex)
-		}
-
-		var chunkLen uint32
-		if err := binary.Read(s, binary.BigEndian, &chunkLen); err != nil {
-			return 0, fmt.Errorf("failed to read chunk length: %w", err)
-		}
-		if chunkLen > chunkSize {
-			return 0, fmt.Errorf("chunk length %d exceeds chunk size %d", chunkLen, chunkSize)
-		}
-
-		var chunkCRC uint32
-		if err := binary.Read(s, binary.BigEndian, &chunkCRC); err != nil {
-			return 0, fmt.Errorf("failed to read chunk crc32: %w", err)
-		}
-
-		n, err := io.ReadFull(s, buffer[:chunkLen])
-		if err != nil {
-			return 0, fmt.Errorf("failed to read chunk bytes: %w", err)
-		}
-		if uint32(n) != chunkLen {
-			return 0, fmt.Errorf("incomplete chunk: read %d bytes, expected %d", n, chunkLen)
-		}
-
-		if crc32.Checksum(buffer[:n], crc32cTable) != chunkCRC {
-			return 0, ErrCRC32Mismatch
-		}
-
-		offset := int64(chunkIndex) * int64(chunkSize)
-		if _, err := outFile.WriteAt(buffer[:n], offset); err != nil {
-			return 0, fmt.Errorf("failed to write to file: %w", err)
-		}
-
-		bytesReceived += uint64(n)
-
-		if resume != nil && resume.sidecar != nil {
-			resume.sidecar.MarkComplete(chunkIndex)
-			resume.dirtyChunks++
-			now := time.Now()
-			if resume.dirtyChunks >= 128 || now.Sub(resume.lastFlush) >= time.Second {
-				if err := resume.sidecar.Flush(); err != nil {
-					return 0, err
+		case chunk, ok := <-chunkChan:
+			if !ok {
+				goto done
+			}
+			if crc32.Checksum(chunk.buf[:chunk.n], crc32cTable) != chunk.crc {
+				bufPool.Put(chunk.buf)
+				return 0, ErrCRC32Mismatch
+			}
+			offset := int64(chunk.index) * int64(chunkSize)
+			if err := writeAtWithTimeout(ctx, outFile, chunk.buf[:chunk.n], offset, relPath); err != nil {
+				bufPool.Put(chunk.buf)
+				return 0, fmt.Errorf("failed to write to file: %w", err)
+			}
+			bytesReceived += uint64(chunk.n)
+			if resume != nil && resume.sidecar != nil {
+				resume.sidecar.MarkComplete(chunk.index)
+				resume.dirtyChunks++
+				now := time.Now()
+				if resume.dirtyChunks >= 128 || now.Sub(resume.lastFlush) >= time.Second {
+					if err := resume.sidecar.Flush(); err != nil {
+						bufPool.Put(chunk.buf)
+						return 0, err
+					}
+					resume.dirtyChunks = 0
+					resume.lastFlush = now
 				}
-				resume.dirtyChunks = 0
-				resume.lastFlush = now
 			}
-		}
-
-		highestContiguousIndex = chunkIndex
-		if progressFn != nil {
-			progressFn(relPath, int64(bytesReceived), int64(fileSize))
-		}
-
-		ackMu.Lock()
-		chunksSinceLastAck++
-		shouldAck := chunksSinceLastAck >= ackEveryNChunks
-		ackMu.Unlock()
-		if shouldAck {
-			if err := sendAck(highestContiguousIndex); err != nil {
-				return 0, err
+			if progressFn != nil {
+				progressFn(relPath, int64(bytesReceived), int64(fileSize))
 			}
+			bufPool.Put(chunk.buf)
 		}
 	}
 
-	ackTimerCancel()
-	select {
-	case <-ackTimerDone:
-	default:
-	}
-	if err := sendAck(highestContiguousIndex); err != nil {
-		return 0, err
-	}
-
+done:
 	if resume != nil && resume.sidecar != nil {
 		if err := resume.sidecar.Flush(); err != nil {
 			return 0, err
@@ -841,10 +767,8 @@ func sendDirRecord(ctx context.Context, s Stream, relPath string) error {
 	return nil
 }
 
-// sendFileRecordChunkedWindowed sends a file record with windowed chunked content and cumulative ACKs.
-// It uses the provided fileACKState to track ACKs (which is updated by the manifest-level ACK reader).
-// If readAhead is > 0, it uses read-ahead with buffer pooling for improved throughput.
-func sendFileRecordChunkedWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, windowSize uint32, readAhead uint32, progressFn ProgressFn, windowStatsFn WindowStatsFn, ackState *fileACKState, ackStateMu *sync.Mutex, ackErrChan chan error) error {
+// sendFileRecordChunked sends a file record with chunked content.
+func sendFileRecordChunked(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn) error {
 	// Validate relpath
 	if err := validateRelPath(relPath); err != nil {
 		return err
@@ -879,7 +803,7 @@ func sendFileRecordChunkedWindowed(ctx context.Context, s Stream, relPath string
 		return fmt.Errorf("failed to write chunk size: %w", err)
 	}
 
-	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, windowSize, readAhead, progressFn, windowStatsFn, ackState, ackStateMu, ackErrChan, false, nil, nil); err != nil {
+	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil); err != nil {
 		return err
 	}
 
@@ -1006,17 +930,7 @@ func RecvManifest(ctx context.Context, s Stream, outDir string, progressFn Progr
 				return m, fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 
-			ackSender := func(index uint32) error {
-				if _, err := s.Write([]byte(ackMagic)); err != nil {
-					return fmt.Errorf("failed to write ACK magic: %w", err)
-				}
-				if err := binary.Write(s, binary.BigEndian, index); err != nil {
-					return fmt.Errorf("failed to write ACK index: %w", err)
-				}
-				return nil
-			}
-
-			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, ackSender, nil); err != nil {
+			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil); err != nil {
 				return m, err
 			}
 

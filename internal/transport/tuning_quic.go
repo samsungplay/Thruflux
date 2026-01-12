@@ -4,10 +4,10 @@ import "github.com/quic-go/quic-go"
 
 const (
 	minQuicConnWindow   = 1 * 1024 * 1024
-	maxQuicConnWindow   = 512 * 1024 * 1024
+	maxQuicConnWindow   = 1024 * 1024 * 1024
 	minQuicStreamWindow = 1 * 1024 * 1024
 	maxQuicStreamWindow = 256 * 1024 * 1024
-	minQuicMaxStreams   = 32
+	minQuicMaxStreams   = 1
 	maxQuicMaxStreams   = 2048
 )
 
@@ -29,7 +29,6 @@ func BuildQuicConfig(base *quic.Config, connWin, streamWin, maxStreams int) (*qu
 	conn := clampQuicConnWindow(connWin)
 	stream := clampQuicStreamWindow(streamWin)
 	maxStr := clampQuicMaxStreams(maxStreams)
-
 	cfg.InitialConnectionReceiveWindow = uint64(conn)
 	cfg.MaxConnectionReceiveWindow = uint64(conn)
 	cfg.InitialStreamReceiveWindow = uint64(stream)

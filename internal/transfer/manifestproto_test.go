@@ -122,11 +122,10 @@ func TestSendManifest_RecvManifest_EndToEnd(t *testing.T) {
 		err      error
 	}, 1)
 
-	// Start sender - use small chunk size (64KB) and window 8 to stress the pipeline
+	// Start sender - use small chunk size (64KB) to stress the pipeline
 	go func() {
 		chunkSize := uint32(64 * 1024)
-		windowSize := uint32(8)
-		err := SendManifest(ctx, stream1, srcDir, m, chunkSize, windowSize, 0, nil, nil)
+		err := SendManifest(ctx, stream1, srcDir, m, chunkSize, nil)
 		senderDone <- err
 	}()
 
@@ -414,7 +413,7 @@ func TestSendManifest_RecvManifest_ScanPaths_MultiSelection(t *testing.T) {
 
 	// Start sender - use combinedRoot which matches the manifest RelPaths
 	go func() {
-		err := SendManifest(ctx, stream1, combinedRoot, m, 0, 0, 0, nil, nil)
+		err := SendManifest(ctx, stream1, combinedRoot, m, 0, nil)
 		senderDone <- err
 	}()
 
@@ -560,9 +559,8 @@ func TestSendManifest_RecvManifest_NonDefaultChunkSize(t *testing.T) {
 	}
 	defer stream2.Close()
 
-	// Use 64KB chunk size (non-default) and window > 1
+	// Use 64KB chunk size (non-default)
 	chunkSize := uint32(64 * 1024)
-	windowSize := uint32(4) // Window > 1 to test windowed pipeline
 
 	// Run sender and receiver in parallel
 	senderDone := make(chan error, 1)
@@ -573,146 +571,11 @@ func TestSendManifest_RecvManifest_NonDefaultChunkSize(t *testing.T) {
 
 	// Start sender with non-default chunk size and window
 	go func() {
-		err := SendManifest(ctx, stream1, srcDir, m, chunkSize, windowSize, 0, nil, nil)
+		err := SendManifest(ctx, stream1, srcDir, m, chunkSize, nil)
 		senderDone <- err
 	}()
 
 	// Start receiver
-	go func() {
-		receivedManifest, err := RecvManifest(ctx, stream2, outputDir, nil)
-		receiverDone <- struct {
-			manifest manifest.Manifest
-			err      error
-		}{manifest: receivedManifest, err: err}
-	}()
-
-	// Wait for both to complete
-	var senderErr error
-	var receiverResult struct {
-		manifest manifest.Manifest
-		err      error
-	}
-
-	select {
-	case senderErr = <-senderDone:
-	case <-ctx.Done():
-		t.Fatalf("Sender timed out: %v", ctx.Err())
-	}
-
-	select {
-	case receiverResult = <-receiverDone:
-	case <-ctx.Done():
-		t.Fatalf("Receiver timed out: %v", ctx.Err())
-	}
-
-	// Check for errors
-	if senderErr != nil {
-		t.Fatalf("SendManifest error: %v", senderErr)
-	}
-	if receiverResult.err != nil {
-		t.Fatalf("RecvManifest error: %v", receiverResult.err)
-	}
-
-	// Verify output file exists and matches byte-for-byte
-	outputFilePath := filepath.Join(outputDir, m.Root, "large.bin")
-	if _, err := os.Stat(outputFilePath); err != nil {
-		t.Fatalf("Output file does not exist: %v", err)
-	}
-	outputData, err := os.ReadFile(outputFilePath)
-	if err != nil {
-		t.Fatalf("Failed to read output file: %v", err)
-	}
-	if !reflect.DeepEqual(outputData, largeFileData) {
-		t.Error("Output file does not match input byte-for-byte")
-	}
-}
-
-func TestSendManifest_RecvManifest_DelayedACKs(t *testing.T) {
-	// Test that sender does not deadlock if ACKs are delayed
-	// Simulate receiver ACK every 32 chunks (much less frequent than default 8)
-	tempDir, err := os.MkdirTemp("", "manifestproto_test_*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Create source tree with a file large enough to require multiple chunks
-	srcDir := filepath.Join(tempDir, "src")
-	if err := os.MkdirAll(srcDir, 0755); err != nil {
-		t.Fatalf("Failed to create src dir: %v", err)
-	}
-
-	// Create a file that will require many chunks (e.g., 1MB with 64KB chunks = 16 chunks)
-	largeFilePath := filepath.Join(srcDir, "large.bin")
-	largeFileData := make([]byte, 1024*1024) // 1MB
-	if _, err := rand.Read(largeFileData); err != nil {
-		t.Fatalf("Failed to generate random data: %v", err)
-	}
-	if err := os.WriteFile(largeFilePath, largeFileData, 0644); err != nil {
-		t.Fatalf("Failed to write large file: %v", err)
-	}
-
-	// Build manifest
-	m, err := manifest.Scan(srcDir)
-	if err != nil {
-		t.Fatalf("Failed to scan directory: %v", err)
-	}
-
-	// Create output directory
-	outputDir := filepath.Join(tempDir, "output")
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		t.Fatalf("Failed to create output dir: %v", err)
-	}
-
-	// Create mock transport pair
-	t1, t2 := NewMockPair()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// Establish connection
-	conn1, err := t1.Dial(ctx, "peer2")
-	if err != nil {
-		t.Fatalf("Dial error: %v", err)
-	}
-	defer conn1.Close()
-
-	conn2, err := t2.Accept(ctx)
-	if err != nil {
-		t.Fatalf("Accept error: %v", err)
-	}
-	defer conn2.Close()
-
-	// Open stream
-	stream1, err := conn1.OpenStream(ctx)
-	if err != nil {
-		t.Fatalf("OpenStream error: %v", err)
-	}
-	defer stream1.Close()
-
-	stream2, err := conn2.AcceptStream(ctx)
-	if err != nil {
-		t.Fatalf("AcceptStream error: %v", err)
-	}
-	defer stream2.Close()
-
-	// Use small chunk size and window to test delayed ACKs
-	chunkSize := uint32(64 * 1024) // 64KB
-	windowSize := uint32(8)        // Window of 8 chunks
-
-	// Run sender and receiver in parallel
-	senderDone := make(chan error, 1)
-	receiverDone := make(chan struct {
-		manifest manifest.Manifest
-		err      error
-	}, 1)
-
-	// Start sender
-	go func() {
-		err := SendManifest(ctx, stream1, srcDir, m, chunkSize, windowSize, 0, nil, nil)
-		senderDone <- err
-	}()
-
-	// Start receiver (will ACK every 8 chunks by default, which should work with window of 8)
 	go func() {
 		receivedManifest, err := RecvManifest(ctx, stream2, outputDir, nil)
 		receiverDone <- struct {
@@ -807,4 +670,3 @@ func TestRecvManifest_InvalidMagic(t *testing.T) {
 		t.Fatalf("Test timed out: %v", ctx.Err())
 	}
 }
-

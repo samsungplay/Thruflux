@@ -28,10 +28,8 @@ type ClientConfig struct {
 	QUICTest         bool     // Enable QUIC connectivity test mode
 	QUICTransferTest bool     // Enable QUIC transfer test mode
 	ChunkSize        uint32   // Chunk size in bytes for file transfer (default: 4 MiB)
-	WindowSize       uint32   // Window size in chunks for file transfer (default: 16)
-	ReadAhead        uint32   // Read-ahead depth in chunks (default: window+4, min 1, max 256)
 	MultiStream      bool     // Use multi-stream QUIC transfers (control + per-file data streams)
-	ParallelFiles    int      // Max concurrent file transfers (1..32)
+	ParallelFiles    int      // Max concurrent file transfers (1..8)
 	SmallThreshold   int64    // Bytes threshold for small files
 	MediumThreshold  int64    // Bytes threshold for medium files
 	SmallSlotFrac    float64  // Fraction of slots reserved for small files
@@ -98,7 +96,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		SmallSlotFrac:    0.25,
 		AgingAfter:       5 * time.Second,
 		Resume:           true,
-		ResumeTimeout:    1 * time.Second,
+		ResumeTimeout:    10 * time.Second,
 		ResumeVerify:     "last",
 		HashAlg:          "crc32c",
 		Destination:      "",
@@ -130,7 +128,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.BoolVar(&cfg.QUICTest, "quic-test", false, "enable QUIC connectivity test mode")
 	fs.BoolVar(&cfg.QUICTransferTest, "quic-transfer-test", false, "enable QUIC transfer test mode")
 	fs.BoolVar(&cfg.MultiStream, "multistream", cfg.MultiStream, "use multi-stream QUIC transfer (control + per-file data streams)")
-	fs.IntVar(&cfg.ParallelFiles, "parallel-files", cfg.ParallelFiles, "max concurrent file transfers (1..32)")
+	fs.IntVar(&cfg.ParallelFiles, "parallel-files", cfg.ParallelFiles, "max concurrent file transfers (1..8)")
 	fs.Float64Var(&cfg.SmallSlotFrac, "small-slot-frac", cfg.SmallSlotFrac, "fraction of slots reserved for small files")
 	fs.DurationVar(&cfg.AgingAfter, "aging-after", cfg.AgingAfter, "duration before aging boosts a file")
 	fs.BoolVar(&cfg.Resume, "resume", cfg.Resume, "enable resume for QUIC transfers")
@@ -142,14 +140,6 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	// ChunkSize flag - use uint64 and convert
 	var chunkSizeUint64 uint64
 	fs.Uint64Var(&chunkSizeUint64, "chunk-size", 0, "chunk size in bytes for file transfer (default: 4 MiB)")
-
-	// WindowSize flag - use uint64 and convert
-	var windowSizeUint64 uint64
-	fs.Uint64Var(&windowSizeUint64, "window", 0, "window size in chunks for file transfer (default: 16)")
-
-	// ReadAhead flag - use uint64 and convert
-	var readAheadUint64 uint64
-	fs.Uint64Var(&readAheadUint64, "read-ahead", 0, "read-ahead depth in chunks (default: window+4, min 1, max 256)")
 	var smallThresholdUint64 uint64
 	fs.Uint64Var(&smallThresholdUint64, "small-threshold", uint64(cfg.SmallThreshold), "bytes threshold for small files")
 	var mediumThresholdUint64 uint64
@@ -161,10 +151,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 
 	fs.Parse(args)
 
-	// Convert chunk size and window size after parsing
+	// Convert chunk size after parsing
 	cfg.ChunkSize = uint32(chunkSizeUint64)
-	cfg.WindowSize = uint32(windowSizeUint64)
-	cfg.ReadAhead = uint32(readAheadUint64)
 	if smallThresholdUint64 > 0 {
 		cfg.SmallThreshold = int64(smallThresholdUint64)
 	}
@@ -178,7 +166,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		cfg.AgingAfter = 5 * time.Second
 	}
 	if cfg.ResumeTimeout <= 0 {
-		cfg.ResumeTimeout = 1 * time.Second
+		cfg.ResumeTimeout = 10 * time.Second
 	}
 	switch cfg.ResumeVerify {
 	case "", "last", "none", "all":
@@ -198,8 +186,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	if cfg.ParallelFiles < 1 {
 		cfg.ParallelFiles = 1
 	}
-	if cfg.ParallelFiles > 32 {
-		cfg.ParallelFiles = 32
+	if cfg.ParallelFiles > 8 {
+		cfg.ParallelFiles = 8
 	}
 
 	return cfg
