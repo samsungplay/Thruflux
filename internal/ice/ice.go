@@ -56,8 +56,8 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	}
 
 	config := &ice.AgentConfig{
-		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP4,
-			ice.NetworkTypeUDP6},
+		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP6,ice.NetworkTypeUDP4,
+			},
 		Urls: urls,
 	}
 

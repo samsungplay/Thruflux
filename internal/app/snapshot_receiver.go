@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
@@ -27,6 +28,7 @@ type SnapshotReceiverConfig struct {
 	ServerURL              string
 	JoinCode               string
 	OutDir                 string
+	Benchmark              bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -52,13 +54,13 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
 	}
 	if cfg.QuicConnWindowBytes <= 0 {
-		cfg.QuicConnWindowBytes = 64 * 1024 * 1024
+		cfg.QuicConnWindowBytes = 1024 * 1024 * 1024
 	}
 	if cfg.QuicStreamWindowBytes <= 0 {
 		cfg.QuicStreamWindowBytes = 32 * 1024 * 1024
 	}
 	if cfg.QuicMaxIncomingStreams <= 0 {
-		cfg.QuicMaxIncomingStreams = 256
+		cfg.QuicMaxIncomingStreams = 100
 	}
 	absOut, err := filepath.Abs(cfg.OutDir)
 	if err != nil {
@@ -86,6 +88,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		conn:                   conn,
 		peerID:                 peerID,
 		outDir:                 cfg.OutDir,
+		benchmark:              cfg.Benchmark,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
 		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
@@ -112,6 +115,7 @@ type snapshotReceiver struct {
 	conn                   *wsclient.Conn
 	peerID                 string
 	outDir                 string
+	benchmark              bool
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -210,11 +214,21 @@ func (r *snapshotReceiver) sendAccept(manifestID string) {
 
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
-	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir)
+	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
+	var benchCancel context.CancelFunc
+	if r.benchmark {
+		var benchCtx context.Context
+		benchCtx, benchCancel = context.WithCancel(baseCtx)
+		r.startReceiverBenchLoop(benchCtx, progressState)
+	}
 	stopUI := progress.RenderReceiver(baseCtx, os.Stdout, progressState.View)
-	defer stopUI()
+	var stopUIOnce sync.Once
+	stopUIFn := func() {
+		stopUIOnce.Do(stopUI)
+	}
+	defer stopUIFn()
 	exitWith := func(code int) {
-		stopUI()
+		stopUIFn()
 		os.Exit(code)
 	}
 
@@ -476,6 +490,13 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		Resume:    true,
 		NoRootDir: true,
 		HashAlg:   "crc32c",
+		WatchdogFn: func(msg string, args ...any) {
+			if isErrorEventReceiver(args...) {
+				r.logger.Error(msg, args...)
+				return
+			}
+			r.logger.Info(msg, args...)
+		},
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			progressState.Update(relpath, bytesReceived, total)
 		},
@@ -483,13 +504,30 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.UpdateStats(activeFiles, completedFiles)
 		},
 		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
-			progressState.RecordResume(relpath, skippedChunks, totalChunks, totalBytes)
+			progressState.RecordResume(relpath, skippedChunks, totalChunks, totalBytes, chunkSize)
+		},
+		FileDoneFn: func(relpath string, ok bool) {
+			progressState.MarkVerified(relpath, ok)
 		},
 	}
 	_, err = transfer.RecvManifestMultiStream(baseCtx, transferConn, r.outDir, opts)
 	if err != nil {
+		stopUIFn()
+		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
+		fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
 		r.logger.Error("transfer failed", "error", err)
+		if benchCancel != nil {
+			benchCancel()
+		}
 		exitWith(1)
+	}
+
+	if r.benchmark {
+		if benchCancel != nil {
+			benchCancel()
+		}
+		progressState.FreezeBench(time.Now())
+		r.printReceiverBenchSummary(progressState)
 	}
 
 	progressState.ForceComplete()
@@ -497,40 +535,68 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 }
 
 type receiverProgress struct {
-	meter          *progress.Meter
-	perFile        map[string]int64
-	totals         map[string]int64
-	appliedSkip    map[string]bool
-	pendingSkip    map[string]resumeSkip
-	currentFile    string
-	fileDone       int
-	fileTotal      int
-	route          string
-	iceStage       string
-	transportLines []string
-	snapshotID     string
-	outDir         string
-	mu             sync.Mutex
+	meter            *progress.Meter
+	perFile          map[string]int64
+	totals           map[string]int64
+	appliedSkip      map[string]bool
+	pendingSkip      map[string]resumeSkip
+	verifySeen       map[string]bool
+	verified         map[string]bool
+	verifyTotal      int
+	verifyDone       int
+	currentFile      string
+	fileDone         int
+	fileTotal        int
+	route            string
+	iceStage         string
+	transportLines   []string
+	benchmark        bool
+	bench            *bench.Bench
+	benchSnap        bench.Snapshot
+	benchBytes       int64
+	verifying        map[string]bool
+	pendingSkipBytes map[string]int64
+	pendingVerify    map[string]int64
+	verifyingActive  bool
+	resumedFiles     int
+	totalBytes       int64
+	snapshotID       string
+	outDir           string
+	mu               sync.Mutex
 }
 
 type resumeSkip struct {
 	skippedChunks uint32
 	totalChunks   uint32
+	chunkSize     uint32
 }
 
-func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string) *receiverProgress {
+func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string, benchmark bool) *receiverProgress {
 	meter := progress.NewMeter()
 	meter.Start(totalBytes)
-	return &receiverProgress{
-		meter:       meter,
-		perFile:     make(map[string]int64),
-		totals:      make(map[string]int64),
-		appliedSkip: make(map[string]bool),
-		pendingSkip: make(map[string]resumeSkip),
-		fileTotal:   fileTotal,
-		snapshotID:  snapshotID,
-		outDir:      outDir,
+	state := &receiverProgress{
+		meter:            meter,
+		perFile:          make(map[string]int64),
+		totals:           make(map[string]int64),
+		appliedSkip:      make(map[string]bool),
+		pendingSkip:      make(map[string]resumeSkip),
+		verifying:        make(map[string]bool),
+		verifySeen:       make(map[string]bool),
+		verified:         make(map[string]bool),
+		pendingSkipBytes: make(map[string]int64),
+		pendingVerify:    make(map[string]int64),
+		verifyingActive:  false,
+		resumedFiles:     0,
+		fileTotal:        fileTotal,
+		totalBytes:       totalBytes,
+		snapshotID:       snapshotID,
+		outDir:           outDir,
 	}
+	if benchmark {
+		state.benchmark = true
+		state.bench = bench.NewBench()
+	}
+	return state
 }
 
 func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
@@ -540,7 +606,9 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 	p.mu.Lock()
 	prev := p.perFile[relpath]
 	if bytes > prev {
-		p.addBytesLocked(bytes - prev)
+		delta := bytes - prev
+		p.addBytesLocked(delta)
+		p.benchBytes += delta
 	}
 	p.perFile[relpath] = bytes
 	p.currentFile = relpath
@@ -584,20 +652,44 @@ func (p *receiverProgress) SetTransportLines(lines []string) {
 	p.mu.Unlock()
 }
 
-func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChunks uint32, totalBytes int64) {
-	if relpath == "" || skippedChunks == 0 || totalChunks == 0 {
+func (p *receiverProgress) TickBench(now time.Time) {
+	if !p.benchmark || p.bench == nil {
 		return
 	}
 	p.mu.Lock()
+	p.benchSnap = p.bench.Tick(now, p.benchBytes, p.totalBytes)
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) FreezeBench(now time.Time) {
+	if !p.benchmark || p.bench == nil {
+		return
+	}
+	p.mu.Lock()
+	p.benchSnap = p.bench.Tick(now, p.benchBytes, p.totalBytes)
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChunks uint32, totalBytes int64, chunkSize uint32) {
+	if relpath == "" {
+		return
+	}
+	p.mu.Lock()
+	p.currentFile = relpath
 	if p.appliedSkip[relpath] {
 		p.mu.Unlock()
 		return
 	}
+	if skippedChunks == 0 || totalChunks == 0 {
+		p.mu.Unlock()
+		return
+	}
+	p.resumedFiles++
 	if totalBytes > 0 {
 		p.totals[relpath] = totalBytes
-		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks})
+		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize})
 	} else {
-		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks}
+		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize}
 	}
 	p.mu.Unlock()
 }
@@ -607,19 +699,52 @@ func (p *receiverProgress) applySkipLocked(relpath string, totalBytes int64, ski
 		p.pendingSkip[relpath] = skip
 		return
 	}
-	chunkSize := (totalBytes + int64(skip.totalChunks) - 1) / int64(skip.totalChunks)
-	var skippedBytes int64
-	if skip.skippedChunks == skip.totalChunks {
-		skippedBytes = totalBytes
-	} else {
-		skippedBytes = int64(skip.skippedChunks) * chunkSize
-		if skippedBytes > totalBytes {
-			skippedBytes = totalBytes
-		}
-	}
+	skippedBytes := computeSkippedBytes(totalBytes, skip)
+	verifyBytes := computeVerifyBytes(totalBytes, skip.totalChunks, skip.chunkSize)
 	if skippedBytes > 0 {
-		p.addBytesLocked(skippedBytes)
+		p.addSkippedLocked(skippedBytes)
+	}
+	if verifyBytes > 0 {
+		p.pendingVerify[relpath] = verifyBytes
+		p.meter.AddTotal(verifyBytes)
+	}
+	if skippedBytes > 0 || verifyBytes > 0 {
 		p.appliedSkip[relpath] = true
+		if !p.verifySeen[relpath] {
+			p.verifySeen[relpath] = true
+			p.verifyTotal++
+		}
+		p.verifyingActive = true
+	}
+}
+
+func (p *receiverProgress) MarkVerified(relpath string, ok bool) {
+	if relpath == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !ok {
+		return
+	}
+	if pending, ok := p.pendingSkipBytes[relpath]; ok && pending > 0 {
+		p.addSkippedLocked(pending)
+		delete(p.pendingSkipBytes, relpath)
+	}
+	if pending, ok := p.pendingVerify[relpath]; ok && pending > 0 {
+		p.addSkippedLocked(pending)
+		delete(p.pendingVerify, relpath)
+	}
+	if !p.verified[relpath] && p.verifySeen[relpath] {
+		p.verified[relpath] = true
+		p.verifyDone++
+	}
+	if p.verifyTotal > 0 &&
+		p.verifyDone >= p.verifyTotal &&
+		len(p.pendingSkip) == 0 &&
+		len(p.pendingSkipBytes) == 0 &&
+		len(p.pendingVerify) == 0 {
+		p.verifyingActive = false
 	}
 }
 
@@ -638,6 +763,21 @@ func (p *receiverProgress) addBytesLocked(n int64) {
 	}
 }
 
+func (p *receiverProgress) addSkippedLocked(n int64) {
+	if n <= 0 {
+		return
+	}
+	maxInt := int64(^uint(0) >> 1)
+	for n > 0 {
+		step := n
+		if step > maxInt {
+			step = maxInt
+		}
+		p.meter.Advance(int(step))
+		n -= step
+	}
+}
+
 func (p *receiverProgress) View() progress.ReceiverView {
 	p.mu.Lock()
 	current := p.currentFile
@@ -646,8 +786,11 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	route := p.route
 	stage := p.iceStage
 	transportLines := append([]string(nil), p.transportLines...)
+	benchSnap := p.benchSnap
+	benchmark := p.benchmark
 	snapshotID := p.snapshotID
 	outDir := p.outDir
+	resumedFiles := p.resumedFiles
 	p.mu.Unlock()
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
@@ -655,6 +798,9 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		IceStage:       stage,
 		TransportLines: transportLines,
 		Stats:          p.meter.Snapshot(),
+		Bench:          benchSnap,
+		Benchmark:      benchmark,
+		Resumed:        resumedFiles,
 		CurrentFile:    current,
 		FileDone:       done,
 		FileTotal:      total,
@@ -662,9 +808,70 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	}
 }
 
+func computeSkippedBytes(totalBytes int64, skip resumeSkip) int64 {
+	if totalBytes <= 0 || skip.totalChunks == 0 || skip.skippedChunks == 0 {
+		return 0
+	}
+	chunkSize := int64(skip.chunkSize)
+	if chunkSize == 0 {
+		chunkSize = (totalBytes + int64(skip.totalChunks) - 1) / int64(skip.totalChunks)
+	}
+	if skip.skippedChunks == skip.totalChunks {
+		return totalBytes
+	}
+	skippedBytes := int64(skip.skippedChunks) * chunkSize
+	if skippedBytes > totalBytes {
+		skippedBytes = totalBytes
+	}
+	return skippedBytes
+}
+
+func isErrorEventReceiver(args ...any) bool {
+	for i := 0; i+1 < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok || key != "level" {
+			continue
+		}
+		val, ok := args[i+1].(string)
+		return ok && val == "error"
+	}
+	return false
+}
+
 func (r *snapshotReceiver) watchInterrupt() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 	os.Exit(1)
+}
+
+func (r *snapshotReceiver) startReceiverBenchLoop(ctx context.Context, progressState *receiverProgress) {
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				progressState.TickBench(now)
+			}
+		}
+	}()
+}
+
+func (r *snapshotReceiver) printReceiverBenchSummary(progressState *receiverProgress) {
+	now := time.Now()
+	progressState.mu.Lock()
+	benchInst := progressState.bench
+	benchBytes := progressState.benchBytes
+	totalBytes := progressState.totalBytes
+	route := routeNetwork(progressState.route)
+	progressState.mu.Unlock()
+	if benchInst == nil {
+		return
+	}
+	summary := benchInst.Final(now, benchBytes, totalBytes)
+	tuned := "unknown"
+	fmt.Fprintln(os.Stdout, benchSummaryLineReceiver(summary, route, tuned))
 }

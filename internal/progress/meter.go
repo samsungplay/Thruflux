@@ -82,11 +82,32 @@ func (m *Meter) Add(n int) {
 	}
 }
 
+// Advance increments the completed byte count without affecting rate.
+func (m *Meter) Advance(n int) {
+	if n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.done += int64(n)
+	m.lastDone += int64(n)
+}
+
 // SetTotal updates the total bytes.
 func (m *Meter) SetTotal(totalBytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.total = totalBytes
+}
+
+// AddTotal increments the total byte count without affecting rate.
+func (m *Meter) AddTotal(n int64) {
+	if n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.total += n
 }
 
 // Snapshot returns a current snapshot of progress stats.

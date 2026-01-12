@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sheerbytes/sheerbytes/internal/bench"
 )
 
 type ReceiverView struct {
@@ -16,6 +18,9 @@ type ReceiverView struct {
 	IceStage       string
 	TransportLines []string
 	Stats          Stats
+	Resumed        int
+	Bench          bench.Snapshot
+	Benchmark      bool
 	CurrentFile    string
 	FileDone       int
 	FileTotal      int
@@ -25,16 +30,21 @@ type ReceiverView struct {
 }
 
 type SenderRow struct {
-	Peer   string
-	Status string
-	Stats  Stats
-	Route  string
-	Stage  string
+	Peer      string
+	Status    string
+	Stats     Stats
+	Bench     bench.Snapshot
+	Route     string
+	Stage     string
+	FileDone  int
+	FileTotal int
+	Resumed   int
 }
 
 type SenderView struct {
-	Header string
-	Rows   []SenderRow
+	Header    string
+	Rows      []SenderRow
+	Benchmark bool
 }
 
 func IsTTY(w io.Writer) bool {
@@ -54,6 +64,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
 	lastLines := 0
+	var lastBench time.Time
 	var renderMu sync.Mutex
 	if !isTTY {
 		ticker.Stop()
@@ -66,16 +77,18 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 		renderMu.Lock()
 		defer renderMu.Unlock()
 		v := view()
+		if !isTTY && v.Benchmark {
+			if time.Since(lastBench) < 5*time.Second {
+				return
+			}
+			lastBench = time.Now()
+		}
 		if isTTY {
 			if lastLines > 0 {
 				fmt.Fprintf(w, "\033[%dA", lastLines)
 				fmt.Fprint(w, "\033[J")
 			}
 			lines := 0
-			if v.SnapshotID != "" {
-				fmt.Fprintf(w, "snapshot %s\n", v.SnapshotID)
-				lines++
-			}
 			if v.OutDir != "" {
 				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
 				lines++
@@ -96,13 +109,32 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			fmt.Fprintf(w, "%s\n", formatReceiverLine(v))
 			lines++
-			if v.CurrentFile != "" {
-				fmt.Fprintf(w, "file: %s (%d/%d)\n", v.CurrentFile, v.FileDone, v.FileTotal)
+	currentFile := v.CurrentFile
+	if currentFile == "" {
+		currentFile = "-"
+	}
+			fmt.Fprintf(w, "file: %s (%d/%d)\n", currentFile, v.FileDone, v.FileTotal)
+			lines++
+			if v.Benchmark {
+				fmt.Fprintf(w, "%s\n", formatBenchLine(v.Bench))
 				lines++
 			}
 			lastLines = lines
 		} else {
-			fmt.Fprintf(w, "snapshot=%s %s file=%s (%d/%d)\n", v.SnapshotID, formatReceiverLine(v), v.CurrentFile, v.FileDone, v.FileTotal)
+			if v.Benchmark {
+				fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s eta=%s\n",
+					formatBenchRate(v.Bench.InstMBps),
+					formatBenchRate(v.Bench.EwmaMBps),
+					formatBenchRate(v.Bench.AvgMBps),
+					formatBenchRate(v.Bench.PeakMBps),
+					formatETA(v.Bench.ETA))
+			} else {
+				currentFile := v.CurrentFile
+				if currentFile == "" {
+					currentFile = "-"
+				}
+				fmt.Fprintf(w, "%s file=%s (%d/%d)\n", formatReceiverLine(v), currentFile, v.FileDone, v.FileTotal)
+			}
 		}
 	}
 
@@ -134,6 +166,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
 	lastLines := 0
+	var lastBench time.Time
 	var renderMu sync.Mutex
 	if !isTTY {
 		ticker.Stop()
@@ -146,6 +179,12 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 		renderMu.Lock()
 		defer renderMu.Unlock()
 		v := view()
+		if !isTTY && v.Benchmark {
+			if time.Since(lastBench) < 5*time.Second {
+				return
+			}
+			lastBench = time.Now()
+		}
 		if isTTY {
 			if lastLines > 0 {
 				fmt.Fprintf(w, "\033[%dA", lastLines)
@@ -153,27 +192,89 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 			}
 			lines := 0
 			lines += writeHeader(w, v.Header)
-			fmt.Fprintln(w, "peer       status   %    rate     ETA")
-			lines++
-			for _, row := range v.Rows {
-				fmt.Fprintf(w, "%-10s %-7s %5.1f %7s %9s\n",
-					row.Peer, row.Status, row.Stats.Percent, formatRate(row.Stats.RateBps), formatETA(row.Stats.ETA))
-				lines++
-				if row.Stage != "" {
-					fmt.Fprintf(w, "  ice %s\n", row.Stage)
-					lines++
+			if v.Benchmark {
+				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "ETA"}
+				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9}
+				rows := make([][]string, 0, len(v.Rows))
+				for _, row := range v.Rows {
+					rows = append(rows, []string{
+						row.Peer,
+						row.Status,
+						formatFileCount(row.FileDone, row.FileTotal),
+						formatCount(int64(row.Resumed)),
+						fmt.Sprintf("%.1f", row.Stats.Percent),
+						formatBenchRate2(row.Bench.InstMBps),
+						formatBenchRate2(row.Bench.EwmaMBps),
+						formatBenchRate2(row.Bench.AvgMBps),
+						formatBenchRate2(row.Bench.PeakMBps),
+						formatETA(row.Bench.ETA),
+					})
 				}
-				if row.Route != "" {
-					fmt.Fprintf(w, "  %s\n", row.Route)
-					lines++
+				lines += renderTable(w, headers, rows, widths)
+				for _, row := range v.Rows {
+					if row.Stage != "" {
+						fmt.Fprintf(w, "  ice %s\n", row.Stage)
+						lines++
+					}
+					if row.Route != "" {
+						fmt.Fprintf(w, "  %s\n", row.Route)
+						lines++
+					}
+				}
+			} else {
+				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
+				widths := []int{10, 12, 9, 7, 5, 9, 9}
+				rows := make([][]string, 0, len(v.Rows))
+				for _, row := range v.Rows {
+					rows = append(rows, []string{
+						row.Peer,
+						row.Status,
+						formatFileCount(row.FileDone, row.FileTotal),
+						formatCount(int64(row.Resumed)),
+						fmt.Sprintf("%.1f", row.Stats.Percent),
+						formatRate(row.Stats.RateBps),
+						formatETA(row.Stats.ETA),
+					})
+				}
+				lines += renderTable(w, headers, rows, widths)
+				for _, row := range v.Rows {
+					if row.Stage != "" {
+						fmt.Fprintf(w, "  ice %s\n", row.Stage)
+						lines++
+					}
+					if row.Route != "" {
+						fmt.Fprintf(w, "  %s\n", row.Route)
+						lines++
+					}
 				}
 			}
 			lastLines = lines
 		} else {
 			writeHeader(w, v.Header)
-			for _, row := range v.Rows {
-				fmt.Fprintf(w, "peer=%s status=%s %.1f%% %s ETA %s\n",
-					row.Peer, row.Status, row.Stats.Percent, formatRate(row.Stats.RateBps), formatETA(row.Stats.ETA))
+			if v.Benchmark {
+				for _, row := range v.Rows {
+					fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s eta=%s\n",
+						row.Peer,
+						row.Status,
+						formatCount(int64(row.Resumed)),
+						formatBenchRate2(row.Bench.InstMBps),
+						formatBenchRate2(row.Bench.EwmaMBps),
+						formatBenchRate2(row.Bench.AvgMBps),
+						formatBenchRate2(row.Bench.PeakMBps),
+						formatETA(row.Bench.ETA),
+					)
+				}
+			} else {
+				for _, row := range v.Rows {
+					fmt.Fprintf(w, "peer=%s status=%s resumed=%s %.1f%% %s ETA %s\n",
+						row.Peer,
+						row.Status,
+						formatCount(int64(row.Resumed)),
+						row.Stats.Percent,
+						formatRate(row.Stats.RateBps),
+						formatETA(row.Stats.ETA),
+					)
+				}
 			}
 		}
 	}
@@ -215,10 +316,11 @@ func writeHeader(w io.Writer, header string) int {
 
 func formatReceiverLine(v ReceiverView) string {
 	bar := renderBar(v.Stats.Percent, 20)
-	return fmt.Sprintf("%s %5.1f%%  %s  ETA %s  (recv %s/%s)",
+	return fmt.Sprintf("%s %5.1f%%  %s  resumed=%d  ETA %s  (recv %s/%s)",
 		bar,
 		v.Stats.Percent,
 		formatRate(v.Stats.RateBps),
+		v.Resumed,
 		formatETA(v.Stats.ETA),
 		formatGiB(v.Stats.BytesDone),
 		formatGiB(v.Stats.Total),
@@ -236,7 +338,60 @@ func renderBar(percent float64, width int) string {
 	if filled > width {
 		filled = width
 	}
-	return "[" + strings.Repeat("#", filled) + strings.Repeat(".", width-filled) + "]"
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
+}
+
+func renderTable(w io.Writer, headers []string, rows [][]string, widths []int) int {
+	lines := 0
+	border := buildBorder(widths)
+	fmt.Fprintln(w, border)
+	lines++
+	fmt.Fprintln(w, buildRow(headers, widths))
+	lines++
+	fmt.Fprintln(w, border)
+	lines++
+	for _, row := range rows {
+		fmt.Fprintln(w, buildRow(row, widths))
+		lines++
+	}
+	fmt.Fprintln(w, border)
+	lines++
+	return lines
+}
+
+func buildBorder(widths []int) string {
+	var b strings.Builder
+	b.WriteString("+")
+	for _, width := range widths {
+		b.WriteString(strings.Repeat("-", width+2))
+		b.WriteString("+")
+	}
+	return b.String()
+}
+
+func buildRow(values []string, widths []int) string {
+	var b strings.Builder
+	b.WriteString("|")
+	for i, width := range widths {
+		cell := ""
+		if i < len(values) {
+			cell = values[i]
+		}
+		b.WriteString(" ")
+		b.WriteString(padRight(cell, width))
+		b.WriteString(" |")
+	}
+	return b.String()
+}
+
+func padRight(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(s) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(s))
 }
 
 func formatRate(bps float64) string {
@@ -274,4 +429,75 @@ func formatETA(d time.Duration) string {
 	m := (secs % 3600) / 60
 	s := secs % 60
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
+func formatBenchLine(snap bench.Snapshot) string {
+	return fmt.Sprintf("Bench: inst=%.0fMB/s ewma=%.0fMB/s avg=%.0fMB/s peak1s=%.0fMB/s ETA=%s",
+		snap.InstMBps,
+		snap.EwmaMBps,
+		snap.AvgMBps,
+		snap.PeakMBps,
+		formatETA(snap.ETA),
+	)
+}
+
+func formatBenchRate(mbps float64) string {
+	return fmt.Sprintf("%.0fMB/s", mbps)
+}
+
+func formatBenchRate2(mbps float64) string {
+	return fmt.Sprintf("%.2fMB/s", mbps)
+}
+
+func formatFileCount(done, total int) string {
+	if total <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d/%d", done, total)
+}
+
+func formatCount(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	const (
+		k = 1000
+		m = 1000 * k
+	)
+	switch {
+	case n >= m:
+		return fmt.Sprintf("%.1fM", float64(n)/float64(m))
+	case n >= k:
+		return fmt.Sprintf("%.1fk", float64(n)/float64(k))
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+func formatAge(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d < time.Second {
+		return "0s"
+	}
+	if d < time.Minute {
+		secs := d.Seconds()
+		if secs >= 10 {
+			return fmt.Sprintf("%.0fs", secs)
+		}
+		return fmt.Sprintf("%.1fs", secs)
+	}
+	if d < time.Hour {
+		mins := d.Minutes()
+		if mins >= 10 {
+			return fmt.Sprintf("%.0fm", mins)
+		}
+		return fmt.Sprintf("%.1fm", mins)
+	}
+	hours := d.Hours()
+	if hours >= 10 {
+		return fmt.Sprintf("%.0fh", hours)
+	}
+	return fmt.Sprintf("%.1fh", hours)
 }

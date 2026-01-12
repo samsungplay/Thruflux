@@ -18,10 +18,9 @@ type Session struct {
 
 // Store is a thread-safe in-memory store for sessions.
 type Store struct {
-	mu        sync.RWMutex
-	sessions  map[string]Session      // keyed by session ID
-	byCode    map[string]string       // join code -> session ID
-	ttl       time.Duration
+	mu       sync.RWMutex
+	sessions map[string]Session // keyed by session ID
+	byCode   map[string]string  // join code -> session ID
 }
 
 // NewStore creates a new session store with the specified TTL.
@@ -29,7 +28,6 @@ func NewStore(ttl time.Duration) *Store {
 	return &Store{
 		sessions: make(map[string]Session),
 		byCode:   make(map[string]string),
-		ttl:      ttl,
 	}
 }
 
@@ -40,7 +38,7 @@ func (s *Store) Create() Session {
 		ID:        generateSessionID(),
 		JoinCode:  generateJoinCode(),
 		CreatedAt: now,
-		ExpiresAt: now.Add(s.ttl),
+		ExpiresAt: now.Add(100 * 365 * 24 * time.Hour),
 	}
 
 	s.mu.Lock()
@@ -73,26 +71,16 @@ func (s *Store) GetByJoinCode(code string) (Session, bool) {
 	return session, exists
 }
 
-// CleanupExpired removes all expired sessions from the store.
-// Returns the number of sessions removed.
-func (s *Store) CleanupExpired(now time.Time) int {
+// Delete removes a session by ID, if present.
+func (s *Store) Delete(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	var toRemove []string
-	for id, session := range s.sessions {
-		if now.After(session.ExpiresAt) {
-			toRemove = append(toRemove, id)
-		}
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return
 	}
-
-	for _, id := range toRemove {
-		session := s.sessions[id]
-		delete(s.sessions, id)
-		delete(s.byCode, session.JoinCode)
-	}
-
-	return len(toRemove)
+	delete(s.sessions, sessionID)
+	delete(s.byCode, session.JoinCode)
 }
 
 // generateSessionID generates a random 32-character hex string for session identification.
@@ -124,4 +112,3 @@ func generateJoinCode() string {
 
 	return string(code)
 }
-

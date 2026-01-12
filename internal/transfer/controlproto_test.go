@@ -24,9 +24,15 @@ func TestControlProto_RoundTrip(t *testing.T) {
 		StreamID:  42,
 		HashAlg:   HashAlgCRC32C,
 	}
-	ack := Ack2{
-		StreamID:               42,
-		HighestContiguousChunk: 9,
+	credit := Credit{
+		StreamID: 42,
+		Credits:  9,
+	}
+	creditBatch := CreditBatch{
+		Entries: []Credit{
+			{StreamID: 7, Credits: 3},
+			{StreamID: 9, Credits: 12},
+		},
 	}
 	end := FileEnd{
 		StreamID: 42,
@@ -53,8 +59,11 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	if err := writeFileBegin(stream, begin); err != nil {
 		t.Fatalf("write FileBegin: %v", err)
 	}
-	if err := writeAck2(stream, ack); err != nil {
-		t.Fatalf("write Ack2: %v", err)
+	if err := writeCredit(stream, credit); err != nil {
+		t.Fatalf("write Credit: %v", err)
+	}
+	if err := writeCreditBatch(stream, creditBatch); err != nil {
+		t.Fatalf("write CreditBatch: %v", err)
 	}
 	if err := writeFileEnd(stream, end); err != nil {
 		t.Fatalf("write FileEnd: %v", err)
@@ -79,12 +88,26 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	}
 
 	msgType, msg, err = readControlMessage(stream)
-	if err != nil || msgType != controlTypeAck2 {
-		t.Fatalf("read Ack2: type=%v err=%v", msgType, err)
+	if err != nil || msgType != controlTypeCredit {
+		t.Fatalf("read Credit: type=%v err=%v", msgType, err)
 	}
-	decodedAck := msg.(Ack2)
-	if decodedAck != ack {
-		t.Fatalf("Ack2 mismatch: got %+v want %+v", decodedAck, ack)
+	decodedCredit := msg.(Credit)
+	if decodedCredit != credit {
+		t.Fatalf("Credit mismatch: got %+v want %+v", decodedCredit, credit)
+	}
+
+	msgType, msg, err = readControlMessage(stream)
+	if err != nil || msgType != controlTypeCreditBatch {
+		t.Fatalf("read CreditBatch: type=%v err=%v", msgType, err)
+	}
+	decodedBatch := msg.(CreditBatch)
+	if len(decodedBatch.Entries) != len(creditBatch.Entries) {
+		t.Fatalf("CreditBatch length mismatch: got %d want %d", len(decodedBatch.Entries), len(creditBatch.Entries))
+	}
+	for i := range decodedBatch.Entries {
+		if decodedBatch.Entries[i] != creditBatch.Entries[i] {
+			t.Fatalf("CreditBatch mismatch at %d: got %+v want %+v", i, decodedBatch.Entries[i], creditBatch.Entries[i])
+		}
 	}
 
 	msgType, msg, err = readControlMessage(stream)

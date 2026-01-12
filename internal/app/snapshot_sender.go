@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/perf"
@@ -47,9 +47,6 @@ type ReceiverState struct {
 	Status   string
 }
 
-// FixedTuneParams specifies which tuning knobs are fixed by user flags.
-type FixedTuneParams = perf.FixedParams
-
 // SnapshotSenderConfig configures the snapshot sender.
 type SnapshotSenderConfig struct {
 	ServerURL              string
@@ -57,8 +54,7 @@ type SnapshotSenderConfig struct {
 	MaxReceivers           int
 	ReceiverTTL            time.Duration
 	TransferOpts           transfer.Options
-	AutoTune               bool
-	FixedTune              FixedTuneParams
+	Benchmark              bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -96,10 +92,9 @@ type SnapshotSender struct {
 	tuneTTY                bool
 	paramsMu               sync.RWMutex
 	params                 perf.Params
-	autoTune               bool
-	autoTuneOnce           sync.Once
-	autoTuneDone           bool
-	fixedTune              perf.FixedParams
+	benchmark              bool
+	benchSummaryLogged     bool
+	benchAggregate         bench.AggregateSnapshot
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -141,13 +136,13 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
 	}
 	if cfg.QuicConnWindowBytes <= 0 {
-		cfg.QuicConnWindowBytes = 64 * 1024 * 1024
+		cfg.QuicConnWindowBytes = 1024 * 1024 * 1024
 	}
 	if cfg.QuicStreamWindowBytes <= 0 {
 		cfg.QuicStreamWindowBytes = 32 * 1024 * 1024
 	}
 	if cfg.QuicMaxIncomingStreams <= 0 {
-		cfg.QuicMaxIncomingStreams = 256
+		cfg.QuicMaxIncomingStreams = 100
 	}
 
 	m, err := manifest.ScanPaths(cfg.Paths)
@@ -194,8 +189,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		maxRecv:                cfg.MaxReceivers,
 		receiverTTL:            cfg.ReceiverTTL,
 		transferOpts:           cfg.TransferOpts,
-		autoTune:               cfg.AutoTune,
-		fixedTune:              cfg.FixedTune,
+		benchmark:              cfg.Benchmark,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -222,6 +216,10 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	s.logSnapshotState()
 	s.tuneTTY = progress.IsTTY(os.Stdout)
 	s.initParams()
+
+	if s.benchmark {
+		s.startBenchmarkLoop(ctx)
+	}
 
 	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView)
 	defer uiStop()
@@ -426,9 +424,15 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 	s.sendQueuedUpdates(queuedMsgs)
 
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
 		s.logger.Error("transfer failed", "peer_id", peerID, "error", err)
 	} else {
 		s.ForceComplete(peerID)
+	}
+
+	if s.benchmark {
+		s.freezeBench(peerID)
+		s.maybePrintBenchSummary()
 	}
 
 	s.maybeStartTransfers(ctx)
@@ -634,15 +638,12 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferConn.Close()
 
 	opts := s.transferOptions()
-	var stallCount int64
-	stallReset := func() {
-		atomic.StoreInt64(&stallCount, 0)
-	}
-	stallCheck := func() bool {
-		return atomic.LoadInt64(&stallCount) > 0
-	}
-	opts.ReadStallFn = func(time.Duration) {
-		atomic.AddInt64(&stallCount, 1)
+	opts.WatchdogFn = func(msg string, args ...any) {
+		if isErrorEvent(args...) {
+			s.logger.Error(msg, args...)
+			return
+		}
+		s.logger.Info(msg, args...)
 	}
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {
@@ -652,14 +653,18 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		if totalBytes > 0 && skippedBytes > totalBytes {
 			skippedBytes = totalBytes
 		}
-		s.addSenderSkipped(progressState, relpath, skippedBytes)
+		verifyBytes := computeVerifyBytes(totalBytes, totalChunks, chunkSize)
+		s.addSenderSkipped(progressState, relpath, skippedBytes, verifyBytes)
 	}
 	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
 		s.updateSenderProgress(progressState, relpath, bytesSent)
 	}
-	tuneCtx, tuneCancel := context.WithCancel(ctx)
-	defer tuneCancel()
-	s.maybeStartAutoTune(tuneCtx, peerID, stallReset, stallCheck)
+	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
+		s.updateSenderStats(progressState, completedFiles)
+	}
+	opts.FileDoneFn = func(relpath string, ok bool) {
+		s.markSenderVerified(progressState, relpath, ok)
+	}
 	if err := transfer.SendManifestMultiStream(ctx, transferConn, ".", s.manifest, opts); err != nil {
 		return err
 	}
@@ -912,20 +917,24 @@ func (s *SnapshotSender) transferOptions() transfer.Options {
 }
 
 func (s *SnapshotSender) initParams() {
+	heuristic := transfer.HeuristicParams(s.manifest.FileCount)
+	if s.transferOpts.ChunkSize == 0 {
+		s.transferOpts.ChunkSize = heuristic.ChunkSize
+	}
+	if s.transferOpts.ParallelFiles == 0 {
+		s.transferOpts.ParallelFiles = heuristic.ParallelFiles
+	}
 	runtime := transfer.NormalizeParams(transfer.RuntimeParams{
 		ChunkSize:     s.transferOpts.ChunkSize,
-		WindowSize:    s.transferOpts.WindowSize,
-		ReadAhead:     s.transferOpts.ReadAhead,
 		ParallelFiles: s.transferOpts.ParallelFiles,
 	}, s.transferOpts)
 	s.paramsMu.Lock()
 	s.params = perf.Params{
 		ChunkSize:     int(runtime.ChunkSize),
-		Window:        int(runtime.WindowSize),
-		ReadAhead:     int(runtime.ReadAhead),
 		ParallelFiles: runtime.ParallelFiles,
 	}
 	s.paramsMu.Unlock()
+	s.setTuneLine(fmt.Sprintf("Heuristic: %s", formatTuneParams(s.getParams())))
 }
 
 func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {
@@ -934,8 +943,6 @@ func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {
 	s.paramsMu.RUnlock()
 	return transfer.RuntimeParams{
 		ChunkSize:     uint32(params.ChunkSize),
-		WindowSize:    uint32(params.Window),
-		ReadAhead:     uint32(params.ReadAhead),
 		ParallelFiles: params.ParallelFiles,
 	}
 }
@@ -966,6 +973,47 @@ func (s *SnapshotSender) tuneHeaderLine() string {
 	return line
 }
 
+func (s *SnapshotSender) startBenchmarkLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				s.tickBenchmarks(now)
+			}
+		}
+	}()
+}
+
+func (s *SnapshotSender) tickBenchmarks(now time.Time) {
+	snaps := make(map[string]bench.Snapshot)
+	s.progressMu.Lock()
+	for peerID, state := range s.progress {
+		state.mu.Lock()
+		if state.bench != nil && !state.benchFrozen {
+			if s.isPeerTransferring(peerID) {
+				state.benchSnap = state.bench.Tick(now, state.sentBytes, s.manifest.TotalBytes)
+			}
+		}
+		snaps[peerID] = state.benchSnap
+		state.mu.Unlock()
+	}
+	s.progressMu.Unlock()
+	s.paramsMu.Lock()
+	s.benchAggregate = bench.Aggregate(snaps)
+	s.paramsMu.Unlock()
+}
+
+func (s *SnapshotSender) isPeerTransferring(peerID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.receivers[peerID]
+	return state != nil && state.Status == ReceiverStatusTransferring
+}
+
 func (s *SnapshotSender) setTransportLines(summary string, lines []string) {
 	s.paramsMu.Lock()
 	s.transportSummary = summary
@@ -993,13 +1041,24 @@ func (s *SnapshotSender) transportHeaderLines() []string {
 }
 
 type senderProgress struct {
-	meter       *progress.Meter
-	perFile     map[string]int64
-	route       string
-	stage       string
-	appliedSkip map[string]bool
-	sentBytes   int64
-	mu          sync.Mutex
+	meter         *progress.Meter
+	perFile       map[string]int64
+	route         string
+	stage         string
+	appliedSkip   map[string]bool
+	verifySeen    map[string]bool
+	verified      map[string]bool
+	verifyTotal   int
+	verifyDone    int
+	pendingVerify map[string]int64
+	resumedFiles  int
+	sentBytes     int64
+	fileDone      int
+	fileTotal     int
+	bench         *bench.Bench
+	benchSnap     bench.Snapshot
+	benchFrozen   bool
+	mu            sync.Mutex
 }
 
 func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *senderProgress {
@@ -1019,7 +1078,20 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	state.route = ""
 	state.stage = ""
 	state.appliedSkip = make(map[string]bool)
+	state.verifySeen = make(map[string]bool)
+	state.verified = make(map[string]bool)
+	state.verifyTotal = 0
+	state.verifyDone = 0
+	state.pendingVerify = make(map[string]int64)
+	state.resumedFiles = 0
 	state.sentBytes = 0
+	state.fileDone = 0
+	state.fileTotal = s.manifest.FileCount
+	if s.benchmark {
+		state.bench = bench.NewBench()
+		state.benchSnap = bench.Snapshot{}
+		state.benchFrozen = false
+	}
 	state.mu.Unlock()
 	state.meter.Start(totalBytes)
 
@@ -1041,7 +1113,19 @@ func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath str
 	state.mu.Unlock()
 }
 
-func (s *SnapshotSender) addSenderSkipped(state *senderProgress, relpath string, skippedBytes int64) {
+func (s *SnapshotSender) updateSenderStats(state *senderProgress, completed int) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.fileDone = completed
+	if state.fileTotal == 0 {
+		state.fileTotal = s.manifest.FileCount
+	}
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) addSenderSkipped(state *senderProgress, relpath string, skippedBytes int64, verifyBytes int64) {
 	if state == nil || relpath == "" || skippedBytes <= 0 {
 		return
 	}
@@ -1051,17 +1135,68 @@ func (s *SnapshotSender) addSenderSkipped(state *senderProgress, relpath string,
 		return
 	}
 	state.appliedSkip[relpath] = true
-	state.mu.Unlock()
-
-	maxInt := int64(^uint(0) >> 1)
-	for skippedBytes > 0 {
-		step := skippedBytes
-		if step > maxInt {
-			step = maxInt
-		}
-		state.meter.Add(int(step))
-		skippedBytes -= step
+	state.resumedFiles++
+	state.meter.Advance(int(skippedBytes))
+	if !state.verifySeen[relpath] {
+		state.verifySeen[relpath] = true
+		state.verifyTotal++
 	}
+	if verifyBytes > 0 {
+		state.pendingVerify[relpath] = verifyBytes
+		state.meter.AddTotal(verifyBytes)
+	}
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) markSenderVerified(state *senderProgress, relpath string, ok bool) {
+	if state == nil || relpath == "" {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !ok {
+		return
+	}
+	if pending, ok := state.pendingVerify[relpath]; ok && pending > 0 {
+		state.meter.Advance(int(pending))
+		delete(state.pendingVerify, relpath)
+	}
+	if !state.verified[relpath] && state.verifySeen[relpath] {
+		state.verified[relpath] = true
+		state.verifyDone++
+	}
+	if state.verifyTotal > 0 &&
+		state.verifyDone >= state.verifyTotal &&
+		len(state.pendingVerify) == 0 {
+		// no-op; verification state not shown in UI
+	}
+}
+
+func computeVerifyBytes(totalBytes int64, totalChunks uint32, chunkSize uint32) int64 {
+	if totalBytes <= 0 || totalChunks == 0 || chunkSize == 0 {
+		return 0
+	}
+	fullChunks := int64(totalChunks - 1)
+	lastSize := totalBytes - fullChunks*int64(chunkSize)
+	if lastSize <= 0 || lastSize > int64(chunkSize) {
+		lastSize = int64(chunkSize)
+		if totalBytes < lastSize {
+			lastSize = totalBytes
+		}
+	}
+	return lastSize
+}
+
+func isErrorEvent(args ...any) bool {
+	for i := 0; i+1 < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok || key != "level" {
+			continue
+		}
+		val, ok := args[i+1].(string)
+		return ok && val == "error"
+	}
+	return false
 }
 
 func (s *SnapshotSender) setSenderRoute(peerID string, route string) {
@@ -1100,88 +1235,11 @@ func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 	return state.sentBytes
 }
 
-func (s *SnapshotSender) maybeStartAutoTune(ctx context.Context, peerID string, stallReset func(), stallCheck func() bool) {
-	if !s.autoTune {
-		return
-	}
-	s.autoTuneOnce.Do(func() {
-		go s.runAutoTune(ctx, peerID, stallReset, stallCheck)
-	})
-}
-
-func (s *SnapshotSender) runAutoTune(ctx context.Context, peerID string, stallReset func(), stallCheck func() bool) {
-	initial := s.getParams()
-	measurer := func() int64 {
-		return s.senderSentBytes(peerID)
-	}
-	apply := func(p perf.Params) error {
-		s.setParams(p)
-		return nil
-	}
-	stopFn := func() bool {
-		s.mu.Lock()
-		queued := len(s.queue) > 0
-		s.mu.Unlock()
-		return queued
-	}
-
-	cfg := perf.AutoTuneConfig{
-		Enabled:          true,
-		MaxTime:          10 * time.Second,
-		ImproveThreshold: 0.05,
-		ProbeDuration:    1 * time.Second,
-		Warmup:           200 * time.Millisecond,
-		Alpha:            0.2,
-		MaxInflightBytes: 256 * 1024 * 1024,
-		StopFn:           stopFn,
-		StallReset:       stallReset,
-		StallCheck:       stallCheck,
-		OnState:          s.updateTuneState,
-		Fixed:            s.fixedTune,
-	}
-
-	_, _ = perf.RunAutoTune(ctx, cfg, measurer, apply, initial, perf.WorkloadInfo{
-		NumFiles:   s.manifest.FileCount,
-		TotalBytes: s.manifest.TotalBytes,
-	})
-}
-
-func (s *SnapshotSender) updateTuneState(state perf.AutoTuneState) {
-	if state.Done {
-		line := fmt.Sprintf("Tuned: %s", formatTuneParams(state.BestParams))
-		s.setTuneLine(line)
-		s.paramsMu.Lock()
-		s.autoTuneDone = true
-		s.paramsMu.Unlock()
-		if !s.tuneTTY {
-			fmt.Fprintln(os.Stdout, "Auto-tuned:", formatTuneParams(state.BestParams))
-		}
-		return
-	}
-
-	line := fmt.Sprintf(
-		"Tuning: %s trying %s score=%.1fMB/s best=%.1fMB/s",
-		state.Phase,
-		formatTuneParams(state.Trying),
-		state.ScoreMbps,
-		state.BestMbps,
-	)
-	s.setTuneLine(line)
-	if !s.tuneTTY {
-		fmt.Fprintf(os.Stdout, "[tune] phase=%s trying=%s score=%.1fMB/s best=%.1fMB/s\n",
-			state.Phase,
-			formatTuneParams(state.Trying),
-			state.ScoreMbps,
-			state.BestMbps,
-		)
-	}
-}
+// Auto-tuning removed; parameters are heuristic-driven.
 
 func formatTuneParams(p perf.Params) string {
-	return fmt.Sprintf("chunk=%s window=%d readahead=%d parallel=%d",
+	return fmt.Sprintf("chunk=%s parallel=%d",
 		formatMiB(p.ChunkSize),
-		p.Window,
-		p.ReadAhead,
 		p.ParallelFiles,
 	)
 }
@@ -1213,6 +1271,11 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		var stats progress.Stats
 		var route string
 		var stage string
+		var benchSnap bench.Snapshot
+		var fileDone int
+		var fileTotal int
+		var resumedFiles int
+		status := statuses[peerID]
 		s.progressMu.Lock()
 		state := s.progress[peerID]
 		s.progressMu.Unlock()
@@ -1221,31 +1284,102 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			state.mu.Lock()
 			route = state.route
 			stage = state.stage
+			benchSnap = state.benchSnap
+			fileDone = state.fileDone
+			fileTotal = state.fileTotal
+			resumedFiles = state.resumedFiles
 			state.mu.Unlock()
 		} else {
 			stats = progress.Stats{Total: s.manifest.TotalBytes}
 		}
 		rows = append(rows, progress.SenderRow{
-			Peer:   shortPeerID(peerID),
-			Status: statuses[peerID],
-			Stats:  stats,
-			Route:  route,
-			Stage:  stage,
+			Peer:      shortPeerID(peerID),
+			Status:    status,
+			Stats:     stats,
+			Bench:     benchSnap,
+			Route:     route,
+			Stage:     stage,
+			FileDone:  fileDone,
+			FileTotal: fileTotal,
+			Resumed:   resumedFiles,
 		})
 	}
-	header := s.snapshotLine
+	header := ""
 	if tune := s.tuneHeaderLine(); tune != "" {
-		header = header + "\n" + tune
+		header = tune
 	}
 	if s.tuneTTY {
 		if lines := s.transportHeaderLines(); len(lines) > 0 {
-			header = header + "\n" + strings.Join(lines, "\n")
+			if header != "" {
+				header = header + "\n"
+			}
+			header = header + strings.Join(lines, "\n")
 		}
 	}
 	return progress.SenderView{
-		Header: header,
-		Rows:   rows,
+		Header:    header,
+		Rows:      rows,
+		Benchmark: s.benchmark,
 	}
+}
+
+func (s *SnapshotSender) freezeBench(peerID string) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	if state.bench != nil && !state.benchFrozen {
+		state.benchSnap = state.bench.Tick(time.Now(), state.sentBytes, s.manifest.TotalBytes)
+		state.benchFrozen = true
+	}
+	state.mu.Unlock()
+}
+
+func (s *SnapshotSender) maybePrintBenchSummary() {
+	if !s.benchmark || s.benchSummaryLogged {
+		return
+	}
+
+	s.mu.Lock()
+	active := len(s.active)
+	queued := len(s.queue)
+	s.mu.Unlock()
+	if active > 0 || queued > 0 {
+		return
+	}
+
+	now := time.Now()
+	var (
+		receiverSummaries []string
+	)
+
+	s.progressMu.Lock()
+	for peerID, state := range s.progress {
+		state.mu.Lock()
+		if state.bench == nil {
+			state.mu.Unlock()
+			continue
+		}
+		summary := state.bench.Final(now, state.sentBytes, s.manifest.TotalBytes)
+		route := routeNetwork(state.route)
+		tuned := formatTuneParams(s.getParams())
+		label := shortPeerID(peerID)
+		receiverSummaries = append(receiverSummaries, benchSummaryLine(label, summary, route, tuned))
+		state.mu.Unlock()
+	}
+	s.progressMu.Unlock()
+
+	if len(receiverSummaries) == 0 {
+		return
+	}
+
+	for _, line := range receiverSummaries {
+		fmt.Fprintln(os.Stdout, line)
+	}
+	s.benchSummaryLogged = true
 }
 
 func (s *SnapshotSender) ForceComplete(peerID string) {
@@ -1260,7 +1394,7 @@ func (s *SnapshotSender) ForceComplete(peerID string) {
 	if remaining <= 0 {
 		return
 	}
-	state.meter.Add(int(remaining))
+	state.meter.Advance(int(remaining))
 }
 
 func shortPeerID(peerID string) string {

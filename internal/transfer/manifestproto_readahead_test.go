@@ -69,8 +69,6 @@ func TestSendManifest_ReadAhead_Cancellation(t *testing.T) {
 
 	// Use small chunk size to ensure multiple chunks
 	chunkSize := uint32(64 * 1024) // 64KB
-	windowSize := uint32(8)
-	readAhead := uint32(12) // window + 4
 
 	// Create a context that will be cancelled
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
@@ -83,7 +81,7 @@ func TestSendManifest_ReadAhead_Cancellation(t *testing.T) {
 		cancelFunc()
 		// Give it a moment for cancellation to propagate
 		time.Sleep(5 * time.Millisecond)
-		err := SendManifest(cancelCtx, stream1, srcDir, m, chunkSize, windowSize, readAhead, nil, nil)
+		err := SendManifest(cancelCtx, stream1, srcDir, m, chunkSize, nil)
 		senderDone <- err
 	}()
 
@@ -123,4 +121,3 @@ func TestSendManifest_ReadAhead_Cancellation(t *testing.T) {
 	// The key test: read-ahead goroutine should exit cleanly without deadlock
 	// If we get here without hanging, the test passes
 }
-
