@@ -1,6 +1,0 @@
-./input.go
-./lru.go
-./output.go
-./paired_delims_table.go
-./shaping.go
-./wrapping.go

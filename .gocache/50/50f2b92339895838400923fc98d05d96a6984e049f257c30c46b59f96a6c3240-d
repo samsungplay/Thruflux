@@ -1,7 +1,0 @@
-./focus_manager.go
-./lifecycle.go
-./meta.go
-./theme.go
-_cgo_gotypes.go
-theme_darwin.cgo1.go
-_cgo_import.go

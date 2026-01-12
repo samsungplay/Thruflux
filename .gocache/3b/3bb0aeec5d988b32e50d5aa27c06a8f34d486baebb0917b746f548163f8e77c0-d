@@ -1,9 +1,0 @@
-./client.go
-./errors.go
-./lt_cred.go
-./relay_address_generator_none.go
-./relay_address_generator_range.go
-./relay_address_generator_static.go
-./server.go
-./server_config.go
-./stun_conn.go

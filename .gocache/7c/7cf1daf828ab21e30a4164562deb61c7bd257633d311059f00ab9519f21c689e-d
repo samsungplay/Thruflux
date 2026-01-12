@@ -1,6 +1,0 @@
-./envelope.go
-./messages.go
-./types.go
-./envelope_test.go
-./ice_test.go
-./messages_test.go

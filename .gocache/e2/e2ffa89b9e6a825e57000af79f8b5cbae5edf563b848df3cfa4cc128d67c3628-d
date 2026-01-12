@@ -1,6 +1,0 @@
-./application_data.go
-./change_cipher_spec.go
-./compression_method.go
-./content.go
-./errors.go
-./version.go

@@ -1,5 +1,0 @@
-./html5entities.go
-./unicode_case_folding.go
-./util.go
-./util_cjk.go
-./util_unsafe.go

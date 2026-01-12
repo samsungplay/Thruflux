@@ -1,8 +1,0 @@
-./base.go
-./canvases.go
-./svg.go
-./text.go
-./texture_common.go
-./texture_desktop.go
-./theme.go
-./widget.go

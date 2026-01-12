@@ -1,6 +1,0 @@
-./errors.go
-./file.go
-./filter.go
-./resource.go
-./uri.go
-./uri_root_error.go
