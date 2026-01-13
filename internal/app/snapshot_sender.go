@@ -650,11 +650,6 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
 
 	opts := s.transferOptions()
-	opts.WatchdogFn = func(msg string, args ...any) {
-		if isErrorEvent(args...) {
-			s.logger.Error(msg, args...)
-		}
-	}
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {
 			return

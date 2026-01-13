@@ -1394,12 +1394,7 @@ func runQUICTransferTest(ctx context.Context, logger *slog.Logger, conn *wsclien
 			ResumeVerifyTail: resumeVerifyTail,
 			ProgressFn:       progressFn,
 			TransferStatsFn:  transferStatsFn,
-			WatchdogFn: func(msg string, args ...any) {
-				if verbose {
-					logger.Info(msg, args...)
-				}
-			},
-			ResumeStatsFn: resumeStatsFn,
+			ResumeStatsFn:    resumeStatsFn,
 		}); err != nil {
 			return fmt.Errorf("failed to send manifest: %w", err)
 		}

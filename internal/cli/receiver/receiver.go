@@ -1532,10 +1532,6 @@ func runQUICTransferTest(ctx context.Context, logger *slog.Logger, conn *wsclien
 			}
 			fmt.Printf("resume file=%s status=%s skipped=%d/%d verified=%d\n", relpath, status, skippedChunks, totalChunks, verifiedChunk)
 		}
-		var watchdogFn transfer.WatchdogFn
-		if verbose {
-			watchdogFn = logger.Info
-		}
 		manifest, err = transfer.RecvManifestMultiStream(ctx, transferConn, tempDir, transfer.Options{
 			ParallelFiles:   parallelFiles,
 			Resume:          resume,
@@ -1543,7 +1539,6 @@ func runQUICTransferTest(ctx context.Context, logger *slog.Logger, conn *wsclien
 			ResumeVerify:    resumeVerify,
 			ProgressFn:      progressFn,
 			TransferStatsFn: transferStatsFn,
-			WatchdogFn:      watchdogFn,
 			ResumeStatsFn:   resumeStatsFn,
 		})
 		if err != nil {

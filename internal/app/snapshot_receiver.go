@@ -526,11 +526,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		Resume:    true,
 		NoRootDir: true,
 		HashAlg:   "crc32c",
-		WatchdogFn: func(msg string, args ...any) {
-			if isErrorEventReceiver(args...) {
-				r.logger.Error(msg, args...)
-			}
-		},
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			progressState.Update(relpath, bytesReceived, total)
 		},

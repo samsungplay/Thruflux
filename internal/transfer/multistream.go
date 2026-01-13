@@ -33,7 +33,6 @@ type Options struct {
 	ResolveFilePath  func(relPath string) string
 	ProgressFn       ProgressFn
 	TransferStatsFn  TransferStatsFn
-	WatchdogFn       WatchdogFn
 	ResumeStatsFn    ResumeStatsFn
 	FileDoneFn       FileDoneFn
 	ParamSource      func() RuntimeParams
@@ -42,9 +41,6 @@ type Options struct {
 
 // TransferStatsFn reports active/completed file counts and remaining bytes.
 type TransferStatsFn func(activeFiles, completedFiles int, remainingBytes int64)
-
-// WatchdogFn emits periodic watchdog logs for stalled transfers.
-type WatchdogFn func(msg string, args ...any)
 
 // ResumeStatsFn reports resume statistics per file.
 type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32)
@@ -351,12 +347,6 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		return err
 	}
 
-	type sendTransferState struct {
-		relPath      string
-		lastProgress time.Time
-	}
-	activeTransfers := make(map[uint64]*sendTransferState)
-	var activeMu sync.Mutex
 	doneRegistry := newFileDoneRegistry()
 	resumeRegistry := newResumeInfoRegistry()
 	ackErrChan := make(chan error, 1)
@@ -477,61 +467,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}
 	}()
 
-	if opts.WatchdogFn != nil {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-transferCtx.Done():
-					return
-				case <-ticker.C:
-					now := time.Now()
-					var stalled []string
-					activeMu.Lock()
-					for streamID, st := range activeTransfers {
-						if now.Sub(st.lastProgress) > 5*time.Second {
-							stalled = append(stalled, fmt.Sprintf("%d:%s:idle=%s", streamID, st.relPath, now.Sub(st.lastProgress).Truncate(time.Second)))
-						}
-					}
-					activeMu.Unlock()
-					statsMu.Lock()
-					active := activeCount
-					completed := completedCount
-					remaining := remainingBytes
-					scheduled := scheduledCount
-					total := totalFiles
-					statsMu.Unlock()
-					if remaining > 0 || active > 0 || scheduled < total {
-						if len(stalled) > 0 {
-							opts.WatchdogFn("transfer watchdog", "active_files", active, "completed_files", completed, "scheduled_files", scheduled, "total_files", total, "remaining_bytes", remaining, "stalled_streams", stalled)
-						} else {
-							opts.WatchdogFn("transfer watchdog", "active_files", active, "completed_files", completed, "scheduled_files", scheduled, "total_files", total, "remaining_bytes", remaining)
-						}
-					}
-				}
-			}
-		}()
-	}
-
-	if opts.WatchdogFn != nil {
-		go func() {
-			ticker := time.NewTicker(1 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-transferCtx.Done():
-					return
-				case <-ticker.C:
-					statsMu.Lock()
-					completed := completedCount
-					statsMu.Unlock()
-					snapshot := sched.Snapshot()
-					opts.WatchdogFn("scheduler snapshot", "snapshot", snapshot, "completed_files", completed)
-				}
-			}
-		}()
-	}
+	// Watchdog goroutines removed per request.
 
 scheduleLoop:
 	for {
@@ -582,17 +518,7 @@ scheduleLoop:
 		}
 		chunkSize := fileParams.ChunkSize
 
-		var openTimer *time.Timer
-		if opts.WatchdogFn != nil {
-			relpath := item.RelPath
-			openTimer = time.AfterFunc(5*time.Second, func() {
-				opts.WatchdogFn("open stream stalled", "relpath", relpath)
-			})
-		}
 		dataStream, err := conn.OpenStream(transferCtx)
-		if openTimer != nil {
-			openTimer.Stop()
-		}
 		if err != nil {
 			setErr(fmt.Errorf("failed to open data stream: %w", err))
 			limiter.Release()
@@ -637,14 +563,6 @@ scheduleLoop:
 			break scheduleLoop
 		}
 
-		activeMu.Lock()
-		now = time.Now()
-		activeTransfers[streamID] = &sendTransferState{
-			relPath:      item.RelPath,
-			lastProgress: now,
-		}
-		activeMu.Unlock()
-
 		statsMu.Lock()
 		scheduledCount++
 		activeCount++
@@ -670,18 +588,6 @@ scheduleLoop:
 				}
 			}
 			progressFn := opts.ProgressFn
-			if opts.WatchdogFn != nil {
-				progressFn = func(relpath string, bytesSent int64, total int64) {
-					activeMu.Lock()
-					if st, ok := activeTransfers[streamID]; ok {
-						st.lastProgress = time.Now()
-					}
-					activeMu.Unlock()
-					if opts.ProgressFn != nil {
-						opts.ProgressFn(relpath, bytesSent, total)
-					}
-				}
-			}
 
 			var plan *resumePlan
 			if resumeEnabled && item.ID != "" {
@@ -796,9 +702,6 @@ scheduleLoop:
 				setErr(err)
 				return
 			}
-			if opts.WatchdogFn != nil {
-				opts.WatchdogFn("sender data eof written", "relpath", item.RelPath, "stream_id", streamID, "crc32", crc32Value)
-			}
 			if err := dataStream.Close(); err != nil {
 				setErr(err)
 				return
@@ -814,10 +717,6 @@ scheduleLoop:
 				setErr(err)
 				return
 			}
-			if opts.WatchdogFn != nil {
-				opts.WatchdogFn("sender file end sent", "relpath", item.RelPath, "stream_id", streamID)
-			}
-
 			fileDone, err := doneRegistry.wait(transferCtx, streamID)
 			if err != nil {
 				setErr(err)
@@ -837,15 +736,6 @@ scheduleLoop:
 			if opts.FileDoneFn != nil {
 				opts.FileDoneFn(item.RelPath, true)
 			}
-			if opts.WatchdogFn != nil {
-				opts.WatchdogFn("sender file done received", "relpath", item.RelPath, "stream_id", streamID)
-			}
-
-
-			activeMu.Lock()
-			delete(activeTransfers, streamID)
-			activeMu.Unlock()
-
 			schedMu.Lock()
 			if key, ok := keyByStreamID[streamID]; ok {
 				sched.Remove(key)
@@ -1050,9 +940,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(item))
 		sidecar, err := LoadOrCreateSidecar(sidecarPath, item.ID, int64(begin.FileSize), begin.ChunkSize)
 		if err != nil {
-			if opts.WatchdogFn != nil {
-				opts.WatchdogFn("resume sidecar error", "level", "error", "relpath", begin.RelPath, "error", err)
-			}
 			return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
 		}
 		state.sidecar = sidecar
@@ -1126,9 +1013,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				state, ok := stateByStream[begin.StreamID]
 				stateMu.Unlock()
 				if !ok {
-					if opts.WatchdogFn != nil {
-						opts.WatchdogFn("stream mapping missing", "level", "error", "stream_id", begin.StreamID, "relpath", begin.RelPath)
-					}
 					setRecvErr(fmt.Errorf("missing state for stream %d", begin.StreamID))
 					<-sem
 					return
@@ -1149,9 +1033,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 					dataStream, err := registry.wait(recvCtx, state.begin.StreamID)
 					if err != nil {
-						if opts.WatchdogFn != nil {
-							opts.WatchdogFn("stream wait error", "level", "error", "stream_id", state.begin.StreamID, "relpath", state.begin.RelPath, "error", err)
-						}
 						setRecvErr(err)
 						return
 					}
@@ -1171,21 +1052,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 
 					progressFn := opts.ProgressFn
-					if opts.WatchdogFn != nil {
-						progressFn = func(relpath string, bytesReceived int64, total int64) {
-							stateMu.Lock()
-							state.lastProgress = time.Now()
-							stateMu.Unlock()
-							if opts.ProgressFn != nil {
-								opts.ProgressFn(relpath, bytesReceived, total)
-							}
-						}
-					}
 					_, err = receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, state.resume)
 					if err != nil {
-						if opts.WatchdogFn != nil && isFileIOError(err) {
-							opts.WatchdogFn("file io error", "level", "error", "relpath", state.begin.RelPath, "error", err)
-						}
 						if opts.FileDoneFn != nil {
 							opts.FileDoneFn(state.begin.RelPath, false)
 						}
@@ -1200,10 +1068,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 						setRecvErr(err)
 						return
 					}
-					if opts.WatchdogFn != nil {
-						opts.WatchdogFn("receiver data eof read", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID)
-					}
-
 					stateMu.Lock()
 					state.hasData = true
 					deleteState := state.hasEnd && state.hasData
@@ -1219,9 +1083,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 					if opts.FileDoneFn != nil {
 						opts.FileDoneFn(state.begin.RelPath, true)
-					}
-					if opts.WatchdogFn != nil {
-						opts.WatchdogFn("receiver file done queued", "relpath", state.begin.RelPath, "stream_id", state.begin.StreamID)
 					}
 					stateMu.Lock()
 					state.stream = nil
