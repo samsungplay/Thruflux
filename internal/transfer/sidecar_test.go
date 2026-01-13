@@ -8,7 +8,7 @@ import (
 
 func TestSidecarRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "root", ".sheerbytes", "abcd.sbxmap")
+	path := filepath.Join(dir, "root", ".thruflux_resumedata", "abcd.sbxmap")
 	sc, err := LoadOrCreateSidecar(path, "abcd", 1024, 256)
 	if err != nil {
 		t.Fatalf("create sidecar: %v", err)
@@ -33,7 +33,7 @@ func TestSidecarRoundTrip(t *testing.T) {
 
 func TestSidecarCorrupt(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "root", ".sheerbytes", "abcd.sbxmap")
+	path := filepath.Join(dir, "root", ".thruflux_resumedata", "abcd.sbxmap")
 	sc, err := CreateSidecar(path, "abcd", 1024, 256)
 	if err != nil {
 		t.Fatalf("create sidecar: %v", err)

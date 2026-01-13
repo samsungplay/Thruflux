@@ -16,16 +16,20 @@ type Peer struct {
 
 // peerConnection holds a peer and its send channel.
 type peerConnection struct {
-	peer Peer
-	send chan protocol.Envelope
+	peer          Peer
+	send          chan protocol.Envelope
+	done          chan struct{}
+	closeOnce     sync.Once
+	closeConnOnce sync.Once
+	closeFn       func()
 }
 
 // Hub manages peers per session in a thread-safe manner.
 // Duplicate peer_ids within a session use last-write-wins: the most recent connection replaces any previous one.
 type Hub struct {
-	mu        sync.RWMutex
-	sessions  map[string]map[string]*peerConnection // sessionID -> connID -> peerConnection
-	byPeerID  map[string]map[string]string          // sessionID -> peerID -> connID (for routing by peer_id)
+	mu       sync.RWMutex
+	sessions map[string]map[string]*peerConnection // sessionID -> connID -> peerConnection
+	byPeerID map[string]map[string]string          // sessionID -> peerID -> connID (for routing by peer_id)
 }
 
 // NewHub creates a new peer hub.
@@ -36,20 +40,35 @@ func NewHub() *Hub {
 	}
 }
 
+func (pc *peerConnection) closeSend() {
+	pc.closeOnce.Do(func() {
+		close(pc.send)
+	})
+}
+
+func (pc *peerConnection) closeConn() {
+	if pc.closeFn == nil {
+		return
+	}
+	pc.closeConnOnce.Do(pc.closeFn)
+}
+
 // Add adds a peer to a session and returns a remove function.
 // The send function is used to send envelopes to the peer.
 // Returns a remove function that removes the peer and triggers PeerLeft broadcast.
-func (h *Hub) Add(sessionID string, p Peer, send func(env protocol.Envelope) error) (remove func()) {
+func (h *Hub) Add(sessionID string, p Peer, send func(env protocol.Envelope) error, closeFn func()) (remove func()) {
 	// Create buffered channel for this peer's messages
 	ch := make(chan protocol.Envelope, 256) // Buffered to avoid blocking
+	done := make(chan struct{})
 
 	pc := &peerConnection{
-		peer: p,
-		send: ch,
+		peer:    p,
+		send:    ch,
+		done:    done,
+		closeFn: closeFn,
 	}
 
 	// Start writer goroutine for this connection
-	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for env := range ch {
@@ -67,40 +86,40 @@ func (h *Hub) Add(sessionID string, p Peer, send func(env protocol.Envelope) err
 	if h.byPeerID[sessionID] == nil {
 		h.byPeerID[sessionID] = make(map[string]string)
 	}
-	
+
 	// Last-write-wins: if peer_id already exists, remove old connection
 	// We'll mark it as replaced so the remove function doesn't try to clean it up again
 	if oldConnID, exists := h.byPeerID[sessionID][p.PeerID]; exists && oldConnID != p.ConnID {
 		if oldPC, ok := h.sessions[sessionID][oldConnID]; ok {
 			// Close channel and wait for goroutine to finish
-			close(oldPC.send)
+			oldPC.closeSend()
 		}
 		delete(h.sessions[sessionID], oldConnID)
 		// Remove from byPeerID so remove function won't find it
 		delete(h.byPeerID[sessionID], p.PeerID)
 	}
-	
+
 	h.sessions[sessionID][p.ConnID] = pc
 	h.byPeerID[sessionID][p.PeerID] = p.ConnID
 	h.mu.Unlock()
 
 	// Return remove function
-		return func() {
+	return func() {
 		h.mu.Lock()
 		sessionPeers, exists := h.sessions[sessionID]
 		if !exists {
 			h.mu.Unlock()
 			return
 		}
-		
+
 		// Check if this connection still exists (may have been replaced)
 		if _, stillExists := sessionPeers[p.ConnID]; !stillExists {
 			h.mu.Unlock()
 			return
 		}
-		
+
 		delete(sessionPeers, p.ConnID)
-		
+
 		// Remove from byPeerID if this is still the active connection
 		if peerIDMap, exists := h.byPeerID[sessionID]; exists {
 			if peerIDMap[p.PeerID] == p.ConnID {
@@ -109,13 +128,13 @@ func (h *Hub) Add(sessionID string, p Peer, send func(env protocol.Envelope) err
 		}
 
 		h.mu.Unlock()
-		
+
 		// Close channel to stop writer goroutine (outside lock to avoid deadlock)
-		close(ch)
-		
+		pc.closeSend()
+
 		// Wait for writer to finish (with timeout to avoid blocking forever)
 		select {
-		case <-done:
+		case <-pc.done:
 		case <-time.After(1 * time.Second):
 			// Timeout - continue anyway
 		}
@@ -127,6 +146,28 @@ func (h *Hub) Add(sessionID string, p Peer, send func(env protocol.Envelope) err
 			delete(h.byPeerID, sessionID)
 		}
 		h.mu.Unlock()
+	}
+}
+
+// CloseSession disconnects all peers in a session and removes it from the hub.
+func (h *Hub) CloseSession(sessionID string) {
+	h.mu.Lock()
+	sessionPeers, exists := h.sessions[sessionID]
+	if !exists {
+		h.mu.Unlock()
+		return
+	}
+	peersCopy := make([]*peerConnection, 0, len(sessionPeers))
+	for _, pc := range sessionPeers {
+		peersCopy = append(peersCopy, pc)
+	}
+	delete(h.sessions, sessionID)
+	delete(h.byPeerID, sessionID)
+	h.mu.Unlock()
+
+	for _, pc := range peersCopy {
+		pc.closeConn()
+		pc.closeSend()
 	}
 }
 
@@ -246,4 +287,3 @@ func (h *Hub) SendTo(sessionID string, peerID string, env protocol.Envelope) boo
 		return true
 	}
 }
-

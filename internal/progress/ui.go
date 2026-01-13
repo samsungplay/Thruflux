@@ -109,10 +109,10 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			fmt.Fprintf(w, "%s\n", formatReceiverLine(v))
 			lines++
-	currentFile := v.CurrentFile
-	if currentFile == "" {
-		currentFile = "-"
-	}
+			currentFile := v.CurrentFile
+			if currentFile == "" {
+				currentFile = "-"
+			}
 			fmt.Fprintf(w, "file: %s (%d/%d)\n", currentFile, v.FileDone, v.FileTotal)
 			lines++
 			if v.Benchmark {
@@ -122,11 +122,12 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			lastLines = lines
 		} else {
 			if v.Benchmark {
-				fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s eta=%s\n",
+				fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
 					formatBenchRate(v.Bench.InstMBps),
 					formatBenchRate(v.Bench.EwmaMBps),
 					formatBenchRate(v.Bench.AvgMBps),
 					formatBenchRate(v.Bench.PeakMBps),
+					formatElapsed(v.Bench.Elapsed),
 					formatETA(v.Bench.ETA))
 			} else {
 				currentFile := v.CurrentFile
@@ -193,8 +194,8 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 			lines := 0
 			lines += writeHeader(w, v.Header)
 			if v.Benchmark {
-				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "ETA"}
-				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9}
+				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "elapsed", "ETA"}
+				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9, 9}
 				rows := make([][]string, 0, len(v.Rows))
 				for _, row := range v.Rows {
 					rows = append(rows, []string{
@@ -207,6 +208,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 						formatBenchRate2(row.Bench.EwmaMBps),
 						formatBenchRate2(row.Bench.AvgMBps),
 						formatBenchRate2(row.Bench.PeakMBps),
+						formatElapsed(row.Bench.Elapsed),
 						formatETA(row.Bench.ETA),
 					})
 				}
@@ -253,7 +255,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 			writeHeader(w, v.Header)
 			if v.Benchmark {
 				for _, row := range v.Rows {
-					fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s eta=%s\n",
+					fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
 						row.Peer,
 						row.Status,
 						formatCount(int64(row.Resumed)),
@@ -261,6 +263,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 						formatBenchRate2(row.Bench.EwmaMBps),
 						formatBenchRate2(row.Bench.AvgMBps),
 						formatBenchRate2(row.Bench.PeakMBps),
+						formatElapsed(row.Bench.Elapsed),
 						formatETA(row.Bench.ETA),
 					)
 				}
@@ -432,13 +435,25 @@ func formatETA(d time.Duration) string {
 }
 
 func formatBenchLine(snap bench.Snapshot) string {
-	return fmt.Sprintf("Bench: inst=%.0fMB/s ewma=%.0fMB/s avg=%.0fMB/s peak1s=%.0fMB/s ETA=%s",
+	return fmt.Sprintf("Bench: inst=%.0fMB/s ewma=%.0fMB/s avg=%.0fMB/s peak1s=%.0fMB/s elapsed=%s ETA=%s",
 		snap.InstMBps,
 		snap.EwmaMBps,
 		snap.AvgMBps,
 		snap.PeakMBps,
+		formatElapsed(snap.Elapsed),
 		formatETA(snap.ETA),
 	)
+}
+
+func formatElapsed(d time.Duration) string {
+	if d <= 0 {
+		return "00:00:00"
+	}
+	secs := int(d.Seconds())
+	h := secs / 3600
+	m := (secs % 3600) / 60
+	s := secs % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
 func formatBenchRate(mbps float64) string {
