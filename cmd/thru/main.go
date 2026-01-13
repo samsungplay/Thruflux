@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	version = "v0.1.0"
+	version = "v1.0 (beta)"
 	banner  = `
 ████████╗██╗  ██╗██████╗ ██╗   ██╗███████╗██╗     ██╗   ██╗██╗  ██╗
 ╚══██╔══╝██║  ██║██╔══██╗██║   ██║██╔════╝██║     ██║   ██║╚██╗██╔╝
@@ -20,7 +20,7 @@ const (
    ██║   ██╔══██║██╔══██╗██║   ██║██╔══╝  ██║     ██║   ██║ ██╔██╗ 
    ██║   ██║  ██║██║  ██║╚██████╔╝██║     ███████╗╚██████╔╝██╔╝ ██╗
    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝
-Thruflux v0.1.0  
+Thruflux v1.0 (beta)  
 High Performance P2P File Transfer
 Pure Throughput. Zero Friction.
 Made with passion by @infiniteplay
