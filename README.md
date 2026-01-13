@@ -1,40 +1,48 @@
 # Thruflux
 
-Thruflux is a high-throughput, low-latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) brokers ICE/QUIC handshakes, and the unified `thru` CLI lets you become a host or joiner without friction. Files stream over QUIC with smart resume, verbose diagnostics, and optional STUN/TURN fallback—without sacrificing directness. Startup sayings keep morale high; every transfer begins with a good omen.
+Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) handles discovery and ICE negotiation, while the unified `thru` CLI lets you host or join in seconds. Data flows directly over QUIC between peers for fast, resilient transfers.
 
-## Features
+## Why Thruflux ✨
 
-- **Speed-first**: QUIC data streams over ICE/NAT-traversed peers deliver multi-gigabit transfers with per-file parallelism.
-- **Resilient resume**: Hosts and joiners negotiate manifests, verify chunks, and restart mid-file if interrupted.
-- **Minimal control plane**: `thruserv` only handles session discovery; data skips relays whenever possible.
-- **Unified CLI**: `thru host …` and `thru join …` share a single binary with helpful banners, version output, and spicy startup messages.
-- **Observability**: Sender and receiver log peer events, transfer stats, and error contexts (`snapshot sender failed`, `transfer failed: control stream timeout`, etc.).
-- **Extensible networking**: Supply custom STUN/TURN endpoints, fine-tune QUIC windows, and adjust transfer concurrency with flags.
+The vision is simple: make high‑performance, mass file sharing easy and accessible to everyone — at no cost. Thruflux ships with free defaults out of the box:
+- **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use).
+- **STUN defaults** so most users can connect immediately without extra setup.
 
-## Quickstart
+If you need full control or higher limits, self‑host in minutes.
+
+## Key features ✅
+
+- **Direct QUIC transfers** for high throughput and low latency.
+- **Multi‑receiver sessions** so one host can share with many peers at once.
+- **Resumable transfers** with last‑chunk verification for safety.
+- **Unified CLI**: `thru host` and `thru join` live in one binary.
+- **Flexible networking**: bring your own STUN/TURN, tune QUIC, and set concurrency.
+- **Operational guardrails**: server rate‑limits and idle timeouts baked in.
+
+## Quickstart 🚀
 
 ```bash
-# build every binary (thru, thruserv, etc.)
+# build binaries
 go build ./...
 
-# start the server (listening on localhost:8080)
+# start the signaling server (local)
 thruserv
 
-# host files (runs sender logic) — defaults to https://bytepipe.app and the bundled STUN list
+# host files (defaults to https://bytepipe.app + bundled STUN list)
 thru host ./photos ./videos
 
-# join a session (runs receiver logic)
+# share the join code with multiple peers
 thru join ABCDEFGH --out ./downloads
 ```
 
-You can also run the server via `go run ./cmd/thruserv` and the legacy host/join wrappers (`go run ./cmd/thruflux-sender …`, `go run ./cmd/thruflux-receiver …`), but `thru` centralizes everything while keeping the old entry points for compatibility.
+Multiple receivers can join the same code concurrently (subject to `--max-receivers` and server limits).
 
 ## Command reference
 
 ### `thruserv` (signaling server)
 
 ```
-thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D]
+thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D] [--session-timeout D]
 ```
 
 | Flag | Description |
@@ -43,14 +51,13 @@ thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* fl
 | `--max-sessions` | Max concurrent signaling sessions (default `1000`, `0` disables). |
 | `--max-receivers-per-sender` | Limits how many receivers a sender may invite (default `10`). |
 | `--max-message-bytes` | Max WebSocket payload size (default `65536`). |
-| `--ws-connects-per-min` / `--ws-connects-burst` | Per-IP connect rate cap (default `30`/`10`). |
-| `--ws-msgs-per-sec` / `--ws-msgs-burst` | Per-connection message throttle (default `50`/`100`). |
-| `--session-creates-per-min` / `--session-creates-burst` | Per-IP session creation throttle (default `10`/`5`). |
+| `--ws-connects-per-min` / `--ws-connects-burst` | Per‑IP connect rate cap (default `30`/`10`). |
+| `--ws-msgs-per-sec` / `--ws-msgs-burst` | Per‑connection message throttle (default `50`/`100`). |
+| `--session-creates-per-min` / `--session-creates-burst` | Per‑IP session creation throttle (default `10`/`5`). |
 | `--max-ws-connections` | Total WebSocket cap (default `2000`, `0` disables). |
 | `--ws-idle-timeout` | Idle connection timeout (default `10m`, `0` disables). |
+| `--session-timeout` | Max session lifetime (default `24h`, `0` disables). |
 | `--version`, `-v` | Print the Thruflux server version. |
-
-Environment variables: none.
 
 ### `thru host` (sender)
 
@@ -62,16 +69,14 @@ thru host <paths...> [flags]
 |---|---|
 | `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
 | `--max-receivers` | Max concurrent receivers to invite (default `4`). |
-| `--stun-server` | Comma-separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
-| `--turn-server` | Comma-separated TURN URLs (default none). |
-| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow-control knobs (defaults `1GiB` / `32MiB`). |
+| `--stun-server` | Comma‑separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
+| `--turn-server` | Comma‑separated TURN URLs (default none). |
+| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `1GiB` / `32MiB`). |
 | `--quic-max-incoming-streams` | Max QUIC incoming streams (default `100`). |
 | `--chunk-size` | Chunk size in bytes (default auto). |
 | `--parallel-files` | Concurrent file transfers (1..8). |
 | `--benchmark` | Print throughput stats. |
 | `--version`, `-v` | Print the Thruflux CLI version. |
-
-Environment variables: none.
 
 ### `thru join` (receiver)
 
@@ -88,29 +93,26 @@ thru join <join-code> [flags]
 | `--benchmark` | Print throughput stats. |
 | `--version`, `-v` | Print the Thruflux CLI version. |
 
-Environment variables: none.
-
-## Self-hosting guide (Ubuntu 24)
+## Self‑hosting guide (Ubuntu) 🐧
 
 1. **Prepare the machine**
    ```bash
    sudo apt update && sudo apt upgrade -y
    sudo apt install -y build-essential curl git
-   curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh # optional
    sudo snap install --classic go
    ```
 
 2. **Build the binaries**
    ```bash
    git clone <repo>
-   cd sheerbytes
+   cd thruflux
    go build ./cmd/thru ./cmd/thruserv
    sudo mv thruserv /usr/local/bin/
    sudo mv thru /usr/local/bin/
    ```
 
 3. **Optional TLS + WSS (recommended)**
-   - Install Caddy or Nginx; Caddy example:
+   - Install Caddy:
      ```bash
      sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/deb/debian/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
@@ -127,36 +129,32 @@ Environment variables: none.
      ```
    - Reload: `sudo systemctl reload caddy`.
 
-4. **Run `thruserv`**
-   - Create a non-root user, then a systemd unit `/etc/systemd/system/thruserv.service`:
-     ```
-     [Unit]
-     Description=Thruflux signaling server
-     After=network.target
+4. **Run `thruserv` as a systemd service**
+   ```
+   [Unit]
+   Description=Thruflux signaling server
+   After=network.target
 
-     [Service]
-     ExecStart=/usr/local/bin/thruserv --port 8080
-     Restart=on-failure
-     User=thruflux
-     WorkingDirectory=/opt/thruflux
+   [Service]
+   ExecStart=/usr/local/bin/thruserv --port 8080
+   Restart=on-failure
+   User=thruflux
+   WorkingDirectory=/opt/thruflux
 
-     [Install]
-     WantedBy=multi-user.target
-     ```
-   - Enable and start:
-     ```bash
-     sudo systemctl daemon-reload
-     sudo systemctl enable --now thruserv
-     ```
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now thruserv
+   ```
 
-5. **Point clients to `https://your.domain`**
-   - Use `thru host … --server-url https://your.domain`.
-   - Receivers connect via `thru join ABCDEFGH --server-url https://your.domain`.
+5. **Point clients to your server**
+   - Host: `thru host … --server-url https://your.domain`
+   - Join: `thru join ABCDEFGH --server-url https://your.domain`
 
-### Monitoring & troubleshooting
+## Contributing 🤝
 
-- `sudo journalctl -u thruserv -f` streams server logs.
-- Use `thru --version` to verify the shipped revision.
-- When `thru host` or `thru join` fail to complete ICE, the CLI logs `snapshot sender/receiver failed` with the wrapped cause (timeouts, `failed to establish ICE connection`, etc.).
+Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
 
 May TURN never be needed!
