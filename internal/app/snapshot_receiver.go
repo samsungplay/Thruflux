@@ -164,6 +164,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			return
 		}
 		if r.senderID != "" && peerLeft.PeerID == r.senderID {
+			r.logger.Error("sender left session", "sender_id", r.senderID, "session_id", r.sessionID)
 			os.Exit(1)
 		}
 	case protocol.TypeTransferStart:
@@ -235,6 +236,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer stopUIFn()
 	exitWith := func(code int) {
 		stopUIFn()
+		if code != 0 {
+			view := progressState.View()
+			stats := view.Stats
+			r.logger.Error("receiver exiting", "code", code, "ice_stage", view.IceStage, "route", view.Route, "current_file", view.CurrentFile, "bytes_done", stats.BytesDone, "bytes_total", stats.Total, "session_id", r.sessionID, "sender_id", r.senderID)
+			fmt.Fprintf(os.Stderr, "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
+		}
 		os.Exit(code)
 	}
 
@@ -437,6 +444,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		continue
 	}
 	iceLog("connect_ok")
+	r.logger.Info("ice connected", "session_id", r.sessionID, "peer_id", r.peerID, "sender_id", r.senderID)
 	if route := iceRouteString("receiver", r.peerID, icePeer); route != "" {
 		progressState.SetRoute(route)
 	}
@@ -482,6 +490,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(1)
 	}
 	defer quicListener.Close()
+	fmt.Fprintf(os.Stderr, "waiting for QUIC transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
 
 	quicTransport := transferquic.NewListener(quicListener, r.logger)
 	defer quicTransport.Close()
@@ -492,6 +501,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(1)
 	}
 	defer transferConn.Close()
+	fmt.Fprintf(os.Stderr, "accepted QUIC transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
 
 	opts := transfer.Options{
 		Resume:    true,
@@ -846,7 +856,8 @@ func isErrorEventReceiver(args ...any) bool {
 func (r *snapshotReceiver) watchInterrupt() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
+	sig := <-sigChan
+	r.logger.Error("received signal, exiting", "signal", sig.String())
 	os.Exit(1)
 }
 

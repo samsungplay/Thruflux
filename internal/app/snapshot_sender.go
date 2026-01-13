@@ -276,6 +276,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 			s.logger.Error("failed to decode peer_left", "error", err)
 			return
 		}
+		s.logger.Error("receiver left session", "peer_id", peerLeft.PeerID, "session_id", s.sessionID)
 		s.handlePeerLeft(peerLeft.PeerID)
 
 	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
@@ -593,6 +594,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("failed to establish ICE connection: %w", err)
 	}
 	iceLog("connect_ok")
+	fmt.Fprintf(os.Stderr, "ice connect ok (peer=%s session=%s)\n", peerID, s.sessionID)
 	if route := iceRouteString("sender", peerID, icePeer); route != "" {
 		s.setSenderRoute(peerID, route)
 	}
@@ -630,6 +632,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("failed to dial QUIC connection: %w", err)
 	}
 	defer quicConn.CloseWithError(0, "")
+	fmt.Fprintf(os.Stderr, "QUIC connection established (peer=%s session=%s)\n", peerID, s.sessionID)
 
 	s.setTransferCloser(peerID, func() {
 		_ = quicConn.CloseWithError(0, "")
@@ -643,6 +646,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("failed to dial transfer connection: %w", err)
 	}
 	defer transferConn.Close()
+	fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
 
 	opts := s.transferOptions()
 	opts.WatchdogFn = func(msg string, args ...any) {

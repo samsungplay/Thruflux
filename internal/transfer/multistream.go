@@ -1081,60 +1081,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return info, state, nil
 	}
 
-	if opts.WatchdogFn != nil {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-recvCtx.Done():
-					return
-				case <-ticker.C:
-					now := time.Now()
-					var stalled []string
-					var toClose []*recvFileState
-					stateMu.Lock()
-					for streamID, st := range stateByStream {
-						idle := now.Sub(st.lastProgress)
-						if idle > 5*time.Second {
-							stalled = append(stalled, fmt.Sprintf("%d:%s:data=%t:end=%t:idle=%s", streamID, st.begin.RelPath, st.hasData, st.hasEnd, idle.Truncate(time.Second)))
-						}
-						if idle > 20*time.Second && st.stream != nil {
-							toClose = append(toClose, st)
-						}
-					}
-					stateCount := len(stateByStream)
-					stateMu.Unlock()
-					if len(toClose) > 0 {
-						for _, st := range toClose {
-							opts.WatchdogFn(
-								"receive stream stalled",
-								"level", "error",
-								"stream_id", st.begin.StreamID,
-								"relpath", st.begin.RelPath,
-								"idle", now.Sub(st.lastProgress).Truncate(time.Second).String(),
-							)
-							_ = st.stream.Close()
-						}
-						setRecvErr(fmt.Errorf("receive stream stalled"))
-						return
-					}
-					statsMu.Lock()
-					active := activeCount
-					completed := completedCount
-					remaining := remainingBytes
-					statsMu.Unlock()
-					if remaining > 0 || active > 0 || stateCount > 0 {
-						if len(stalled) > 0 {
-							opts.WatchdogFn("receive watchdog", "active_files", active, "completed_files", completed, "remaining_bytes", remaining, "active_streams", stateCount, "stalled_streams", stalled)
-						} else {
-							opts.WatchdogFn("receive watchdog", "active_files", active, "completed_files", completed, "remaining_bytes", remaining, "active_streams", stateCount)
-						}
-					}
-				}
-			}
-		}()
-	}
+	// Watchdog disabled per request to avoid aborting stalled streams.
 
 	go func() {
 		for {
