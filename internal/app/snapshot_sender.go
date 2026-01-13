@@ -587,7 +587,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	iceLog("connect_start")
 	connectCtx, connectCancel := context.WithTimeout(attemptCtx, 10*time.Second)
-	iceConn, err := icePeer.Connect(connectCtx)
+	// We don't need the returned conn as icePeer stores it
+	_, err = icePeer.Connect(connectCtx)
 	connectCancel()
 	readCancel()
 	if err != nil {
@@ -601,10 +602,10 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	_, remoteAddr, err := icePeer.PacketConnInfo()
 	if err != nil {
-		iceConn.Close()
 		return fmt.Errorf("failed to get PacketConn info: %w", err)
 	}
-	iceConn.Close()
+	// Do NOT close iceConn. We use it for QUIC.
+	// iceConn.Close()
 
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {
