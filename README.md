@@ -20,7 +20,7 @@ go build ./...
 # start the server (listening on localhost:8080)
 thruserv
 
-# host files (runs sender logic) — defaults to https://bytepipe.app:8080 and the bundled STUN list
+# host files (runs sender logic) — defaults to https://bytepipe.app and the bundled STUN list
 thru host ./photos ./videos
 
 # join a session (runs receiver logic)
@@ -60,7 +60,7 @@ thru host <paths...> [flags]
 
 | Flag | Description |
 |---|---|
-| `--server-url` | Signaling server URL (default `https://bytepipe.app:8080`). |
+| `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
 | `--max-receivers` | Max concurrent receivers to invite (default `4`). |
 | `--stun-server` | Comma-separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
 | `--turn-server` | Comma-separated TURN URLs (default none). |
@@ -82,7 +82,7 @@ thru join <join-code> [flags]
 | Flag | Description |
 |---|---|
 | `--out` | Output directory (default `.`). |
-| `--server-url` | Signaling server URL (default `https://bytepipe.app:8080`). |
+| `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
 | `--stun-server` / `--turn-server` | ICE servers just like `thru host`. |
 | `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs. |
 | `--benchmark` | Print throughput stats. |

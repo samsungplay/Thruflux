@@ -939,7 +939,7 @@ func (s *SnapshotSender) initParams() {
 		ParallelFiles: runtime.ParallelFiles,
 	}
 	s.paramsMu.Unlock()
-	s.setTuneLine(fmt.Sprintf("Heuristic: %s", formatTuneParams(s.getParams())))
+	s.setTuneLine(fmt.Sprintf("Params: %s", formatTuneParams(s.getParams())))
 }
 
 func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {

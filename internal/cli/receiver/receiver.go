@@ -22,7 +22,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
 
-const receiverDefaultServerURL = "https://bytepipe.app:8080"
+const receiverDefaultServerURL = "https://bytepipe.app"
 
 var receiverDefaultStunServers = []string{
 	"stun:stun.l.google.com:19302",
