@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 )
@@ -22,8 +21,6 @@ const (
 	controlTypeCreditBatch    = byte(0x16)
 	controlTypeEnd            = byte(0xFF)
 )
-
-const controlIOTimeout = 10 * time.Second
 
 type FileBegin struct {
 	RelPath   string
@@ -513,47 +510,23 @@ func readRelPathControl(s Stream) (string, error) {
 }
 
 func readFullControl(s Stream, buf []byte, op string) error {
-	done := make(chan error, 1)
-	go func() {
-		_, err := io.ReadFull(s, buf)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("control stream read %s: %w", op, err)
-		}
-		return nil
-	case <-time.After(controlIOTimeout):
-		_ = s.Close()
-		return fmt.Errorf("control stream read timeout during %s", op)
+	_, err := io.ReadFull(s, buf)
+	if err != nil {
+		return fmt.Errorf("control stream read %s: %w", op, err)
 	}
+	return nil
 }
 
 func writeFullControl(s Stream, buf []byte, op string) error {
-	done := make(chan error, 1)
-	go func() {
-		written := 0
-		for written < len(buf) {
-			n, err := s.Write(buf[written:])
-			if err != nil {
-				done <- err
-				return
-			}
-			written += n
-		}
-		done <- nil
-	}()
-	select {
-	case err := <-done:
+	written := 0
+	for written < len(buf) {
+		n, err := s.Write(buf[written:])
 		if err != nil {
 			return fmt.Errorf("control stream write %s: %w", op, err)
 		}
-		return nil
-	case <-time.After(controlIOTimeout):
-		_ = s.Close()
-		return fmt.Errorf("control stream write timeout during %s", op)
+		written += n
 	}
+	return nil
 }
 
 func readUint16Control(s Stream, op string) (uint16, error) {
