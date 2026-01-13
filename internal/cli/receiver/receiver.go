@@ -1031,7 +1031,8 @@ func runQUICTest(ctx context.Context, logger *slog.Logger, conn *wsclient.Conn, 
 	logger.Info("establishing ICE connection...")
 	connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer connectCancel()
-	iceConn, err := icePeer.Accept(connectCtx)
+	// We don't need the returned conn as icePeer stores it
+	_, err = icePeer.Accept(connectCtx)
 	if err != nil {
 		return fmt.Errorf("failed to establish ICE connection: %w", err)
 	}
@@ -1044,8 +1045,8 @@ func runQUICTest(ctx context.Context, logger *slog.Logger, conn *wsclient.Conn, 
 		return fmt.Errorf("failed to get PacketConn info: %w", err)
 	}
 
-	// Close ICE connection to free up the address for QUIC
-	iceConn.Close()
+	// Do NOT close ICE connection to free up the address for QUIC
+	// iceConn.Close()
 
 	// Create PacketConn for QUIC (will bind to same address as ICE)
 	udpConn, err := icePeer.CreatePacketConn()

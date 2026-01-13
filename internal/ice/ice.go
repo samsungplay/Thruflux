@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/pion/ice/v2"
 )
@@ -298,53 +299,71 @@ func (p *ICEPeer) PacketConnInfo() (localAddr, remoteAddr net.Addr, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.localAddr == nil || p.remoteAddr == nil {
+	if p.conn == nil {
 		return nil, nil, fmt.Errorf("ICE connection not established yet")
 	}
 
 	return p.localAddr, p.remoteAddr, nil
 }
 
+// icePacketConn wraps ice.Conn to implement net.PacketConn for QUIC.
+type icePacketConn struct {
+	c *ice.Conn
+}
+
+func (c *icePacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, err = c.c.Read(p)
+	// Return the remote address of the ICE connection so QUIC knows who sent it.
+	// Note: RemoteAddr might change if ICE switches candidates, which is fine for QUIC migration.
+	return n, c.c.RemoteAddr(), err
+}
+
+func (c *icePacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	// We ignore addr because ice.Conn is already connected to the peer.
+	// In a P2P 1:1 scenario, we only send to that peer.
+	return c.c.Write(p)
+}
+
+func (c *icePacketConn) Close() error {
+	return c.c.Close()
+}
+
+func (c *icePacketConn) LocalAddr() net.Addr {
+	return c.c.LocalAddr()
+}
+
+func (c *icePacketConn) SetDeadline(t time.Time) error {
+	return c.c.SetDeadline(t)
+}
+
+func (c *icePacketConn) SetReadDeadline(t time.Time) error {
+	return c.c.SetReadDeadline(t)
+}
+
+func (c *icePacketConn) SetWriteDeadline(t time.Time) error {
+	return c.c.SetWriteDeadline(t)
+}
+
 // CreatePacketConn creates a new UDP PacketConn for QUIC.
-// It attempts to bind to the same local address as ICE. If that fails (because ICE
-// is still using it), it will close the ICE connection first, then bind to that address.
-// This ensures QUIC uses the same network path as ICE.
+// It returns a wrapper around the existing ICE connection to ensure
+// we use the same NAT mapping (hole punching) and keepalives.
 func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
-	localAddr, _, err := p.PacketConnInfo()
-	if err != nil {
-		return nil, err
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.conn == nil {
+		return nil, fmt.Errorf("ICE connection not established")
 	}
 
-	// Parse the address
-	udpAddr, ok := localAddr.(*net.UDPAddr)
-	if !ok {
-		return nil, fmt.Errorf("local address is not a UDP address: %T", localAddr)
-	}
-
-	// Try to bind to the same address first
-	conn, err := net.ListenPacket("udp", udpAddr.String())
-	if err != nil {
-		// If binding fails, close ICE connection first to free up the address
-		p.logger.Debug("could not bind to ICE local address, closing ICE connection first", "error", err)
-		p.mu.Lock()
-		if p.conn != nil {
-			p.conn.Close()
-			p.conn = nil
-		}
-		p.mu.Unlock()
-
-		// Now try again
-		conn, err = net.ListenPacket("udp", udpAddr.String())
-		if err != nil {
-			return nil, fmt.Errorf("failed to create UDP PacketConn after closing ICE: %w", err)
-		}
-	}
-
-	p.logger.Debug("created PacketConn for QUIC", "local_addr", conn.LocalAddr())
-	return conn, nil
+	// We wrap the existing ICE connection instead of trying to create a new socket.
+	// Creating a new socket (even on the same port) often fails or breaks the NAT mapping.
+	// By wrapping ice.Conn, we ensure traffic goes through the established path
+	// and ICE keepalives continue to keep the hole open.
+	return &icePacketConn{c: p.conn}, nil
 }
 
 // SelectedCandidatePair returns the chosen ICE candidate pair, if available.
+
 func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -108,6 +108,12 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	readErr := conn.ReadLoop(ctx, func(env protocol.Envelope) {
 		s.handleEnvelope(env)
 	})
+
+	// If the transfer has started, wait for it to complete (it will exit the process).
+	// This prevents the program from exiting silently if the WebSocket disconnects
+	// while the transfer (running over ICE/QUIC) is still in progress.
+	s.wg.Wait()
+
 	if readErr != nil && readErr != context.Canceled {
 		return readErr
 	}
@@ -134,6 +140,9 @@ type snapshotReceiver struct {
 	fileTotal              int
 	signalCh               chan protocol.Envelope
 	transfer               chan protocol.TransferStart
+	cleanupMu              sync.Mutex
+	uiCleanup              func()
+	wg                     sync.WaitGroup
 }
 
 func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
@@ -164,6 +173,13 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			return
 		}
 		if r.senderID != "" && peerLeft.PeerID == r.senderID {
+			r.cleanupMu.Lock()
+			cleanup := r.uiCleanup
+			r.cleanupMu.Unlock()
+			if cleanup != nil {
+				cleanup()
+			}
+			fmt.Fprintf(os.Stderr, "\nSender disconnected (peer left).\n")
 			os.Exit(1)
 		}
 	case protocol.TypeTransferStart:
@@ -178,6 +194,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		case r.transfer <- start:
 		default:
 		}
+		r.wg.Add(1)
 		go r.runTransfer(start)
 	case protocol.TypeTransferQueued:
 		var queued protocol.TransferQueued
@@ -232,6 +249,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	stopUIFn := func() {
 		stopUIOnce.Do(stopUI)
 	}
+	r.cleanupMu.Lock()
+	r.uiCleanup = stopUIFn
+	r.cleanupMu.Unlock()
 	defer stopUIFn()
 	exitWith := func(code int) {
 		stopUIFn()
@@ -260,7 +280,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	var (
 		icePeer *ice.ICEPeer
-		iceConn net.Conn
 		err     error
 	)
 	drain := func() {
@@ -424,7 +443,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 		iceLog("connect_start")
 		acceptCtx, acceptCancel := context.WithTimeout(attemptCtx, 10*time.Second)
-		iceConn, err = icePeer.Accept(acceptCtx)
+		// We don't need the returned conn as icePeer stores it
+		_, err = icePeer.Accept(acceptCtx)
 		acceptCancel()
 		readCancel()
 		attemptCancel()
@@ -443,11 +463,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	_, _, err = icePeer.PacketConnInfo()
 	if err != nil {
-		iceConn.Close()
 		r.logger.Error("failed to get PacketConn info", "error", err)
 		exitWith(1)
 	}
-	iceConn.Close()
+	// Do NOT close iceConn here. We use it for QUIC.
+	// iceConn.Close()
 
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {
