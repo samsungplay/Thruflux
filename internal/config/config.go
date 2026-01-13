@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"flag"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -53,8 +52,7 @@ type ClientConfig struct {
 	ResumeVerifyTail uint32
 }
 
-// ParseServerConfig parses server configuration from flags and environment variables.
-// Flags take precedence over environment variables.
+// ParseServerConfig parses server configuration from flags.
 // Defaults: addr=":8080", logLevel="info"
 func ParseServerConfig() ServerConfig {
 	return parseServerConfigWithFlagSet(flag.CommandLine, os.Args[1:])
@@ -77,14 +75,7 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 		WSIdleTimeout:         10 * time.Minute,
 	}
 
-	// Read from environment first
-	if port := os.Getenv("SHEERBYTES_PORT"); port != "" {
-		if parsed, err := strconv.Atoi(port); err == nil {
-			cfg.Port = parsed
-		}
-	}
-
-	// Flags override environment
+	// Flags override defaults
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "server port (1-65535)")
 	fs.IntVar(&cfg.MaxSessions, "max-sessions", cfg.MaxSessions, "max concurrent sessions (0 disables limit)")
 	fs.IntVar(&cfg.MaxReceiversPerSender, "max-receivers-per-sender", cfg.MaxReceiversPerSender, "max receivers per sender (0 disables limit)")
@@ -106,9 +97,8 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 	return cfg
 }
 
-// ParseClientConfig parses client configuration from flags and environment variables.
-// Flags take precedence over environment variables.
-// Defaults: serverURL="http://localhost:8080", logLevel="info", peerID=random
+// ParseClientConfig parses client configuration from flags.
+// Defaults: serverURL="https://bytepipe.app", logLevel="info", peerID=random
 func ParseClientConfig(appName string) ClientConfig {
 	return parseClientConfigWithFlagSet(flag.CommandLine, os.Args[1:])
 }
@@ -116,7 +106,7 @@ func ParseClientConfig(appName string) ClientConfig {
 // parseClientConfigWithFlagSet is an internal helper for testing with isolated flag sets.
 func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig {
 	cfg := ClientConfig{
-		ServerURL:        "http://localhost:8080",
+		ServerURL:        "https://bytepipe.app",
 		LogLevel:         "info",
 		PeerID:           generatePeerID(),
 		JoinCode:         "",
@@ -137,21 +127,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		ResumeVerifyTail: 1,
 	}
 
-	// Read from environment first
-	if serverURL := os.Getenv("SHEERBYTES_SERVER_URL"); serverURL != "" {
-		cfg.ServerURL = serverURL
-	}
-	if logLevel := os.Getenv("SHEERBYTES_LOG_LEVEL"); logLevel != "" {
-		cfg.LogLevel = logLevel
-	}
-	if peerID := os.Getenv("SHEERBYTES_PEER_ID"); peerID != "" {
-		cfg.PeerID = peerID
-	}
-	if joinCode := os.Getenv("SHEERBYTES_JOIN_CODE"); joinCode != "" {
-		cfg.JoinCode = joinCode
-	}
-
-	// Flags override environment
+	// Flags override defaults
 	fs.StringVar(&cfg.ServerURL, "server-url", cfg.ServerURL, "server URL")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level (debug, info, warn, error)")
 	fs.StringVar(&cfg.PeerID, "peer-id", cfg.PeerID, "peer identifier")

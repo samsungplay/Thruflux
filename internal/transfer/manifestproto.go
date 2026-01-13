@@ -92,7 +92,6 @@ func getReadPool() *readPool {
 	return globalReadPool
 }
 
-
 func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -106,20 +105,20 @@ func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte
 	}
 	select {
 	case getReadPool().jobs <- job:
-	case <-time.After(10 * time.Second):
-		fmt.Fprintf(os.Stderr, "sender read queue timeout after 10s: offset=%d len=%d\n", offset, len(buf))
+	case <-time.After(10 * time.Minute):
+		fmt.Fprintf(os.Stderr, "sender read queue timeout after 10m: offset=%d len=%d\n", offset, len(buf))
 		os.Exit(1)
-		return 0, fmt.Errorf("sender read queue timeout after 10s")
+		return 0, fmt.Errorf("sender read queue timeout after 10m")
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
 	select {
 	case res := <-resultCh:
 		return res.n, res.err
-	case <-time.After(10 * time.Second):
-		fmt.Fprintf(os.Stderr, "sender read timeout after 10s: offset=%d len=%d\n", offset, len(buf))
+	case <-time.After(10 * time.Minute):
+		fmt.Fprintf(os.Stderr, "sender read timeout after 10m: offset=%d len=%d\n", offset, len(buf))
 		os.Exit(1)
-		return 0, fmt.Errorf("sender read timeout after 10s")
+		return 0, fmt.Errorf("sender read timeout after 10m")
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
@@ -144,10 +143,10 @@ func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath stri
 			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
 		}
 		return nil
-	case <-time.After(10 * time.Second):
-		fmt.Fprintf(os.Stderr, "receiver read timeout after 10s: file=%s phase=%s\n", relPath, phase)
+	case <-time.After(10 * time.Minute):
+		fmt.Fprintf(os.Stderr, "receiver read timeout after 10m: file=%s phase=%s\n", relPath, phase)
 		os.Exit(1)
-		return fmt.Errorf("receiver read timeout after 10s")
+		return fmt.Errorf("receiver read timeout after 10m")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -172,10 +171,10 @@ func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath str
 			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
 		}
 		return nil
-	case <-time.After(10 * time.Second):
-		fmt.Fprintf(os.Stderr, "sender write timeout after 10s: file=%s phase=%s\n", relPath, phase)
+	case <-time.After(10 * time.Minute):
+		fmt.Fprintf(os.Stderr, "sender write timeout after 10m: file=%s phase=%s\n", relPath, phase)
 		os.Exit(1)
-		return fmt.Errorf("sender write timeout after 10s")
+		return fmt.Errorf("sender write timeout after 10m")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -206,10 +205,10 @@ func writeAtWithTimeout(ctx context.Context, f *os.File, buf []byte, offset int6
 			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
 		}
 		return nil
-	case <-time.After(10 * time.Second):
-		fmt.Fprintf(os.Stderr, "receiver write timeout after 10s: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
+	case <-time.After(10 * time.Minute):
+		fmt.Fprintf(os.Stderr, "receiver write timeout after 10m: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
 		os.Exit(1)
-		return fmt.Errorf("receiver write timeout after 10s")
+		return fmt.Errorf("receiver write timeout after 10m")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
