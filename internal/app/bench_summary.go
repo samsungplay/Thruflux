@@ -27,10 +27,11 @@ func benchSummaryLine(label string, summary bench.Summary, route string, tuned s
 	if summary.GotTTFB {
 		ttfb = fmt.Sprintf("%dms", summary.TTFBMs)
 	}
-	return fmt.Sprintf("BENCH %s: avg=%.0fMB/s peak1s=%.0fMB/s ttfb=%s route=%s tuned=%s",
+	return fmt.Sprintf("BENCH %s: avg=%.0fMB/s peak1s=%.0fMB/s elapsed=%.1fs ttfb=%s route=%s tuned=%s",
 		label,
 		summary.AvgMBps,
 		summary.PeakMBps,
+		summary.Elapsed.Seconds(),
 		ttfb,
 		route,
 		tuned,
@@ -38,9 +39,10 @@ func benchSummaryLine(label string, summary bench.Summary, route string, tuned s
 }
 
 func benchSummaryLineReceiver(summary bench.Summary, route string, tuned string) string {
-	return fmt.Sprintf("BENCH RECV: avg=%.0fMB/s peak1s=%.0fMB/s route=%s tuned=%s",
+	return fmt.Sprintf("BENCH RECV: avg=%.0fMB/s peak1s=%.0fMB/s elapsed=%.1fs route=%s tuned=%s",
 		summary.AvgMBps,
 		summary.PeakMBps,
+		summary.Elapsed.Seconds(),
 		route,
 		tuned,
 	)
