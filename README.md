@@ -21,10 +21,9 @@ If you need full control or higher limits, self‑host in minutes.
 
 ## Quickstart 🚀
 
+1. Build binaries locally yourself (see below) or download from releases section
+2. Basic usage:
 ```bash
-# build binaries
-go build ./...
-
 # start the signaling server (local)
 thruserv
 
@@ -40,18 +39,18 @@ Multiple receivers can join the same code concurrently (subject to `--max-receiv
 ## Building the CLIs locally 🛠️
 
 1. **Prerequisites** – install Go (1.22+ recommended) for your platform and ensure `GOPATH/bin` is on your `PATH`.
-2. **Clone and bootstrap**
+3. **Clone and bootstrap**
    ```bash
    git clone <repo>
    cd thruflux
    go mod download
    ```
-3. **Build the binaries**
+4. **Build the binaries**
    ```bash
    go build ./cmd/thru ./cmd/thruserv
    ```
    On Windows the outputs will be `thru.exe` and `thruserv.exe`; on Unix-like systems they are `thru` and `thruserv`.
-4. **(Optional) Install globally**
+5. **(Optional) Install globally**
    ```bash
    mkdir -p "$HOME/bin"
    mv thru thruserv "$HOME/bin/"
@@ -172,7 +171,7 @@ thru join <join-code> [flags]
    sudo systemctl enable --now thruserv
    ```
 
-5. **Point clients to your server**
+6. **Point clients to your server**
    - Host: `thru host … --server-url https://your.domain`
    - Join: `thru join ABCDEFGH --server-url https://your.domain`
 
