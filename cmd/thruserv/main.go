@@ -42,8 +42,8 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	fmt.Printf("starting server addr=%s\n", addr)
 
-	// Create session store with 30 minute TTL
-	store := session.NewStore(30 * time.Minute)
+	// Create session store with configured TTL
+	store := session.NewStore(cfg.SessionTimeout)
 
 	// Create peer hub
 	hub := peers.NewHub()
@@ -92,6 +92,17 @@ func main() {
 
 		// Create new session
 		sess := store.Create()
+
+		if !sess.ExpiresAt.IsZero() {
+			ttl := time.Until(sess.ExpiresAt)
+			if ttl > 0 {
+				time.AfterFunc(ttl, func() {
+					hub.CloseSession(sess.ID)
+					store.Delete(sess.ID)
+					fmt.Printf("session expired session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
+				})
+			}
+		}
 
 		// Prepare response
 		response := map[string]interface{}{
@@ -356,7 +367,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 	}
 
 	// Add peer to hub
-	removePeer := hub.Add(sess.ID, peer, sendFunc)
+	removePeer := hub.Add(sess.ID, peer, sendFunc, func() { _ = conn.Close() })
 	defer removePeer()
 
 	fmt.Printf("peer connected session_id=%s peer_id=%s role=%s conn_id=%s\n", sess.ID, peerID, role, connID)
@@ -519,6 +530,7 @@ func printServerUsage() {
 	fmt.Fprintln(os.Stderr, "  --session-creates-burst N    burst session creates per IP (default 5)")
 	fmt.Fprintln(os.Stderr, "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
 	fmt.Fprintln(os.Stderr, "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
+	fmt.Fprintln(os.Stderr, "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
 }
 
 func hasHelpFlag(args []string) bool {

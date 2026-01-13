@@ -23,6 +23,7 @@ type ServerConfig struct {
 	SessionCreatesBurst   int
 	MaxWSConnections      int
 	WSIdleTimeout         time.Duration
+	SessionTimeout        time.Duration
 }
 
 // ClientConfig holds configuration for client binaries (sender/receiver).
@@ -73,6 +74,7 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 		SessionCreatesBurst:   5,
 		MaxWSConnections:      2000,
 		WSIdleTimeout:         10 * time.Minute,
+		SessionTimeout:        24 * time.Hour,
 	}
 
 	// Flags override defaults
@@ -88,12 +90,12 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 	fs.IntVar(&cfg.SessionCreatesBurst, "session-creates-burst", cfg.SessionCreatesBurst, "burst session creates per IP")
 	fs.IntVar(&cfg.MaxWSConnections, "max-ws-connections", cfg.MaxWSConnections, "max concurrent websocket connections (0 disables limit)")
 	fs.DurationVar(&cfg.WSIdleTimeout, "ws-idle-timeout", cfg.WSIdleTimeout, "websocket idle timeout (0 disables)")
+	fs.DurationVar(&cfg.SessionTimeout, "session-timeout", cfg.SessionTimeout, "max session lifetime before expiry (0 disables)")
 	fs.Parse(args)
 
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		cfg.Port = 8080
 	}
-
 	return cfg
 }
 

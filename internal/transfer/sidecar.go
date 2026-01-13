@@ -14,7 +14,7 @@ const (
 	sidecarMagic   = "SBM2"
 	sidecarVersion = uint16(1)
 	sidecarSuffix  = ".sbxmap"
-	sidecarDir     = ".sheerbytes"
+	sidecarDir     = ".thruflux_resumedata"
 )
 
 // Sidecar tracks chunk completion for resume.

@@ -18,11 +18,14 @@ func TestParseServerConfigDefaults(t *testing.T) {
 	if cfg.WSIdleTimeout != 10*time.Minute {
 		t.Fatalf("expected default idle timeout 10m, got %s", cfg.WSIdleTimeout)
 	}
+	if cfg.SessionTimeout != 24*time.Hour {
+		t.Fatalf("expected default session timeout 24h, got %s", cfg.SessionTimeout)
+	}
 }
 
 func TestParseServerConfigFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	cfg := parseServerConfigWithFlagSet(fs, []string{"--port", "9090", "--max-sessions", "50", "--ws-idle-timeout", "2m"})
+	cfg := parseServerConfigWithFlagSet(fs, []string{"--port", "9090", "--max-sessions", "50", "--ws-idle-timeout", "2m", "--session-timeout", "0"})
 	if cfg.Port != 9090 {
 		t.Fatalf("expected port 9090, got %d", cfg.Port)
 	}
@@ -31,6 +34,9 @@ func TestParseServerConfigFlags(t *testing.T) {
 	}
 	if cfg.WSIdleTimeout != 2*time.Minute {
 		t.Fatalf("expected idle timeout 2m, got %s", cfg.WSIdleTimeout)
+	}
+	if cfg.SessionTimeout != 0 {
+		t.Fatalf("expected session timeout 0, got %s", cfg.SessionTimeout)
 	}
 }
 

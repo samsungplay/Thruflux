@@ -28,7 +28,7 @@ func TestHub_Add(t *testing.T) {
 		ConnID: "conn1",
 	}
 
-	remove := hub.Add("session1", peer, sendFunc)
+	remove := hub.Add("session1", peer, sendFunc, nil)
 
 	// Verify peer is in the list
 	peers := hub.List("session1")
@@ -58,12 +58,12 @@ func TestHub_List(t *testing.T) {
 	sendFunc := func(env protocol.Envelope) error { return nil }
 
 	// Add multiple peers to same session
-	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc)
-	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc)
-	hub.Add("session1", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc)
+	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc, nil)
+	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc, nil)
+	hub.Add("session1", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc, nil)
 
 	// Add peer to different session
-	hub.Add("session2", Peer{PeerID: "peer4", Role: "sender", ConnID: "conn4"}, sendFunc)
+	hub.Add("session2", Peer{PeerID: "peer4", Role: "sender", ConnID: "conn4"}, sendFunc, nil)
 
 	peers := hub.List("session1")
 	if len(peers) != 3 {
@@ -128,9 +128,9 @@ func TestHub_Broadcast(t *testing.T) {
 	}
 
 	// Add peers to session
-	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1)
-	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2)
-	hub.Add("session2", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3)
+	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1, nil)
+	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2, nil)
+	hub.Add("session2", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3, nil)
 
 	// Create test envelope
 	env, err := protocol.NewEnvelope(protocol.TypePeerJoined, protocol.NewMsgID(), protocol.PeerJoined{
@@ -188,7 +188,7 @@ func TestHub_Broadcast_NonBlocking(t *testing.T) {
 	}
 
 	// Add peer with blocking send
-	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, blockingSend)
+	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, blockingSend, nil)
 
 	// Create many envelopes
 	for i := 0; i < 300; i++ { // More than buffer size (256)
@@ -213,7 +213,7 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 	go func() {
 		for i := 0; i < 50; i++ {
 			peer := Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}
-			hub.Add("session1", peer, sendFunc)
+			hub.Add("session1", peer, sendFunc, nil)
 		}
 		done <- true
 	}()
@@ -267,9 +267,9 @@ func TestHub_SendTo(t *testing.T) {
 	}
 
 	// Add peers to session
-	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1)
-	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2)
-	hub.Add("session2", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3)
+	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1, nil)
+	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2, nil)
+	hub.Add("session2", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3, nil)
 
 	// Create test envelope
 	env, err := protocol.NewEnvelope(protocol.TypeOffer, protocol.NewMsgID(), protocol.Offer{SDP: "test-sdp"})
@@ -345,9 +345,9 @@ func TestHub_BroadcastExcept(t *testing.T) {
 	}
 
 	// Add peers to session
-	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1)
-	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2)
-	hub.Add("session1", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3)
+	hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1, nil)
+	hub.Add("session1", Peer{PeerID: "peer2", Role: "receiver", ConnID: "conn2"}, sendFunc2, nil)
+	hub.Add("session1", Peer{PeerID: "peer3", Role: "sender", ConnID: "conn3"}, sendFunc3, nil)
 
 	// Create test envelope
 	env, err := protocol.NewEnvelope(protocol.TypeAnswer, protocol.NewMsgID(), protocol.Answer{SDP: "test-answer"})
@@ -402,10 +402,10 @@ func TestHub_DuplicatePeerID_LastWriteWins(t *testing.T) {
 	}
 
 	// Add peer with same peer_id but different conn_id (first connection)
-	remove1 := hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1)
+	remove1 := hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}, sendFunc1, nil)
 
 	// Add peer with same peer_id but different conn_id (second connection - should replace)
-	remove2 := hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn2"}, sendFunc2)
+	remove2 := hub.Add("session1", Peer{PeerID: "peer1", Role: "sender", ConnID: "conn2"}, sendFunc2, nil)
 
 	// Verify only one peer in the list
 	peers := hub.List("session1")
@@ -460,7 +460,7 @@ func TestHub_RemoveOnError(t *testing.T) {
 	}
 
 	peer := Peer{PeerID: "peer1", Role: "sender", ConnID: "conn1"}
-	remove := hub.Add("session1", peer, sendFunc)
+	remove := hub.Add("session1", peer, sendFunc, nil)
 
 	// Send a message that will cause error
 	env, err := protocol.NewEnvelope(protocol.TypePeerList, protocol.NewMsgID(), protocol.PeerList{})
@@ -479,4 +479,3 @@ func TestHub_RemoveOnError(t *testing.T) {
 		t.Errorf("Expected 0 peers after remove, got %d", len(peers))
 	}
 }
-

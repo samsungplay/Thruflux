@@ -21,6 +21,7 @@ type Store struct {
 	mu       sync.RWMutex
 	sessions map[string]Session // keyed by session ID
 	byCode   map[string]string  // join code -> session ID
+	ttl      time.Duration
 }
 
 // NewStore creates a new session store with the specified TTL.
@@ -28,17 +29,22 @@ func NewStore(ttl time.Duration) *Store {
 	return &Store{
 		sessions: make(map[string]Session),
 		byCode:   make(map[string]string),
+		ttl:      ttl,
 	}
 }
 
 // Create creates a new session with a unique ID and join code.
 func (s *Store) Create() Session {
 	now := time.Now()
+	expiresAt := time.Time{}
+	if s.ttl > 0 {
+		expiresAt = now.Add(s.ttl)
+	}
 	session := Session{
 		ID:        generateSessionID(),
 		JoinCode:  generateJoinCode(),
 		CreatedAt: now,
-		ExpiresAt: now.Add(100 * 365 * 24 * time.Hour),
+		ExpiresAt: expiresAt,
 	}
 
 	s.mu.Lock()
@@ -59,8 +65,8 @@ func (s *Store) Create() Session {
 // GetByJoinCode retrieves a session by its join code.
 // Returns the session and true if found, or zero value and false if not found.
 func (s *Store) GetByJoinCode(code string) (Session, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	sessionID, exists := s.byCode[code]
 	if !exists {
@@ -68,7 +74,15 @@ func (s *Store) GetByJoinCode(code string) (Session, bool) {
 	}
 
 	session, exists := s.sessions[sessionID]
-	return session, exists
+	if !exists {
+		return Session{}, false
+	}
+	if !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt) {
+		delete(s.sessions, sessionID)
+		delete(s.byCode, code)
+		return Session{}, false
+	}
+	return session, true
 }
 
 // Delete removes a session by ID, if present.
