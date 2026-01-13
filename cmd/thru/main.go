@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/cli/receiver"
@@ -80,6 +81,7 @@ func main() {
 	case "host":
 		if shouldPrintStartupMessage(args[1:]) {
 			printStartupMessage()
+			printShareSummary(args[1:])
 		}
 		sender.Run(args[1:])
 		return
@@ -148,6 +150,26 @@ func printStartupMessage() {
 	}
 	msg := startupMessages[rng.Intn(len(startupMessages))]
 	fmt.Printf(">>.. %s\n", msg)
+}
+
+func printShareSummary(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	fmt.Println("Sharing the following paths:")
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if strings.HasPrefix(path, "-") {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		fmt.Printf("  - %s\n", path)
+	}
+	fmt.Println("Receivers should run: thru join <join-code> --out <dir>")
 }
 
 func printBanner() {
