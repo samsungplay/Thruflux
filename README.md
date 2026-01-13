@@ -80,6 +80,7 @@ thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* fl
 | `--ws-idle-timeout` | Idle connection timeout (default `10m`, `0` disables). |
 | `--session-timeout` | Max session lifetime (default `24h`, `0` disables). |
 | `--version`, `-v` | Print the Thruflux server version. |
+| `--help`, `-h` | Show usage and flag descriptions. |
 
 ### `thru host` (sender)
 
@@ -99,6 +100,7 @@ thru host <paths...> [flags]
 | `--parallel-files` | Concurrent file transfers (1..8). |
 | `--benchmark` | Print throughput stats. |
 | `--version`, `-v` | Print the Thruflux CLI version. |
+| `--help`, `-h` | Show usage and flag descriptions. |
 
 ### `thru join` (receiver)
 
@@ -114,6 +116,7 @@ thru join <join-code> [flags]
 | `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs. |
 | `--benchmark` | Print throughput stats. |
 | `--version`, `-v` | Print the Thruflux CLI version. |
+| `--help`, `-h` | Show usage and flag descriptions. |
 
 ## Self‑hosting guide (Ubuntu) 🐧
 
