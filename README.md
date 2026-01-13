@@ -37,6 +37,29 @@ thru join ABCDEFGH --out ./downloads
 
 Multiple receivers can join the same code concurrently (subject to `--max-receivers` and server limits).
 
+## Building the CLIs locally 🛠️
+
+1. **Prerequisites** – install Go (1.22+ recommended) for your platform and ensure `GOPATH/bin` is on your `PATH`.
+2. **Clone and bootstrap**
+   ```bash
+   git clone <repo>
+   cd thruflux
+   go mod download
+   ```
+3. **Build the binaries**
+   ```bash
+   go build ./cmd/thru ./cmd/thruserv
+   ```
+   On Windows the outputs will be `thru.exe` and `thruserv.exe`; on Unix-like systems they are `thru` and `thruserv`.
+4. **(Optional) Install globally**
+   ```bash
+   mkdir -p "$HOME/bin"
+   mv thru thruserv "$HOME/bin/"
+   ```
+   Then add `$HOME/bin` to your `PATH` (e.g., `export PATH="$HOME/bin:$PATH"`).
+
+If you change dependencies, rerun `go mod tidy` before rebuilding to keep the module tidy.
+
 ## Command reference
 
 ### `thruserv` (signaling server)
