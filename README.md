@@ -25,6 +25,7 @@ If you need full control or higher limits, self‑host in minutes.
 # install thruflux
 brew tap samsungplay/thruflux
 brew install thru
+
 # host files (defaults to https://bytepipe.app + bundled STUN list)
 thru host ./photos ./videos
 
