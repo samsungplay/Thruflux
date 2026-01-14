@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"reflect"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/pion/ice/v2"
+	"github.com/pion/transport/v2/stdnet"
 )
 
 // ICEConfig holds configuration for ICE peer.
@@ -42,6 +41,8 @@ type ICEPeer struct {
 	localAddr    net.Addr
 	remoteAddr   net.Addr
 	selectedPair *ice.CandidatePair
+	udpConns     []*net.UDPConn
+	udpMux       ice.UDPMux
 }
 
 // NewICEPeer creates a new ICE peer with the given configuration.
@@ -67,13 +68,25 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 		urls = append(urls, url)
 	}
 
+	netTypes, udpConns, udpMux, err := createUDPMux()
+	if err != nil {
+		return nil, err
+	}
+
 	config := &ice.AgentConfig{
-		NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP6, ice.NetworkTypeUDP4},
+		NetworkTypes: netTypes,
 		Urls:         urls,
+		UDPMux:       udpMux,
 	}
 
 	agent, err := ice.NewAgent(config)
 	if err != nil {
+		if udpMux != nil {
+			_ = udpMux.Close()
+		}
+		for _, conn := range udpConns {
+			_ = conn.Close()
+		}
 		return nil, fmt.Errorf("failed to create ICE agent: %w", err)
 	}
 
@@ -82,6 +95,8 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 		config:     cfg,
 		logger:     logger,
 		gatherDone: make(chan struct{}),
+		udpConns:   udpConns,
+		udpMux:     udpMux,
 	}
 
 	// Set up candidate callback
@@ -109,6 +124,61 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	}
 
 	return peer, nil
+}
+
+func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, error) {
+	netInstance, err := stdnet.NewNet()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create network: %w", err)
+	}
+
+	var (
+		netTypes []ice.NetworkType
+		conns    []*net.UDPConn
+		muxes    []ice.UDPMux
+	)
+
+	conn4, err4 := netInstance.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err4 == nil {
+		udp4, ok := conn4.(*net.UDPConn)
+		if !ok {
+			_ = conn4.Close()
+			err4 = fmt.Errorf("unexpected udp4 conn type %T", conn4)
+		} else {
+			netTypes = append(netTypes, ice.NetworkTypeUDP4)
+			conns = append(conns, udp4)
+			muxes = append(muxes, ice.NewUDPMuxDefault(ice.UDPMuxParams{
+				UDPConn: conn4,
+				Net:     netInstance,
+			}))
+		}
+	}
+
+	conn6, err6 := netInstance.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
+	if err6 == nil {
+		udp6, ok := conn6.(*net.UDPConn)
+		if !ok {
+			_ = conn6.Close()
+			err6 = fmt.Errorf("unexpected udp6 conn type %T", conn6)
+		} else {
+			netTypes = append(netTypes, ice.NetworkTypeUDP6)
+			conns = append(conns, udp6)
+			muxes = append(muxes, ice.NewUDPMuxDefault(ice.UDPMuxParams{
+				UDPConn: conn6,
+				Net:     netInstance,
+			}))
+		}
+	}
+
+	if len(muxes) == 0 {
+		return nil, nil, nil, fmt.Errorf("failed to create UDP sockets: udp4=%v udp6=%v", err4, err6)
+	}
+
+	if len(muxes) == 1 {
+		return netTypes, conns, muxes[0], nil
+	}
+
+	return netTypes, conns, ice.NewMultiUDPMuxDefault(muxes...), nil
 }
 
 // StartGathering starts gathering ICE candidates.
@@ -308,46 +378,12 @@ func (p *ICEPeer) PacketConnInfo() (localAddr, remoteAddr net.Addr, err error) {
 	return p.localAddr, p.remoteAddr, nil
 }
 
-// UnderlyingUDPConn exposes the UDP socket used by the selected local candidate, if available.
-// This is used for OS-level UDP buffer tuning when ICE wraps the socket.
-func (p *ICEPeer) UnderlyingUDPConn() (*net.UDPConn, error) {
+// UDPConns returns the UDP sockets used for ICE candidate gathering.
+func (p *ICEPeer) UDPConns() []*net.UDPConn {
 	p.mu.Lock()
-	pair := p.selectedPair
+	conns := append([]*net.UDPConn(nil), p.udpConns...)
 	p.mu.Unlock()
-
-	if pair == nil || pair.Local == nil {
-		return nil, fmt.Errorf("no selected ICE candidate pair")
-	}
-
-	return udpConnFromCandidate(pair.Local)
-}
-
-func udpConnFromCandidate(candidate ice.Candidate) (*net.UDPConn, error) {
-	v := reflect.ValueOf(candidate)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if !v.IsValid() {
-		return nil, fmt.Errorf("invalid candidate value")
-	}
-	base := v.FieldByName("candidateBase")
-	if !base.IsValid() {
-		return nil, fmt.Errorf("candidate base not accessible")
-	}
-	connField := base.FieldByName("conn")
-	if !connField.IsValid() || !connField.CanAddr() {
-		return nil, fmt.Errorf("candidate conn not accessible")
-	}
-	connField = reflect.NewAt(connField.Type(), unsafe.Pointer(connField.UnsafeAddr())).Elem()
-	connIface, ok := connField.Interface().(net.PacketConn)
-	if !ok || connIface == nil {
-		return nil, fmt.Errorf("candidate conn unavailable")
-	}
-	udpConn, ok := connIface.(*net.UDPConn)
-	if !ok {
-		return nil, fmt.Errorf("candidate conn is %T", connIface)
-	}
-	return udpConn, nil
+	return conns
 }
 
 // icePacketConn wraps ice.Conn to implement net.PacketConn for QUIC.
@@ -417,6 +453,18 @@ func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
 // Close closes the ICE agent and cleans up resources.
 func (p *ICEPeer) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.agent.Close()
+	agent := p.agent
+	udpMux := p.udpMux
+	p.agent = nil
+	p.udpMux = nil
+	p.udpConns = nil
+	p.mu.Unlock()
+
+	if udpMux != nil {
+		_ = udpMux.Close()
+	}
+	if agent != nil {
+		return agent.Close()
+	}
+	return nil
 }

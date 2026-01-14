@@ -49,10 +49,10 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		cfg.OutDir = "."
 	}
 	if cfg.UDPReadBufferBytes <= 0 {
-		cfg.UDPReadBufferBytes = 8 * 1024 * 1024
+		cfg.UDPReadBufferBytes = 16 * 1024 * 1024
 	}
 	if cfg.UDPWriteBufferBytes <= 0 {
-		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
+		cfg.UDPWriteBufferBytes = 16 * 1024 * 1024
 	}
 	if cfg.QuicConnWindowBytes <= 0 {
 		cfg.QuicConnWindowBytes = 1024 * 1024 * 1024
@@ -483,8 +483,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer udpConn.Close()
 
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
-	if udpUnderlying, err := icePeer.UnderlyingUDPConn(); err == nil {
-		udpTune = transport.ApplyUDPBeyondBestEffort(udpUnderlying, r.udpReadBufferBytes, r.udpWriteBufferBytes)
+	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
+		results := make([]transport.UdpTuneResult, 0, len(udpConns))
+		for _, conn := range udpConns {
+			results = append(results, transport.ApplyUDPBeyondBestEffort(conn, r.udpReadBufferBytes, r.udpWriteBufferBytes))
+		}
+		udpTune = mergeUDPTuneResults(results)
 	}
 	quicCfg, quicTune := transport.BuildQuicConfig(
 		quictransport.DefaultServerQUICConfig(),
