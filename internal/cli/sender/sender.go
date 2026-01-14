@@ -46,8 +46,8 @@ func Run(args []string) {
 	serverURL := ""
 	maxReceivers := 4
 	benchmark := false
-	udpReadBufferBytes := 16 * 1024 * 1024
-	udpWriteBufferBytes := 16 * 1024 * 1024
+	udpReadBufferBytes := 8 * 1024 * 1024
+	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 64 * 1024 * 1024
 	quicStreamWindowBytes := 16 * 1024 * 1024
 	quicMaxIncomingStreams := 100
@@ -216,8 +216,8 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "  --turn-server URLS          TURN server URLs (comma-separated, default none)")
 	fmt.Fprintln(os.Stderr, "                              example: --turn-server turn:username:password@turn.example.com:3478?transport=udp")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
-	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 16777216)")
-	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 16777216)")
+	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
+	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 67108864)")
 	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 16777216)")
 	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")

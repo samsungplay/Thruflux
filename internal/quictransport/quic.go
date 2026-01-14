@@ -49,7 +49,7 @@ func DefaultServerQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                30,
 		MaxIncomingStreams:             256,
-		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
+		InitialConnectionReceiveWindow: 2 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
 		MaxStreamReceiveWindow:         16 * 1024 * 1024,
@@ -60,7 +60,7 @@ func DefaultServerQUICConfig() *quic.Config {
 func DefaultClientQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                30,
-		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
+		InitialConnectionReceiveWindow: 2 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
 		MaxStreamReceiveWindow:         16 * 1024 * 1024,
