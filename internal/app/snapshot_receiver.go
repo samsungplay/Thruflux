@@ -484,8 +484,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer udpConn.Close()
 
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
-	if udpTyped, ok := udpConn.(*net.UDPConn); ok {
-		udpTune = transport.ApplyUDPBeyondBestEffort(udpTyped, r.udpReadBufferBytes, r.udpWriteBufferBytes)
+	if udpUnderlying, err := icePeer.UnderlyingUDPConn(); err == nil {
+		udpTune = transport.ApplyUDPBeyondBestEffort(udpUnderlying, r.udpReadBufferBytes, r.udpWriteBufferBytes)
 	}
 	quicCfg, quicTune := transport.BuildQuicConfig(
 		quictransport.DefaultServerQUICConfig(),

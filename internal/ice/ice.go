@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pion/ice/v2"
 )
@@ -304,6 +306,48 @@ func (p *ICEPeer) PacketConnInfo() (localAddr, remoteAddr net.Addr, err error) {
 	}
 
 	return p.localAddr, p.remoteAddr, nil
+}
+
+// UnderlyingUDPConn exposes the UDP socket used by the selected local candidate, if available.
+// This is used for OS-level UDP buffer tuning when ICE wraps the socket.
+func (p *ICEPeer) UnderlyingUDPConn() (*net.UDPConn, error) {
+	p.mu.Lock()
+	pair := p.selectedPair
+	p.mu.Unlock()
+
+	if pair == nil || pair.Local == nil {
+		return nil, fmt.Errorf("no selected ICE candidate pair")
+	}
+
+	return udpConnFromCandidate(pair.Local)
+}
+
+func udpConnFromCandidate(candidate Candidate) (*net.UDPConn, error) {
+	v := reflect.ValueOf(candidate)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if !v.IsValid() {
+		return nil, fmt.Errorf("invalid candidate value")
+	}
+	base := v.FieldByName("candidateBase")
+	if !base.IsValid() {
+		return nil, fmt.Errorf("candidate base not accessible")
+	}
+	connField := base.FieldByName("conn")
+	if !connField.IsValid() || !connField.CanAddr() {
+		return nil, fmt.Errorf("candidate conn not accessible")
+	}
+	connField = reflect.NewAt(connField.Type(), unsafe.Pointer(connField.UnsafeAddr())).Elem()
+	connIface, ok := connField.Interface().(net.PacketConn)
+	if !ok || connIface == nil {
+		return nil, fmt.Errorf("candidate conn unavailable")
+	}
+	udpConn, ok := connIface.(*net.UDPConn)
+	if !ok {
+		return nil, fmt.Errorf("candidate conn is %T", connIface)
+	}
+	return udpConn, nil
 }
 
 // icePacketConn wraps ice.Conn to implement net.PacketConn for QUIC.

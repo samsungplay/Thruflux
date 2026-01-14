@@ -614,8 +614,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer udpConn.Close()
 
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
-	if udpTyped, ok := udpConn.(*net.UDPConn); ok {
-		udpTune = transport.ApplyUDPBeyondBestEffort(udpTyped, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	if udpUnderlying, err := icePeer.UnderlyingUDPConn(); err == nil {
+		udpTune = transport.ApplyUDPBeyondBestEffort(udpUnderlying, s.udpReadBufferBytes, s.udpWriteBufferBytes)
 	}
 	quicCfg, quicTune := transport.BuildQuicConfig(
 		quictransport.DefaultClientQUICConfig(),
