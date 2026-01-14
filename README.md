@@ -21,9 +21,10 @@ If you need full control or higher limits, self‑host in minutes.
 
 ## Quickstart 🚀
 
-1. Build binaries locally yourself (see below) or download from releases section. Package managers support coming soon!
-2. Basic usage:
 ```bash
+# install thruflux
+brew tap samsungplay/thruflux
+brew install thru
 # host files (defaults to https://bytepipe.app + bundled STUN list)
 thru host ./photos ./videos
 
