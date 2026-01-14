@@ -35,5 +35,4 @@ go.work
 Thumbs.db
 bin
 
-.goreleaser.yml
 dist/

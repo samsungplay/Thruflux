@@ -1,0 +1,36 @@
+version: 2
+project_name: thru
+
+builds:
+  - id: thru
+    main: ./cmd/thru
+    binary: thru
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    name_template: "thru_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    # Use format_overrides to target Windows specifically
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - none*
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: thru
+    homepage: "https://github.com/samsungplay/thruflux"
+    description: "Pure throughput. Zero friction."
+    license: "MIT"
+    repository:
+      owner: samsungplay
+      name: homebrew-thruflux
+    directory: Formula
+    install: |
+      bin.install "thru"
+    test: |
+      system "#{bin}/thru", "--version"
