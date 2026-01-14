@@ -47,15 +47,23 @@ func ClientConfig() *tls.Config {
 // DefaultServerQUICConfig returns the default QUIC server config.
 func DefaultServerQUICConfig() *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod:    30, // seconds
-		MaxIncomingStreams: 256,
+		KeepAlivePeriod:                30,
+		MaxIncomingStreams:             256,
+		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
+		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
+		InitialStreamReceiveWindow:     16 * 1024 * 1024,
+		MaxStreamReceiveWindow:         16 * 1024 * 1024,
 	}
 }
 
 // DefaultClientQUICConfig returns the default QUIC client config.
 func DefaultClientQUICConfig() *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod: 30, // seconds
+		KeepAlivePeriod:                30,
+		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
+		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
+		InitialStreamReceiveWindow:     16 * 1024 * 1024,
+		MaxStreamReceiveWindow:         16 * 1024 * 1024,
 	}
 }
 

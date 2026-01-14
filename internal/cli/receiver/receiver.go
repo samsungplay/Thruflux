@@ -46,8 +46,8 @@ func Run(args []string) {
 	benchmark := false
 	udpReadBufferBytes := 16 * 1024 * 1024
 	udpWriteBufferBytes := 16 * 1024 * 1024
-	quicConnWindowBytes := 1024 * 1024 * 1024
-	quicStreamWindowBytes := 32 * 1024 * 1024
+	quicConnWindowBytes := 64 * 1024 * 1024
+	quicStreamWindowBytes := 16 * 1024 * 1024
 	quicMaxIncomingStreams := 100
 	stunServers := make([]string, 0)
 	turnServers := make([]string, 0)
@@ -191,8 +191,8 @@ func printReceiverUsage() {
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 16777216)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 16777216)")
-	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 1073741824)")
-	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 33554432)")
+	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 67108864)")
+	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 16777216)")
 	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
 }
 
