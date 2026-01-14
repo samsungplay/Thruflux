@@ -21,21 +21,21 @@ If you need full control or higher limits, self‑host in minutes.
 
 ## Quickstart 🚀
 
-Install
+**Install**
 
-macOS / Linux (Homebrew)
+**macOS / Linux (Homebrew)**
 ```bash
 brew tap samsungplay/thruflux
 brew install thru
 ```
 
-Windows (Scoop)
+**Windows (Scoop)**
 ```bash
 scoop bucket add thruflux https://github.com/samsungplay/scoop-thruflux
 scoop install thru
 ```
 
-Use
+**Use**
 ```bash
 # host files (defaults to https://bytepipe.app + bundled STUN list)
 thru host ./photos ./videos
