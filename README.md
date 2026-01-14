@@ -126,7 +126,7 @@ thru join <join-code> [flags]
    sudo snap install --classic go
    ```
 
-2. **Build the binaries**
+2. **Build the binaries (Alternatively, you can download from releases)**
    ```bash
    git clone <repo>
    cd thruflux
