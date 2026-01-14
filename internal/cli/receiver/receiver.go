@@ -44,8 +44,8 @@ func Run(args []string) {
 	outDir := ""
 	serverURL := ""
 	benchmark := false
-	udpReadBufferBytes := 8 * 1024 * 1024
-	udpWriteBufferBytes := 8 * 1024 * 1024
+	udpReadBufferBytes := 16 * 1024 * 1024
+	udpWriteBufferBytes := 16 * 1024 * 1024
 	quicConnWindowBytes := 1024 * 1024 * 1024
 	quicStreamWindowBytes := 32 * 1024 * 1024
 	quicMaxIncomingStreams := 100
