@@ -34,3 +34,19 @@ brews:
       bin.install "thru"
     test: |
       system "#{bin}/thru", "--version"
+
+scoop:
+  name: thru
+  homepage: "https://github.com/samsungplay/Thruflux"
+  description: "Pure throughput. Zero friction."
+  license: MIT
+
+  bucket:
+    owner: samsungplay
+    name: scoop-thruflux
+
+  directory: bucket
+
+  commit_author:
+    name: GoReleaser Bot
+    email: bot@goreleaser.com
