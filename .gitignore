@@ -34,3 +34,6 @@ go.work
 # OS files
 Thumbs.db
 bin
+
+.goreleaser.yml
+dist/
