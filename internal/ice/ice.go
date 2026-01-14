@@ -322,7 +322,7 @@ func (p *ICEPeer) UnderlyingUDPConn() (*net.UDPConn, error) {
 	return udpConnFromCandidate(pair.Local)
 }
 
-func udpConnFromCandidate(candidate Candidate) (*net.UDPConn, error) {
+func udpConnFromCandidate(candidate ice.Candidate) (*net.UDPConn, error) {
 	v := reflect.ValueOf(candidate)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
