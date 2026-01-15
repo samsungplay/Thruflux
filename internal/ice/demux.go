@@ -27,7 +27,9 @@ type packetDemux struct {
 	stunCh    chan demuxPacket
 	dataCh    chan demuxPacket
 	closed    chan struct{}
+	stopOnce  sync.Once
 	closeOnce sync.Once
+	readDone  chan struct{}
 
 	mu       sync.Mutex
 	stunConn net.PacketConn
@@ -37,10 +39,11 @@ type packetDemux struct {
 
 func newPacketDemux(conn *net.UDPConn) *packetDemux {
 	d := &packetDemux{
-		conn:   conn,
-		stunCh: make(chan demuxPacket, stunQueueDepth),
-		dataCh: make(chan demuxPacket, dataQueueDepth),
-		closed: make(chan struct{}),
+		conn:     conn,
+		stunCh:   make(chan demuxPacket, stunQueueDepth),
+		dataCh:   make(chan demuxPacket, dataQueueDepth),
+		closed:   make(chan struct{}),
+		readDone: make(chan struct{}),
 	}
 	d.bufPool.New = func() interface{} {
 		return make([]byte, maxUDPPacketSize)
@@ -52,11 +55,17 @@ func newPacketDemux(conn *net.UDPConn) *packetDemux {
 }
 
 func (d *packetDemux) readLoop() {
+	defer close(d.readDone)
 	for {
 		buf := d.getBuffer()
 		n, addr, err := d.conn.ReadFrom(buf)
 		if err != nil {
 			d.putBuffer(buf)
+			select {
+			case <-d.closed:
+				return
+			default:
+			}
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -97,10 +106,22 @@ func (d *packetDemux) readLoop() {
 func (d *packetDemux) Close() error {
 	var err error
 	d.closeOnce.Do(func() {
-		close(d.closed)
+		d.Stop()
 		err = d.conn.Close()
 	})
 	return err
+}
+
+func (d *packetDemux) Stop() {
+	d.stopOnce.Do(func() {
+		close(d.closed)
+		_ = d.conn.SetReadDeadline(time.Now())
+		<-d.readDone
+		d.drain()
+		close(d.stunCh)
+		close(d.dataCh)
+		_ = d.conn.SetReadDeadline(time.Time{})
+	})
 }
 
 func (d *packetDemux) STUNConn() net.PacketConn {
@@ -113,6 +134,27 @@ func (d *packetDemux) DataConn() net.PacketConn {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.dataConn
+}
+
+func (d *packetDemux) Conn() *net.UDPConn {
+	return d.conn
+}
+
+func (d *packetDemux) drain() {
+	for {
+		select {
+		case pkt := <-d.stunCh:
+			if pkt.release != nil {
+				pkt.release()
+			}
+		case pkt := <-d.dataCh:
+			if pkt.release != nil {
+				pkt.release()
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (d *packetDemux) getBuffer() []byte {

@@ -385,21 +385,30 @@ func (p *ICEPeer) UDPConns() []*net.UDPConn {
 	return conns
 }
 
-// CreatePacketConn returns a PacketConn for QUIC data that uses the ICE-established
-// UDP socket while keeping STUN traffic routed to the ICE agent.
+// CreatePacketConn returns a PacketConn for QUIC data using the ICE-established
+// UDP socket, then hands off control by stopping ICE.
 func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.conn == nil {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("ICE connection not established")
 	}
-
 	demux, err := p.demuxForSelectedPairLocked()
+	agent := p.agent
+	p.agent = nil
+	p.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return demux.DataConn(), nil
+
+	if agent != nil {
+		_ = agent.Close()
+	}
+	if demux == nil {
+		return nil, fmt.Errorf("no UDP demuxer for handoff")
+	}
+	demux.Stop()
+	return demux.Conn(), nil
 }
 
 func (p *ICEPeer) demuxForSelectedPairLocked() (*packetDemux, error) {
