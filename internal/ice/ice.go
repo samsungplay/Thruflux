@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/pion/ice/v2"
 	"github.com/pion/transport/v2/stdnet"
