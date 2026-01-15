@@ -43,6 +43,7 @@ type ICEPeer struct {
 	selectedPair *ice.CandidatePair
 	udpConns     []*net.UDPConn
 	udpMux       ice.UDPMux
+	demuxers     map[ice.NetworkType]*packetDemux
 }
 
 // NewICEPeer creates a new ICE peer with the given configuration.
@@ -68,7 +69,7 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 		urls = append(urls, url)
 	}
 
-	netTypes, udpConns, udpMux, err := createUDPMux()
+	netTypes, udpConns, udpMux, demuxers, err := createUDPMux()
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +98,7 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 		gatherDone: make(chan struct{}),
 		udpConns:   udpConns,
 		udpMux:     udpMux,
+		demuxers:   demuxers,
 	}
 
 	// Set up candidate callback
@@ -126,16 +128,16 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	return peer, nil
 }
 
-func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, error) {
+func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, map[ice.NetworkType]*packetDemux, error) {
 	netInstance, err := stdnet.NewNet()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create network: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to create network: %w", err)
 	}
 
 	var (
 		netTypes []ice.NetworkType
 		conns    []*net.UDPConn
-		muxes    []ice.UDPMux
+		demuxes  = make(map[ice.NetworkType]*packetDemux)
 	)
 
 	conn4, err4 := netInstance.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
@@ -147,10 +149,7 @@ func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, error) {
 		} else {
 			netTypes = append(netTypes, ice.NetworkTypeUDP4)
 			conns = append(conns, udp4)
-			muxes = append(muxes, ice.NewUDPMuxDefault(ice.UDPMuxParams{
-				UDPConn: conn4,
-				Net:     netInstance,
-			}))
+			demuxes[ice.NetworkTypeUDP4] = newPacketDemux(udp4)
 		}
 	}
 
@@ -163,22 +162,23 @@ func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, error) {
 		} else {
 			netTypes = append(netTypes, ice.NetworkTypeUDP6)
 			conns = append(conns, udp6)
-			muxes = append(muxes, ice.NewUDPMuxDefault(ice.UDPMuxParams{
-				UDPConn: conn6,
-				Net:     netInstance,
-			}))
+			demuxes[ice.NetworkTypeUDP6] = newPacketDemux(udp6)
 		}
 	}
 
-	if len(muxes) == 0 {
-		return nil, nil, nil, fmt.Errorf("failed to create UDP sockets: udp4=%v udp6=%v", err4, err6)
+	if len(demuxes) == 0 {
+		return nil, nil, nil, nil, fmt.Errorf("failed to create UDP sockets: udp4=%v udp6=%v", err4, err6)
 	}
 
-	if len(muxes) == 1 {
-		return netTypes, conns, muxes[0], nil
+	udpMux, err := newDemuxUDPMux(demuxes)
+	if err != nil {
+		for _, demux := range demuxes {
+			_ = demux.Close()
+		}
+		return nil, nil, nil, nil, err
 	}
 
-	return netTypes, conns, ice.NewMultiUDPMuxDefault(muxes...), nil
+	return netTypes, conns, udpMux, demuxes, nil
 }
 
 // StartGathering starts gathering ICE candidates.
@@ -386,47 +386,8 @@ func (p *ICEPeer) UDPConns() []*net.UDPConn {
 	return conns
 }
 
-// icePacketConn wraps ice.Conn to implement net.PacketConn for QUIC.
-type icePacketConn struct {
-	c *ice.Conn
-}
-
-func (c *icePacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	n, err = c.c.Read(p)
-	// Return the remote address of the ICE connection so QUIC knows who sent it.
-	// Note: RemoteAddr might change if ICE switches candidates, which is fine for QUIC migration.
-	return n, c.c.RemoteAddr(), err
-}
-
-func (c *icePacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	// We ignore addr because ice.Conn is already connected to the peer.
-	// In a P2P 1:1 scenario, we only send to that peer.
-	return c.c.Write(p)
-}
-
-func (c *icePacketConn) Close() error {
-	return c.c.Close()
-}
-
-func (c *icePacketConn) LocalAddr() net.Addr {
-	return c.c.LocalAddr()
-}
-
-func (c *icePacketConn) SetDeadline(t time.Time) error {
-	return c.c.SetDeadline(t)
-}
-
-func (c *icePacketConn) SetReadDeadline(t time.Time) error {
-	return c.c.SetReadDeadline(t)
-}
-
-func (c *icePacketConn) SetWriteDeadline(t time.Time) error {
-	return c.c.SetWriteDeadline(t)
-}
-
-// CreatePacketConn creates a new UDP PacketConn for QUIC.
-// It returns a wrapper around the existing ICE connection to ensure
-// we use the same NAT mapping (hole punching) and keepalives.
+// CreatePacketConn returns a PacketConn for QUIC data that uses the ICE-established
+// UDP socket while keeping STUN traffic routed to the ICE agent.
 func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -435,11 +396,39 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		return nil, fmt.Errorf("ICE connection not established")
 	}
 
-	// We wrap the existing ICE connection instead of trying to create a new socket.
-	// Creating a new socket (even on the same port) often fails or breaks the NAT mapping.
-	// By wrapping ice.Conn, we ensure traffic goes through the established path
-	// and ICE keepalives continue to keep the hole open.
-	return &icePacketConn{c: p.conn}, nil
+	demux, err := p.demuxForSelectedPairLocked()
+	if err != nil {
+		return nil, err
+	}
+	return demux.DataConn(), nil
+}
+
+func (p *ICEPeer) demuxForSelectedPairLocked() (*packetDemux, error) {
+	if len(p.demuxers) == 0 {
+		return nil, fmt.Errorf("no UDP demuxers available")
+	}
+	if p.selectedPair != nil {
+		if demux, ok := p.demuxers[p.selectedPair.Local.NetworkType()]; ok {
+			return demux, nil
+		}
+	}
+	if p.remoteAddr != nil {
+		if udpAddr, ok := p.remoteAddr.(*net.UDPAddr); ok {
+			if udpAddr.IP.To4() == nil {
+				if demux, ok := p.demuxers[ice.NetworkTypeUDP6]; ok {
+					return demux, nil
+				}
+			} else {
+				if demux, ok := p.demuxers[ice.NetworkTypeUDP4]; ok {
+					return demux, nil
+				}
+			}
+		}
+	}
+	for _, demux := range p.demuxers {
+		return demux, nil
+	}
+	return nil, fmt.Errorf("no UDP demuxer for selected ICE pair")
 }
 
 // SelectedCandidatePair returns the chosen ICE candidate pair, if available.
@@ -455,16 +444,23 @@ func (p *ICEPeer) Close() error {
 	p.mu.Lock()
 	agent := p.agent
 	udpMux := p.udpMux
+	demuxers := p.demuxers
 	p.agent = nil
 	p.udpMux = nil
 	p.udpConns = nil
+	p.demuxers = nil
 	p.mu.Unlock()
 
 	if udpMux != nil {
 		_ = udpMux.Close()
 	}
 	if agent != nil {
-		return agent.Close()
+		_ = agent.Close()
+	}
+	for _, demux := range demuxers {
+		if demux != nil {
+			_ = demux.Close()
+		}
 	}
 	return nil
 }
