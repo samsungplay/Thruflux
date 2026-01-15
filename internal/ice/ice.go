@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/pion/ice/v2"
 	"github.com/pion/transport/v2/stdnet"
@@ -408,7 +409,9 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		return nil, fmt.Errorf("no UDP demuxer for handoff")
 	}
 	demux.Stop()
-	return demux.Conn(), nil
+	conn := demux.Conn()
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
 
 func (p *ICEPeer) demuxForSelectedPairLocked() (*packetDemux, error) {
