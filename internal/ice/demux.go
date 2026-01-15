@@ -17,8 +17,9 @@ const (
 )
 
 type demuxPacket struct {
-	buf  []byte
-	addr net.Addr
+	buf     []byte
+	addr    net.Addr
+	release func()
 }
 
 type packetDemux struct {
@@ -31,6 +32,7 @@ type packetDemux struct {
 	mu       sync.Mutex
 	stunConn net.PacketConn
 	dataConn net.PacketConn
+	bufPool  sync.Pool
 }
 
 func newPacketDemux(conn *net.UDPConn) *packetDemux {
@@ -40,6 +42,9 @@ func newPacketDemux(conn *net.UDPConn) *packetDemux {
 		dataCh: make(chan demuxPacket, dataQueueDepth),
 		closed: make(chan struct{}),
 	}
+	d.bufPool.New = func() interface{} {
+		return make([]byte, maxUDPPacketSize)
+	}
 	d.stunConn = newDemuxPacketConn(d, d.stunCh)
 	d.dataConn = newDemuxPacketConn(d, d.dataCh)
 	go d.readLoop()
@@ -47,10 +52,11 @@ func newPacketDemux(conn *net.UDPConn) *packetDemux {
 }
 
 func (d *packetDemux) readLoop() {
-	buf := make([]byte, maxUDPPacketSize)
 	for {
+		buf := d.getBuffer()
 		n, addr, err := d.conn.ReadFrom(buf)
 		if err != nil {
+			d.putBuffer(buf)
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -60,16 +66,22 @@ func (d *packetDemux) readLoop() {
 			return
 		}
 		if n == 0 {
+			d.putBuffer(buf)
 			continue
 		}
+		pktBuf := buf
 		pkt := demuxPacket{
-			buf:  append([]byte(nil), buf[:n]...),
+			buf:  pktBuf[:n],
 			addr: addr,
+			release: func() {
+				d.putBuffer(pktBuf)
+			},
 		}
 		if stun.IsMessage(pkt.buf) {
 			select {
 			case d.stunCh <- pkt:
 			case <-d.closed:
+				pkt.release()
 				return
 			}
 			continue
@@ -77,6 +89,7 @@ func (d *packetDemux) readLoop() {
 		select {
 		case d.dataCh <- pkt:
 		default:
+			pkt.release()
 		}
 	}
 }
@@ -100,6 +113,21 @@ func (d *packetDemux) DataConn() net.PacketConn {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.dataConn
+}
+
+func (d *packetDemux) getBuffer() []byte {
+	buf := d.bufPool.Get().([]byte)
+	if cap(buf) < maxUDPPacketSize {
+		return make([]byte, maxUDPPacketSize)
+	}
+	return buf[:maxUDPPacketSize]
+}
+
+func (d *packetDemux) putBuffer(buf []byte) {
+	if cap(buf) < maxUDPPacketSize {
+		return
+	}
+	d.bufPool.Put(buf[:maxUDPPacketSize])
 }
 
 type demuxPacketConn struct {
@@ -135,6 +163,9 @@ func (c *demuxPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 				return 0, nil, io.ErrClosedPipe
 			}
 			n = copy(p, pkt.buf)
+			if pkt.release != nil {
+				pkt.release()
+			}
 			if n < len(pkt.buf) {
 				return n, pkt.addr, io.ErrShortBuffer
 			}
@@ -154,6 +185,9 @@ func (c *demuxPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 			return 0, nil, io.ErrClosedPipe
 		}
 		n = copy(p, pkt.buf)
+		if pkt.release != nil {
+			pkt.release()
+		}
 		if n < len(pkt.buf) {
 			return n, pkt.addr, io.ErrShortBuffer
 		}

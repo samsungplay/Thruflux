@@ -139,10 +139,10 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.UDPWriteBufferBytes = 8 * 1024 * 1024
 	}
 	if cfg.QuicConnWindowBytes <= 0 {
-		cfg.QuicConnWindowBytes = 1024 * 1024 * 1024
+		cfg.QuicConnWindowBytes = 512 * 1024 * 1024
 	}
 	if cfg.QuicStreamWindowBytes <= 0 {
-		cfg.QuicStreamWindowBytes = 32 * 1024 * 1024
+		cfg.QuicStreamWindowBytes = 64 * 1024 * 1024
 	}
 	if cfg.QuicMaxIncomingStreams <= 0 {
 		cfg.QuicMaxIncomingStreams = 100
