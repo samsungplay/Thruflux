@@ -563,6 +563,11 @@ scheduleLoop:
 			break scheduleLoop
 		}
 
+		// Yield briefly to allow FileBegin to traverse the network and be processed by the receiver
+		// before we flood the link with file data on the parallel stream.
+		// This prevents potential SCTP head-of-line blocking or receive window exhaustion deadlock.
+		time.Sleep(50 * time.Millisecond)
+
 		statsMu.Lock()
 		scheduledCount++
 		activeCount++
