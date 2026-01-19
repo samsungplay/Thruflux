@@ -126,6 +126,16 @@ func (p *Prober) GetProbingAddresses() []string {
 				continue
 			}
 
+			// Filter unstable/virtual interfaces that cause packet loss
+			name := strings.ToLower(iface.Name)
+			if strings.Contains(name, "awdl") || // Apple Wireless Direct Link (unstable)
+				strings.Contains(name, "llw") || // Low Latency WLAN (unstable)
+				strings.Contains(name, "utun") || // Userspace Tunnel (VPN)
+				strings.Contains(name, "tun") ||
+				strings.Contains(name, "tap") {
+				continue
+			}
+
 			addrs, err := iface.Addrs()
 			if err != nil {
 				continue
