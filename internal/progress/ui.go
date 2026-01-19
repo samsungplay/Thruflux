@@ -51,11 +51,8 @@ type SenderView struct {
 
 const (
 	colorReset  = "\033[0m"
-	colorDim    = "\033[90m"
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorBlue   = "\033[34m"
 	colorCyan   = "\033[36m"
 )
 
@@ -109,12 +106,12 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			lines := 0
 			if v.OutDir != "" {
-				fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("saving to %s", v.OutDir), colorDim, isTTY))
+				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
 				lines++
 			}
 			if len(v.TransportLines) > 0 {
 				for _, line := range v.TransportLines {
-					fmt.Fprintln(w, colorize(line, colorBlue, isTTY))
+					fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
 					lines++
 				}
 			}
@@ -128,7 +125,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
 			lines++
 			if v.Benchmark {
-				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorYellow, isTTY))
+				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
 				lines++
 			}
 			lastLines = lines
@@ -310,7 +307,7 @@ func writeHeader(w io.Writer, header string, isTTY bool) int {
 	}
 	lines := strings.Split(header, "\n")
 	for _, line := range lines {
-		fmt.Fprintln(w, colorize(line, colorBlue, isTTY))
+		fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
 	}
 	return len(lines)
 }
@@ -345,7 +342,7 @@ func renderBar(percent float64, width int) string {
 func renderConnSection(w io.Writer, peerLabel string, stage string, route string, probes map[string]string, isTTY bool) int {
 	lines := 0
 	if stage != "" && stage != "connect_ok" {
-		stageColor := colorYellow
+		stageColor := colorCyan
 		if strings.Contains(strings.ToUpper(stage), "FAILED") {
 			stageColor = colorRed
 		}
@@ -557,7 +554,7 @@ func renderProbes(w io.Writer, peerID string, probes map[string]string, isTTY bo
 		color := ""
 		switch status {
 		case "probing":
-			color = colorDim
+			color = ""
 		case "failed":
 			color = colorRed
 		case "won":
