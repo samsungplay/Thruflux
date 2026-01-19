@@ -186,6 +186,8 @@ func (c *WebRTCConn) OpenStream(ctx context.Context) (transfer.Stream, error) {
 		ordered = c.config.Ordered
 	}
 
+	c.logger.Debug("opening stream", "label", label, "ordered", ordered)
+
 	dc, err := c.pc.CreateDataChannel(label, &webrtc.DataChannelInit{
 		Ordered: &ordered,
 	})
@@ -200,11 +202,16 @@ func (c *WebRTCConn) OpenStream(ctx context.Context) (transfer.Stream, error) {
 	}
 
 	// Wait for the data channel to open
+	// We need to hook into OnOpen safely. newWebRTCStreamFromDC already set OnOpen.
+	// But we need to know when *Process* is complete.
+	// stream.openCh is closed when Detach is done.
+
 	select {
 	case <-ctx.Done():
 		stream.Close()
 		return nil, ctx.Err()
 	case <-stream.openCh:
+		c.logger.Debug("stream opened", "label", label)
 		return stream, nil
 	case <-time.After(30 * time.Second):
 		stream.Close()

@@ -123,9 +123,15 @@ type transferSlot struct {
 
 // RunSnapshotSender runs the snapshot sender flow.
 func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSenderConfig) error {
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Force logging to file for debugging
+	logFile, _ := os.OpenFile("debug_sender.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// We don't close logFile here as it needs to stay open for the duration of the program
+	// simplified for debugging context.
+
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
 	}
+	logger = slog.New(slog.NewTextHandler(logFile, opts))
 	if len(cfg.Paths) == 0 {
 		return fmt.Errorf("no input paths provided")
 	}

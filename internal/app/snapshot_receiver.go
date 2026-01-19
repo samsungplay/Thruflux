@@ -41,9 +41,13 @@ type SnapshotReceiverConfig struct {
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
 func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotReceiverConfig) error {
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Force logging to file for debugging
+	logFile, _ := os.OpenFile("debug_receiver.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
 	}
+	logger = slog.New(slog.NewTextHandler(logFile, opts))
 	if cfg.JoinCode == "" {
 		return fmt.Errorf("join code required")
 	}
