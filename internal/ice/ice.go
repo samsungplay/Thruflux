@@ -91,6 +91,17 @@ func (p *Prober) Close() error {
 	return p.udpConn.Close()
 }
 
+// Transport returns the underlying quic.Transport, initializing it if needed.
+// This allows callers to use the same transport for both dialing and listening.
+func (p *Prober) Transport() *quic.Transport {
+	if p.transport == nil {
+		p.transport = &quic.Transport{
+			Conn: p.udpConn,
+		}
+	}
+	return p.transport
+}
+
 // GetProbingAddresses returns a list of local and public addresses to share with peers.
 func (p *Prober) GetProbingAddresses() []string {
 	var candidates []string

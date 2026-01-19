@@ -604,25 +604,25 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	// We need to upgrade the packet conn to a listener
 	// Prober exposes the underlying PacketConn via ListenPacket()?
 	// ice.go: ListenPacket() net.PacketConn
-	if pConn := prober.ListenPacket(); pConn != nil {
-		l, err := quictransport.ListenWithConfig(raceCtx, pConn, s.logger, quictransport.DefaultServerQUICConfig())
-		if err == nil {
-			defer l.Close()
-			go func() {
-				// Accept loop
-				conn, err := l.Accept(raceCtx)
-				if err == nil {
-					select {
-					case acceptResCh <- conn:
-						s.setProbeStatus(peerID, conn.RemoteAddr().String(), ice.ProbeStateWon)
-					case <-raceCtx.Done():
-						conn.CloseWithError(0, "race_lost")
-					}
+	// 2. Start Listening (Accept)
+	// Use the unified Transport from Prober to listen on the same socket used for dialing
+	l, err := prober.Transport().Listen(quictransport.ServerConfig(), quictransport.DefaultServerQUICConfig())
+	if err == nil {
+		defer l.Close()
+		go func() {
+			// Accept loop
+			conn, err := l.Accept(raceCtx)
+			if err == nil {
+				select {
+				case acceptResCh <- conn:
+					s.setProbeStatus(peerID, conn.RemoteAddr().String(), ice.ProbeStateWon)
+				case <-raceCtx.Done():
+					conn.CloseWithError(0, "race_lost")
 				}
-			}()
-		} else {
-			s.logger.Warn("failed to start listener for bidirectional", "error", err)
-		}
+			}
+		}()
+	} else {
+		s.logger.Warn("failed to start listener for bidirectional", "error", err)
 	}
 
 	var quicConn *quic.Conn
