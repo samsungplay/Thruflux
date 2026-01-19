@@ -343,11 +343,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 	if limits.maxMessageBytes > 0 {
 		conn.SetReadLimit(int64(limits.maxMessageBytes))
 	}
+	var writeMu sync.Mutex
 	if limits.wsIdleTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(limits.wsIdleTimeout))
 		conn.SetPongHandler(func(string) error {
 			conn.SetReadDeadline(time.Now().Add(limits.wsIdleTimeout))
 			return nil
+		})
+		conn.SetPingHandler(func(appData string) error {
+			conn.SetReadDeadline(time.Now().Add(limits.wsIdleTimeout))
+			writeMu.Lock()
+			err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
+			writeMu.Unlock()
+			return err
 		})
 	}
 
@@ -363,12 +371,34 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 
 	// Send function for this connection
 	sendFunc := func(env protocol.Envelope) error {
-		return conn.WriteJSON(env)
+		writeMu.Lock()
+		err := conn.WriteJSON(env)
+		writeMu.Unlock()
+		return err
 	}
 
 	// Add peer to hub
 	removePeer := hub.Add(sess.ID, peer, sendFunc, func() { _ = conn.Close() })
 	defer removePeer()
+
+	if limits.wsIdleTimeout > 0 {
+		stopPing := make(chan struct{})
+		defer close(stopPing)
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopPing:
+					return
+				case <-ticker.C:
+					writeMu.Lock()
+					_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+					writeMu.Unlock()
+				}
+			}
+		}()
+	}
 
 	fmt.Printf("peer connected session_id=%s peer_id=%s role=%s conn_id=%s\n", sess.ID, peerID, role, connID)
 
