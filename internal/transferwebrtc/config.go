@@ -27,14 +27,10 @@ func DefaultPeerConnectionConfig(stunServers, turnServers []string) webrtc.Confi
 	}
 }
 
-// DefaultSettingEngine returns a SettingEngine configured for high throughput.
+// DefaultSettingEngine returns a SettingEngine configured for WebRTC.
 func DefaultSettingEngine() webrtc.SettingEngine {
 	se := webrtc.SettingEngine{}
-
-	// Enable detached data channels for direct io.ReadWriteCloser access
-	// This provides higher throughput than the callback-based API
-	se.DetachDataChannels()
-
+	// Using OnMessage callback API (not detached) for stability
 	return se
 }
 
