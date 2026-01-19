@@ -70,14 +70,10 @@ func Dial(ctx context.Context, wsURL string, logger *slog.Logger) (*Conn, error)
 // ReadLoop reads messages from the WebSocket connection and calls onEnv for each envelope.
 // Returns when the connection is closed or context is cancelled.
 func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) error {
-	// Set read deadline
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 	c.conn.SetPingHandler(func(appData string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		c.writeMu.Lock()
 		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		err := c.conn.WriteMessage(websocket.PongMessage, []byte(appData))
