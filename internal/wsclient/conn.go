@@ -76,6 +76,13 @@ func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) 
 		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
+	c.conn.SetPingHandler(func(appData string) error {
+		c.writeMu.Lock()
+		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		err := c.conn.WriteMessage(websocket.PongMessage, []byte(appData))
+		c.writeMu.Unlock()
+		return err
+	})
 
 	// Start pinger
 	go func() {
