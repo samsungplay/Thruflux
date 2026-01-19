@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 )
@@ -222,6 +223,11 @@ func (c *mockConn) Close() error {
 	c.transport.mu.Unlock()
 
 	return nil
+}
+
+// RemoteAddr returns a dummy remote address.
+func (c *mockConn) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
 }
 
 // Read reads data from the stream.

@@ -116,6 +116,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 				fmt.Fprintf(w, "%s\n", v.Route)
 				lines++
 			}
+			lines += renderProbes(w, "receiver", v.Probes)
 			fmt.Fprintf(w, "%s\n", formatReceiverLine(v))
 			lines++
 			currentFile := v.CurrentFile

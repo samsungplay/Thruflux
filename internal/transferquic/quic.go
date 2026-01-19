@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 
 	"github.com/quic-go/quic-go"
@@ -179,6 +180,16 @@ func (c *QUICConn) AcceptStream(ctx context.Context) (transfer.Stream, error) {
 		stream: stream,
 		logger: c.logger,
 	}, nil
+}
+
+// RemoteAddr returns the remote network address.
+func (c *QUICConn) RemoteAddr() net.Addr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return &net.UDPAddr{}
+	}
+	return c.conn.RemoteAddr()
 }
 
 // Close closes the connection and all associated streams.

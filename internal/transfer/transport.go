@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"io"
+	"net"
 )
 
 // Transport represents an established peer-to-peer path.
@@ -33,6 +34,9 @@ type Conn interface {
 	// AcceptStream waits for and accepts an incoming stream from the remote peer.
 	// Returns a Stream that can be used for reading and writing.
 	AcceptStream(ctx context.Context) (Stream, error)
+
+	// RemoteAddr returns the remote network address.
+	RemoteAddr() net.Addr
 
 	// Close closes the connection and all associated streams.
 	Close() error

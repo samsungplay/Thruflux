@@ -349,13 +349,80 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer quicTransport.Close()
 
 	iceLog("waiting_for_connection")
-	transferConn, err := quicTransport.Accept(baseCtx)
-	if err != nil {
-		r.logger.Error("failed to accept transfer connection", "error", err)
+
+	// Bidirectional Probing: Dial sender candidates while accepting
+	dialResCh := make(chan transfer.Conn, 1)
+	probeCtx, probeCancel := context.WithCancel(baseCtx)
+	defer probeCancel()
+
+	go func() {
+		for {
+			select {
+			case <-probeCtx.Done():
+				return
+			case env := <-r.signalCh:
+				if env.Type == protocol.TypeIceCandidates {
+					var cands protocol.IceCandidates
+					if err := env.DecodePayload(&cands); err != nil {
+						r.logger.Error("failed to decode sender candidates", "error", err)
+						continue
+					}
+					r.logger.Info("received sender candidates", "count", len(cands.Candidates))
+					// We use ProbeAndDial (which expects ClientConfig)
+					quicConn, err := prober.ProbeAndDial(probeCtx, cands.Candidates, quictransport.ClientConfig(), quicCfg, func(upd ice.ProbeUpdate) {
+						progressState.SetProbeStatus(upd.Addr, upd.State)
+					})
+					if err == nil {
+						tconn, derr := transferquic.NewDialer(quicConn, r.logger).Dial(probeCtx, r.senderID)
+						if derr == nil {
+							select {
+							case dialResCh <- tconn:
+								r.logger.Info("outgoing dial won the race", "addr", quicConn.RemoteAddr())
+							default:
+								tconn.Close()
+							}
+						} else {
+							quicConn.CloseWithError(0, "dial_failed")
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	acceptResCh := make(chan transfer.Conn, 1)
+	go func() {
+		conn, err := quicTransport.Accept(probeCtx)
+		if err == nil {
+			select {
+			case acceptResCh <- conn:
+				r.logger.Info("incoming accept won the race", "addr", conn.RemoteAddr())
+			default:
+				conn.Close()
+			}
+		}
+	}()
+
+	var transferConn transfer.Conn
+	select {
+	case <-baseCtx.Done():
 		exitWith(1)
+	case tc := <-dialResCh:
+		transferConn = tc
+		iceLog("connect_ok (dial)")
+	case tc := <-acceptResCh:
+		transferConn = tc
+		iceLog("connect_ok (accept)")
 	}
+	probeCancel() // Stop other attempts
+
+	// Log route
+	if transferConn != nil {
+		progressState.SetRoute(fmt.Sprintf("route %s", transferConn.RemoteAddr()))
+	}
+
 	defer transferConn.Close()
-	fmt.Fprintf(os.Stderr, "accepted QUIC transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
+	fmt.Fprintf(os.Stderr, "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
 
 	opts := transfer.Options{
 		Resume:    true,
@@ -420,6 +487,7 @@ type receiverProgress struct {
 	totalBytes       int64
 	snapshotID       string
 	outDir           string
+	probes           map[string]ice.ProbeState
 	mu               sync.Mutex
 }
 
@@ -449,6 +517,7 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		totalBytes:       totalBytes,
 		snapshotID:       snapshotID,
 		outDir:           outDir,
+		probes:           make(map[string]ice.ProbeState),
 	}
 	if benchmark {
 		state.benchmark = true
@@ -507,6 +576,12 @@ func (p *receiverProgress) SetIceStage(stage string) {
 func (p *receiverProgress) SetTransportLines(lines []string) {
 	p.mu.Lock()
 	p.transportLines = append([]string(nil), lines...)
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetProbeStatus(addr string, state ice.ProbeState) {
+	p.mu.Lock()
+	p.probes[addr] = state
 	p.mu.Unlock()
 }
 
@@ -649,6 +724,10 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	snapshotID := p.snapshotID
 	outDir := p.outDir
 	resumedFiles := p.resumedFiles
+	probes := make(map[string]string)
+	for k, v := range p.probes {
+		probes[k] = v.String()
+	}
 	p.mu.Unlock()
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
@@ -663,6 +742,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		FileDone:       done,
 		FileTotal:      total,
 		Route:          route,
+		Probes:         probes,
 	}
 }
 
