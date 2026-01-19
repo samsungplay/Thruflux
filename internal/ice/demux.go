@@ -121,22 +121,36 @@ func (d *packetDemux) Stop() {
 func (d *packetDemux) StopAndGetBuffered() []demuxPacket {
 	var buffered []demuxPacket
 	d.stopOnce.Do(func() {
-		close(d.closed)
+		// 1. Force readLoop to error out and exit
 		_ = d.conn.SetReadDeadline(time.Now())
-		<-d.readDone
 
-		// Drain data channel into slice
+		// 2. Consume packets while waiting for readLoop to exit
+		// If readLoop is blocked sending to dataCh, this frees it.
+	CollectLoop:
+		for {
+			select {
+			case pkt := <-d.dataCh:
+				buffered = append(buffered, pkt)
+			case <-d.readDone:
+				break CollectLoop
+			}
+		}
+
+		// 3. Final drain of dataCh (in case readLoop wrote one just before exiting)
+	FinalDrain:
 		for {
 			select {
 			case pkt := <-d.dataCh:
 				buffered = append(buffered, pkt)
 			default:
-				goto Drained
+				break FinalDrain
 			}
 		}
-	Drained:
 
-		// Drain stun channel (discard)
+		// 4. Now safe to close "closed" channel
+		close(d.closed)
+
+		// 5. Drain STUN channel
 		for {
 			select {
 			case pkt := <-d.stunCh:
