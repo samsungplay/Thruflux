@@ -2,10 +2,22 @@ package ice
 
 import (
 	"errors"
+	"log"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
+)
+
+// Debug flag - set THRUFLUX_DEMUX_DEBUG=1 to enable
+var demuxDebug = os.Getenv("THRUFLUX_DEMUX_DEBUG") == "1"
+
+// Counters for debugging
+var (
+	demuxStunPackets atomic.Int64
+	demuxAppPackets  atomic.Int64
+	demuxDropped     atomic.Int64
 )
 
 // packetDemux splits a UDP connection into two: one for ICE (STUN/TURN) and one for Application (QUIC).
@@ -111,8 +123,16 @@ func (p *packetDemux) readLoop() {
 		// So 0x40 | ... is > 0x03.
 		// If 0-RTT etc, might be different. But user asked for this specific filter.
 		if pkt[0] <= 3 {
+			demuxStunPackets.Add(1)
+			if demuxDebug {
+				log.Printf("[demux] STUN packet from %v, len=%d, first_byte=0x%02x", addr, n, pkt[0])
+			}
 			p.stunConn.push(pkt, addr)
 		} else {
+			demuxAppPackets.Add(1)
+			if demuxDebug {
+				log.Printf("[demux] APP packet from %v, len=%d, first_byte=0x%02x", addr, n, pkt[0])
+			}
 			p.appConn.push(pkt, addr)
 		}
 	}
@@ -169,10 +189,16 @@ func (v *virtualPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error)
 
 	select {
 	case <-v.closeCh:
+		if demuxDebug {
+			log.Printf("[demux] ReadFrom returning closed, err=%v", v.closedErr)
+		}
 		return 0, nil, v.closedErr
 	case pkt := <-v.readCh:
 		n = copy(p, pkt.data)
 		addr = pkt.addr
+		if demuxDebug && n > 0 {
+			log.Printf("[demux] ReadFrom returning packet from %v, len=%d, first_byte=0x%02x", addr, n, pkt.data[0])
+		}
 		return n, addr, nil
 	case <-timeoutCh:
 		return 0, nil, os.ErrDeadlineExceeded
@@ -186,7 +212,11 @@ func (v *virtualPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) 
 	// Write directly to underlying connection
 	// We ignore write deadlines because they are hard to virtualize on a shared socket
 	// without blocking others. The underlying socket remains non-blocking or blocking default.
-	return v.p.conn.WriteTo(p, addr)
+	n, err = v.p.conn.WriteTo(p, addr)
+	if demuxDebug && len(p) > 0 {
+		log.Printf("[demux] WriteTo %v, len=%d, first_byte=0x%02x, err=%v", addr, len(p), p[0], err)
+	}
+	return n, err
 }
 
 func (v *virtualPacketConn) Close() error {
@@ -217,12 +247,19 @@ func (v *virtualPacketConn) push(data []byte, addr net.Addr) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
+		if demuxDebug {
+			log.Printf("[demux] push to closed conn, dropping packet from %v, len=%d", addr, len(data))
+		}
 		return
 	}
 	select {
 	case v.readCh <- packetData{data, addr}:
 	default:
 		// Drop if buffer full
+		demuxDropped.Add(1)
+		if demuxDebug {
+			log.Printf("[demux] DROPPED packet from %v, len=%d, buffer full (len=%d)", addr, len(data), len(v.readCh))
+		}
 	}
 }
 
@@ -245,4 +282,9 @@ func (v *virtualPacketConn) isClosed() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.closed
+}
+
+// DemuxStats returns packet routing statistics for debugging.
+func DemuxStats() (stunPackets, appPackets, dropped int64) {
+	return demuxStunPackets.Load(), demuxAppPackets.Load(), demuxDropped.Load()
 }

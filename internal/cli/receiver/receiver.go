@@ -1396,7 +1396,7 @@ func runQUICTransferTest(ctx context.Context, logger *slog.Logger, conn *wsclien
 	iceLog("ice stage=connect_start role=receiver\n")
 	connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer connectCancel()
-	iceConn, err := icePeer.Accept(connectCtx)
+	_, err = icePeer.Accept(connectCtx)
 	if err != nil {
 		return fmt.Errorf("failed to establish ICE connection: %w", err)
 	}
@@ -1409,7 +1409,8 @@ func runQUICTransferTest(ctx context.Context, logger *slog.Logger, conn *wsclien
 		return fmt.Errorf("failed to get PacketConn info: %w", err)
 	}
 
-	iceConn.Close()
+	// Do NOT close iceConn here. We use the underlying socket for QUIC.
+	// iceConn.Close()
 
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {

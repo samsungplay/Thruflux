@@ -417,6 +417,11 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		p.mu.Unlock()
 		return nil, fmt.Errorf("ICE connection not established")
 	}
+	p.logger.Debug("CreatePacketConn: getting demux for selected pair",
+		"local_addr", p.localAddr,
+		"remote_addr", p.remoteAddr,
+		"selected_pair_local", p.selectedPair.Local.String(),
+		"selected_pair_remote", p.selectedPair.Remote.String())
 	demux, err := p.demuxForSelectedPairLocked()
 	// We do NOT nil out p.agent; we want to keep it alive for NAT keepalives.
 	p.mu.Unlock()
@@ -435,6 +440,7 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	// Return the virtual connection for the application (QUIC), not the raw socket
 	conn := demux.AppConn()
 	_ = conn.SetDeadline(time.Time{})
+	p.logger.Debug("CreatePacketConn: returning appConn", "local_addr", conn.LocalAddr())
 	return conn, nil
 }
 
