@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +21,7 @@ type Conn struct {
 	logger   *slog.Logger
 	sendChan chan protocol.Envelope
 	done     chan struct{}
+	writeMu  sync.Mutex
 }
 
 var dialer = websocket.Dialer{
@@ -84,8 +86,11 @@ func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				c.writeMu.Lock()
 				c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				err := c.conn.WriteMessage(websocket.PingMessage, nil)
+				c.writeMu.Unlock()
+				if err != nil {
 					return
 				}
 			}
@@ -93,10 +98,10 @@ func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) 
 	}()
 
 	go func() {
-        <-ctx.Done()
-        // Closing the connection forces ReadMessage() to unblock instantly
-        c.conn.Close() 
-    }()
+		<-ctx.Done()
+		// Closing the connection forces ReadMessage() to unblock instantly
+		c.conn.Close()
+	}()
 
 	for {
 		// Check context
@@ -152,8 +157,11 @@ func (c *Conn) writeLoop() {
 			if !ok {
 				return
 			}
+			c.writeMu.Lock()
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.conn.WriteJSON(env); err != nil {
+			err := c.conn.WriteJSON(env)
+			c.writeMu.Unlock()
+			if err != nil {
 				c.logger.Error("websocket write error", "error", err)
 				return
 			}
@@ -165,5 +173,7 @@ func (c *Conn) writeLoop() {
 func (c *Conn) Close() error {
 	close(c.sendChan)
 	<-c.done // Wait for write loop to finish
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.conn.Close()
 }

@@ -685,6 +685,28 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 		}
 	}()
 
+	// Sidecar flusher
+	flushDone := make(chan struct{})
+	if resume != nil && resume.sidecar != nil {
+		go func() {
+			defer close(flushDone)
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-readerCtx.Done():
+					return
+				case <-ticker.C:
+					_ = resume.sidecar.Flush()
+				}
+			}
+		}()
+	} else {
+		close(flushDone)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -707,16 +729,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 			bytesReceived += uint64(chunk.n)
 			if resume != nil && resume.sidecar != nil {
 				resume.sidecar.MarkComplete(chunk.index)
-				resume.dirtyChunks++
-				now := time.Now()
-				if resume.dirtyChunks >= 128 || now.Sub(resume.lastFlush) >= time.Second {
-					if err := resume.sidecar.Flush(); err != nil {
-						bufPool.Put(chunk.buf)
-						return 0, err
-					}
-					resume.dirtyChunks = 0
-					resume.lastFlush = now
-				}
+				// Flushing is now handled by the background goroutine
 			}
 			if progressFn != nil {
 				progressFn(relPath, int64(bytesReceived), int64(fileSize))
@@ -726,7 +739,10 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 
 done:
+	readerCancel() // Stop the reader
+	<-flushDone    // Wait for flusher to exit
 	if resume != nil && resume.sidecar != nil {
+		// Final flush
 		if err := resume.sidecar.Flush(); err != nil {
 			return 0, err
 		}

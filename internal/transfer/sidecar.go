@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
@@ -26,6 +27,7 @@ type Sidecar struct {
 	TotalChunks uint32
 	bitmap      *Bitmap
 	dirty       bool
+	mu          sync.Mutex
 }
 
 // SidecarPath returns the sidecar path for an item ID.
@@ -151,6 +153,8 @@ func CreateSidecar(path, fileID string, fileSize int64, chunkSize uint32) (*Side
 
 // MarkComplete marks chunk i as complete.
 func (s *Sidecar) MarkComplete(i uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || s.bitmap == nil {
 		return
 	}
@@ -163,6 +167,8 @@ func (s *Sidecar) MarkComplete(i uint32) {
 
 // IsComplete reports if chunk i is marked complete.
 func (s *Sidecar) IsComplete(i uint32) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || s.bitmap == nil {
 		return false
 	}
@@ -171,6 +177,8 @@ func (s *Sidecar) IsComplete(i uint32) bool {
 
 // HighestComplete returns the highest chunk index marked complete.
 func (s *Sidecar) HighestComplete() (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || s.bitmap == nil {
 		return -1, false
 	}
@@ -179,12 +187,14 @@ func (s *Sidecar) HighestComplete() (int, bool) {
 
 // HighestContiguous returns the highest contiguous completed chunk index.
 func (s *Sidecar) HighestContiguous() (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || s.bitmap == nil || s.TotalChunks == 0 {
 		return -1, false
 	}
 	last := -1
 	for i := uint32(0); i < s.TotalChunks; i++ {
-		if !s.IsComplete(i) {
+		if !s.bitmap.Get(int(i)) {
 			break
 		}
 		last = int(i)
@@ -197,6 +207,8 @@ func (s *Sidecar) HighestContiguous() (int, bool) {
 
 // MarshalBitmap returns the bitmap bytes.
 func (s *Sidecar) MarshalBitmap() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || s.bitmap == nil {
 		return nil
 	}
@@ -205,6 +217,8 @@ func (s *Sidecar) MarshalBitmap() []byte {
 
 // Flush writes the sidecar to disk if dirty.
 func (s *Sidecar) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s == nil || !s.dirty {
 		return nil
 	}
