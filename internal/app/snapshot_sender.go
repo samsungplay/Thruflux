@@ -624,18 +624,22 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		s.setSenderRoute(peerID, route)
 	}
 
+	fmt.Fprintf(os.Stderr, "[TRACE] getting PacketConnInfo...\n")
 	_, remoteAddr, err := icePeer.PacketConnInfo()
 	if err != nil {
 		return fmt.Errorf("failed to get PacketConn info: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "[TRACE] PacketConnInfo ok, remoteAddr=%v\n", remoteAddr)
 	// Do NOT close iceConn. We use it for QUIC.
 	// iceConn.Close()
 
+	fmt.Fprintf(os.Stderr, "[TRACE] creating PacketConn...\n")
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {
 		return fmt.Errorf("failed to create PacketConn: %w", err)
 	}
 	defer udpConn.Close()
+	fmt.Fprintf(os.Stderr, "[TRACE] PacketConn created, localAddr=%v\n", udpConn.LocalAddr())
 
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
 	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
@@ -656,6 +660,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		[]string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)},
 	)
 
+	fmt.Fprintf(os.Stderr, "[TRACE] QUIC dial starting to %v...\n", remoteAddr)
 	quicConn, err := quictransport.DialWithConfig(ctx, udpConn, remoteAddr, s.logger, quicCfg)
 	if err != nil {
 		return fmt.Errorf("failed to dial QUIC connection: %w", err)

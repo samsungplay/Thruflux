@@ -467,20 +467,24 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		progressState.SetRoute(route)
 	}
 
+	fmt.Fprintf(os.Stderr, "[TRACE] getting PacketConnInfo...\n")
 	_, _, err = icePeer.PacketConnInfo()
 	if err != nil {
 		r.logger.Error("failed to get PacketConn info", "error", err)
 		exitWith(1)
 	}
+	fmt.Fprintf(os.Stderr, "[TRACE] PacketConnInfo ok\n")
 	// Do NOT close iceConn here. We use it for QUIC.
 	// iceConn.Close()
 
+	fmt.Fprintf(os.Stderr, "[TRACE] creating PacketConn...\n")
 	udpConn, err := icePeer.CreatePacketConn()
 	if err != nil {
 		r.logger.Error("failed to create PacketConn", "error", err)
 		exitWith(1)
 	}
 	defer udpConn.Close()
+	fmt.Fprintf(os.Stderr, "[TRACE] PacketConn created, localAddr=%v\n", udpConn.LocalAddr())
 
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
 	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
@@ -506,17 +510,20 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listen starting...\n")
 	quicListener, err := quictransport.ListenWithConfig(baseCtx, udpConn, r.logger, quicCfg)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)
 		exitWith(1)
 	}
 	defer quicListener.Close()
+	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listener created\n")
 	fmt.Fprintf(os.Stderr, "waiting for QUIC transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
 
 	quicTransport := transferquic.NewListener(quicListener, r.logger)
 	defer quicTransport.Close()
 
+	fmt.Fprintf(os.Stderr, "[TRACE] waiting for QUIC Accept...\n")
 	transferConn, err := quicTransport.Accept(baseCtx)
 	if err != nil {
 		r.logger.Error("failed to accept transfer connection", "error", err)
