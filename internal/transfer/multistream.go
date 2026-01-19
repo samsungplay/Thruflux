@@ -774,10 +774,37 @@ scheduleLoop:
 // RecvManifestMultiStream receives a manifest over the control stream and
 // reads each file over a dedicated data stream (sequentially).
 func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts Options) (manifest.Manifest, error) {
-	controlStream, err := conn.AcceptStream(ctx)
-	if err != nil {
-		return manifest.Manifest{}, fmt.Errorf("failed to accept control stream: %w", err)
+	// Accept streams until we find the Control Stream (ID 1).
+	// Because data streams (ID > 1) are Unordered, they might arrive first.
+	// We need to buffer any early data streams to be processed later.
+	var controlStream Stream
+	pendingStreams := make([]Stream, 0)
+
+	// Stream ID 1 is always the Control Stream in our protocol
+	const controlStreamID = 1
+
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			return manifest.Manifest{}, fmt.Errorf("failed to accept stream: %w", err)
+		}
+
+		idFunc, ok := stream.(StreamIDer)
+		if !ok {
+			stream.Close()
+			return manifest.Manifest{}, fmt.Errorf("stream does not support ID")
+		}
+
+		sid := idFunc.StreamID()
+		if sid == controlStreamID {
+			controlStream = stream
+			break
+		}
+
+		// Buffer non-control streams
+		pendingStreams = append(pendingStreams, stream)
 	}
+
 	defer controlStream.Close()
 
 	m, err := readControlHeader(controlStream)
@@ -804,6 +831,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	}
 
 	registry := newStreamRegistry()
+
+	// Register any streams we buffered while waiting for control stream
+	for _, s := range pendingStreams {
+		idFunc, _ := s.(StreamIDer)
+		registry.add(idFunc.StreamID(), s)
+	}
+
 	acceptErrChan := make(chan error, 1)
 
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
