@@ -33,6 +33,7 @@ type Prober struct {
 	udpConn    *net.UDPConn
 	transport  *quic.Transport
 	publicAddr net.Addr
+	mu         sync.Mutex
 }
 
 // NewProber creates a new network prober.
@@ -85,6 +86,8 @@ func (p *Prober) ListenPacket() net.PacketConn {
 
 // Close closes the underlying UDP connection or transport.
 func (p *Prober) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.transport != nil {
 		return p.transport.Close()
 	}
@@ -94,6 +97,8 @@ func (p *Prober) Close() error {
 // Transport returns the underlying quic.Transport, initializing it if needed.
 // This allows callers to use the same transport for both dialing and listening.
 func (p *Prober) Transport() *quic.Transport {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.transport == nil {
 		p.transport = &quic.Transport{
 			Conn: p.udpConn,
@@ -196,11 +201,13 @@ type ProbeUpdate struct {
 func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (*quic.Conn, error) {
 	// Initialize Transport if not already done.
 	// We do this here (lazy init) or we could do it earlier, but STUN works better on raw UDP.
+	p.mu.Lock()
 	if p.transport == nil {
 		p.transport = &quic.Transport{
 			Conn: p.udpConn,
 		}
 	}
+	p.mu.Unlock()
 
 	// Helper to parse address
 	parseAddr := func(addrStr string) (net.Addr, error) {
