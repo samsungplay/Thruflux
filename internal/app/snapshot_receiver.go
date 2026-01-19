@@ -748,7 +748,25 @@ func (r *snapshotReceiver) runWebRTCTransfer(start protocol.TransferStart) {
 	}
 	iceLog("answer_sent")
 
-	// Process any trickled ICE candidates
+	// Create WebRTC transport BEFORE waiting for connection
+	// This registers OnDataChannel early so we don't miss data channels from sender
+	webrtcConfig := transferwebrtc.Config{
+		Ordered:     true,
+		MaxChannels: 100,
+		Logger:      r.logger,
+	}
+	webrtcTransport := transferwebrtc.NewTransport(pc, webrtcConfig)
+	defer webrtcTransport.Close()
+
+	// Pre-create the transferConn to register OnDataChannel handler
+	transferConn, err := webrtcTransport.Accept(baseCtx)
+	if err != nil {
+		r.logger.Error("failed to create transfer connection", "error", err)
+		exitWith(1)
+	}
+	defer transferConn.Close()
+
+	// Now wait for ICE candidates to be processed
 	go func() {
 		for {
 			select {
@@ -796,21 +814,6 @@ func (r *snapshotReceiver) runWebRTCTransfer(start protocol.TransferStart) {
 		}
 	}
 
-	// Create WebRTC transport
-	webrtcConfig := transferwebrtc.Config{
-		Ordered:     true,
-		MaxChannels: 100,
-		Logger:      r.logger,
-	}
-	webrtcTransport := transferwebrtc.NewTransport(pc, webrtcConfig)
-	defer webrtcTransport.Close()
-
-	transferConn, err := webrtcTransport.Accept(baseCtx)
-	if err != nil {
-		r.logger.Error("failed to accept transfer connection", "error", err)
-		exitWith(1)
-	}
-	defer transferConn.Close()
 	fmt.Fprintf(os.Stderr, "accepted webrtc transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
 
 	opts := transfer.Options{
