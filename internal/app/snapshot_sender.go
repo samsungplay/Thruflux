@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -221,6 +222,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	s.logSnapshotState()
 	s.tuneTTY = progress.IsTTY(os.Stdout)
 	s.initParams()
+	s.initTransport()
 
 	if s.benchmark {
 		s.startBenchmarkLoop(ctx)
@@ -943,6 +945,29 @@ func (s *SnapshotSender) initParams() {
 	}
 	s.paramsMu.Unlock()
 	s.setTuneLine(fmt.Sprintf("Params: %s", formatTuneParams(s.getParams())))
+}
+
+func (s *SnapshotSender) initTransport() {
+	var udpTune transport.UdpTuneResult
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err == nil {
+		udpTune = transport.ApplyUDPBeyondBestEffort(conn, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+		conn.Close()
+	} else {
+		udpTune = transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	}
+
+	_, quicTune := transport.BuildQuicConfig(
+		quictransport.DefaultClientQUICConfig(),
+		s.quicConnWindowBytes,
+		s.quicStreamWindowBytes,
+		s.quicMaxIncomingStreams,
+	)
+
+	s.setTransportLines(
+		formatTransportSummary(udpTune, quicTune),
+		[]string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)},
+	)
 }
 
 func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {

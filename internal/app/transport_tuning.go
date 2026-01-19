@@ -8,14 +8,14 @@ import (
 )
 
 func formatTransportSummary(udp transport.UdpTuneResult, quic transport.QuicTuneResult) string {
-	return fmt.Sprintf("Transport: udpbuf=%s quicwin=%s", normalizeStatus(udp.Status), normalizeStatus(quic.Status))
+	return fmt.Sprintf("Transport: dpbuf=%s quicwin=%s", normalizeStatus(udp.Status), normalizeStatus(quic.Status))
 }
 
 func formatUDPTuneLine(result transport.UdpTuneResult) string {
 	appliedR := formatAppliedBytes(result.AppliedR)
 	appliedW := formatAppliedBytes(result.AppliedW)
 	line := fmt.Sprintf(
-		"UDP buffers: requested r=%s w=%s -> applied r=%s w=%s status=%s",
+		"DP buffers: requested r=%s w=%s -> applied r=%s w=%s status=%s",
 		transport.FormatBytesMiB(result.RequestedR),
 		transport.FormatBytesMiB(result.RequestedW),
 		appliedR,
