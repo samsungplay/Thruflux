@@ -96,6 +96,9 @@ func (p *packetDemux) readLoop() {
 	for {
 		// We rely on p.conn.Close() to unblock ReadFrom
 		n, addr, err := p.conn.ReadFrom(buf)
+		if demuxDebug {
+			log.Printf("[demux] readLoop iteration: received n=%d, addr=%v, err=%v", n, addr, err)
+		}
 		if err != nil {
 			if demuxDebug {
 				log.Printf("[demux] readLoop read error: %v, closed=%v", err, p.isClosed())

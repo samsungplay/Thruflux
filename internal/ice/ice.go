@@ -77,9 +77,10 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 	}
 
 	config := &ice.AgentConfig{
-		NetworkTypes: netTypes,
-		Urls:         urls,
-		UDPMux:       udpMux,
+		NetworkTypes:      netTypes,
+		Urls:              urls,
+		UDPMux:            udpMux,
+		KeepaliveInterval: ptrDuration(2 * time.Second), // Send keepalives every 2s to maintain NAT bindings
 	}
 
 	if cfg.PreferLAN {
@@ -570,4 +571,9 @@ func CalculateSpeedScore(iface net.Interface) int {
 	}
 
 	return score
+}
+
+// ptrDuration returns a pointer to the given duration.
+func ptrDuration(d time.Duration) *time.Duration {
+	return &d
 }
