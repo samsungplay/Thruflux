@@ -391,7 +391,7 @@ func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	return detached.Write(p)
 }
 
-// Close closes the stream.
+// Close closes the stream, waiting for buffered data to be sent.
 func (s *WebRTCStream) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -401,6 +401,21 @@ func (s *WebRTCStream) Close() error {
 	s.closed = true
 	detached := s.detached
 	s.mu.Unlock()
+
+	// Wait for buffer to drain before closing
+	// This prevents the underlying SCTP association from destroying
+	// pending data when the transport closes.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if s.dc.BufferedAmount() == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			s.logger.Warn("timeout waiting for stream drain", "label", s.dc.Label(), "buffered", s.dc.BufferedAmount())
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	s.openOnce.Do(func() {
 		close(s.openCh)
