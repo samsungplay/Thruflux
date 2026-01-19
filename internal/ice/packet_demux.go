@@ -71,6 +71,11 @@ func (p *packetDemux) Stop() {
 	// No-op: we keep running to mux/demux packets.
 }
 
+// CloseChan returns a channel that is closed when the demuxer is closed.
+func (p *packetDemux) CloseChan() <-chan struct{} {
+	return p.closeCh
+}
+
 // Conn returns the underlying connection.
 // Note: Direct access should be careful if read loop is running.
 func (p *packetDemux) Conn() *net.UDPConn {

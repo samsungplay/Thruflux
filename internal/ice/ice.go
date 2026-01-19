@@ -424,6 +424,7 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		"selected_pair_local", p.selectedPair.Local.String(),
 		"selected_pair_remote", p.selectedPair.Remote.String())
 	demux, err := p.demuxForSelectedPairLocked()
+	remoteAddr := p.remoteAddr
 	// We do NOT nil out p.agent; we want to keep it alive for NAT keepalives.
 	p.mu.Unlock()
 	if err != nil {
@@ -438,6 +439,41 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	// This takes over reading from the UDP socket for QUIC traffic.
 	// Before this point, pion's UDPMux was reading from the socket.
 	demux.Start()
+
+	// Send immediate keepalive burst to punch/refresh NAT holes
+	// This is critical for srflx-srflx where NAT bindings may have expired
+	sendKeepalive := func() {
+		// STUN Binding Indication: 0x00 0x11 followed by magic cookie and transaction ID
+		// This is a lightweight packet that NAT will pass through
+		stunIndication := []byte{
+			0x00, 0x11, // Binding Indication
+			0x00, 0x00, // Message length = 0
+			0x21, 0x12, 0xa4, 0x42, // Magic cookie
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, // Transaction ID
+		}
+		_, _ = demux.Conn().WriteTo(stunIndication, remoteAddr)
+	}
+
+	// Send burst of 3 keepalives immediately
+	for i := 0; i < 3; i++ {
+		sendKeepalive()
+		time.Sleep(10 * time.Millisecond)
+	}
+	p.logger.Debug("CreatePacketConn: sent initial keepalive burst")
+
+	// Start background keepalive goroutine
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-demux.CloseChan():
+				return
+			case <-ticker.C:
+				sendKeepalive()
+			}
+		}
+	}()
 
 	// Return the virtual connection for the application (QUIC), not the raw socket
 	conn := demux.AppConn()
