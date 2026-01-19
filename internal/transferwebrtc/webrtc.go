@@ -349,7 +349,8 @@ func (s *WebRTCStream) Read(p []byte) (n int, err error) {
 }
 
 // Write writes data to the stream.
-// Large buffers are fragmented into 16KB chunks for WebRTC compatibility.
+// Large buffers are fragmented into 64KB chunks for WebRTC compatibility.
+// Flow control using bufferedAmount ensures proper progress synchronization.
 func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	s.mu.Lock()
 	if s.closed {
@@ -358,12 +359,34 @@ func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	}
 	s.mu.Unlock()
 
-	// WebRTC data channels have a practical message size limit.
-	// Fragment large messages into 16KB chunks for maximum compatibility.
-	const maxMessageSize = 16 * 1024 // 16 KiB
+	// Pion WebRTC can handle 64KB messages reliably between pion instances.
+	// This is larger than browser-safe 16KB but works for server-to-server.
+	const maxMessageSize = 64 * 1024 // 64 KiB
+
+	// Maximum buffered amount before we wait for drain.
+	// This provides back-pressure and keeps progress in sync.
+	const maxBufferedAmount = 1 * 1024 * 1024 // 1 MiB
 
 	remaining := p
 	for len(remaining) > 0 {
+		// Wait if buffer is too full (provides back-pressure)
+		for {
+			buffered := s.dc.BufferedAmount()
+			if buffered < maxBufferedAmount {
+				break
+			}
+			// Small sleep to allow buffer to drain
+			time.Sleep(1 * time.Millisecond)
+
+			// Check if closed while waiting
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed {
+				return n, io.ErrClosedPipe
+			}
+		}
+
 		chunk := remaining
 		if len(chunk) > maxMessageSize {
 			chunk = remaining[:maxMessageSize]
