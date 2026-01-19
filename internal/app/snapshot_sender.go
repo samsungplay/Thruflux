@@ -925,7 +925,7 @@ func (s *SnapshotSender) runWebRTCTransfer(ctx context.Context, peerID string) e
 
 	// Create WebRTC Transport
 	transportConfig := transferwebrtc.DefaultConfig()
-	transportConfig.Ordered = false   // Explicitly force Unordered for data streams
+	transportConfig.Ordered = true    // Force Ordered to test stability
 	transportConfig.Logger = s.logger // Pass logger to transport
 	webrtcTransport := transferwebrtc.NewTransport(pc, transportConfig)
 	defer webrtcTransport.Close()
