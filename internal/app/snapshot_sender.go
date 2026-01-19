@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
@@ -579,16 +580,69 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	tlsConf := quictransport.ClientConfig()
 
-	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, func(upd ice.ProbeUpdate) {
-		s.setProbeStatus(peerID, upd.Addr, upd.State)
-	})
-	if err != nil {
-		return fmt.Errorf("probing failed: %w", err)
-	}
-	defer quicConn.CloseWithError(0, "")
+	// Bidirectional: Race outgoing Dial against incoming Accept
+	dialResCh := make(chan *quic.Conn, 1)
+	acceptResCh := make(chan *quic.Conn, 1)
+	raceCtx, raceCancel := context.WithCancel(ctx)
+	defer raceCancel()
 
-	iceLog("connect_ok")
-	fmt.Fprintf(os.Stderr, "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
+	// 1. Start Dialing
+	go func() {
+		conn, err := prober.ProbeAndDial(raceCtx, remoteCands, tlsConf, quicCfg, func(upd ice.ProbeUpdate) {
+			s.setProbeStatus(peerID, upd.Addr, upd.State)
+		})
+		if err == nil {
+			select {
+			case dialResCh <- conn:
+			case <-raceCtx.Done():
+				conn.CloseWithError(0, "race_lost")
+			}
+		}
+	}()
+
+	// 2. Start Listening (Accept)
+	// We need to upgrade the packet conn to a listener
+	// Prober exposes the underlying PacketConn via ListenPacket()?
+	// ice.go: ListenPacket() net.PacketConn
+	if pConn := prober.ListenPacket(); pConn != nil {
+		l, err := quictransport.ListenWithConfig(raceCtx, pConn, s.logger, quictransport.DefaultServerQUICConfig())
+		if err == nil {
+			defer l.Close()
+			go func() {
+				// Accept loop
+				conn, err := l.Accept(raceCtx)
+				if err == nil {
+					select {
+					case acceptResCh <- conn:
+						s.setProbeStatus(peerID, conn.RemoteAddr().String(), ice.ProbeStateWon)
+					case <-raceCtx.Done():
+						conn.CloseWithError(0, "race_lost")
+					}
+				}
+			}()
+		} else {
+			s.logger.Warn("failed to start listener for bidirectional", "error", err)
+		}
+	}
+
+	var quicConn *quic.Conn
+	var isDialer bool
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case conn := <-dialResCh:
+		quicConn = conn
+		isDialer = true
+		iceLog("connect_ok (dial)")
+	case conn := <-acceptResCh:
+		quicConn = conn
+		isDialer = false
+		iceLog("connect_ok (accept)")
+	}
+	raceCancel() // Cancel the loser
+
+	fmt.Fprintf(os.Stderr, "QUIC connection established (peer=%s session=%s dialer=%v)\n", peerID, s.sessionID, isDialer)
 	// Log route
 	s.setSenderRoute(peerID, fmt.Sprintf("local=%s remote=%s", quicConn.LocalAddr(), quicConn.RemoteAddr()))
 
@@ -596,7 +650,29 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		_ = quicConn.CloseWithError(0, "")
 	})
 
-	quicTransport := transferquic.NewDialer(quicConn, s.logger)
+	var quicTransport transfer.Transport
+	if isDialer {
+		quicTransport = transferquic.NewDialer(quicConn, s.logger)
+	} else {
+		// If we accepted, we act as a listener transport-wise?
+		// Actually transferquic.NewListener takes a listener.
+		// BUT we already accepted the connection.
+		// We need a way to wrap an EXISTING accepted conn into a Transport that can "Accept" streams?
+		// transferquic.NewDialer actually just wraps a conn and sets role="dialer".
+		// But in `transfer.go`, `Dial` is used by the Sender to "initiate" the logical transfer.
+		// If we are the Sender, we ALWAYS want to `Dial` the *logical* transfer connection (open streams).
+		// Even if the underlying transport was Accepted.
+		// `transferquic.NewDialer` simply wraps a `quic.Conn`.
+		// Its `Dial` method returns a `QUICConn` wrapping that connection.
+		// Its role "dialer" is just a string.
+		// Checking `transferquic/quic.go`:
+		// `Dial` checks `if t.role != "dialer"`.
+		// So we MUST use `NewDialer` to be able to call `Dial`.
+		// Does `NewDialer` care if the connection was dialed or accepted?
+		// No, it just takes `*quic.Conn`.
+		// So we can wrap the accepted connection in `NewDialer`.
+		quicTransport = transferquic.NewDialer(quicConn, s.logger)
+	}
 	defer quicTransport.Close()
 
 	transferConn, err := quicTransport.Dial(ctx, peerID)

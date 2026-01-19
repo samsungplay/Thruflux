@@ -223,8 +223,14 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 
 		p.logger.Debug("probing candidate", "addr", addrStr)
 
-		// Use Transport.Dial
-		conn, err := p.transport.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
+		// Use Transport.Dial with a background context to avoid killing the connection
+		// if the parent context is canceled (race condition safety).
+		// We rely on the handshake timeout to clean up stuck dials.
+		if ctx.Err() != nil {
+			return
+		}
+
+		conn, err := p.transport.Dial(context.Background(), udpAddr, tlsConf.(*tls.Config), quicConf)
 		if err != nil {
 			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
 			if onUpdate != nil {
