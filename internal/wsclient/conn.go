@@ -77,6 +77,7 @@ func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) 
 		return nil
 	})
 	c.conn.SetPingHandler(func(appData string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		c.writeMu.Lock()
 		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		err := c.conn.WriteMessage(websocket.PongMessage, []byte(appData))
