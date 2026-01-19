@@ -51,6 +51,7 @@ func DefaultServerQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                10 * time.Second,
 		MaxIdleTimeout:                 30 * time.Second,
+		DisablePathMTUDiscovery:        true,
 		MaxIncomingStreams:             100,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
@@ -64,6 +65,7 @@ func DefaultClientQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                10 * time.Second,
 		MaxIdleTimeout:                 30 * time.Second,
+		DisablePathMTUDiscovery:        true,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
