@@ -49,9 +49,7 @@ func ClientConfig() *tls.Config {
 // DefaultServerQUICConfig returns the default QUIC server config.
 func DefaultServerQUICConfig() *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod:                10 * time.Second,
-		MaxIdleTimeout:                 30 * time.Second,
-		DisablePathMTUDiscovery:        true,
+		KeepAlivePeriod:                30,
 		MaxIncomingStreams:             100,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
@@ -63,10 +61,7 @@ func DefaultServerQUICConfig() *quic.Config {
 // DefaultClientQUICConfig returns the default QUIC client config.
 func DefaultClientQUICConfig() *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod:                10 * time.Second,
-		MaxIdleTimeout:                 30 * time.Second,
-		DisablePathMTUDiscovery:        true,
-		MaxIncomingStreams:             100, // Critical for receiving streams when acting as client
+		KeepAlivePeriod:                30,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
@@ -135,6 +130,30 @@ func ListenWithConfig(ctx context.Context, udpConn net.PacketConn, logger *slog.
 
 	fmt.Fprintf(os.Stderr, "[TRACE quic] quic.Listen returned OK\n")
 	logger.Info("QUIC listener created", "local_addr", udpConn.LocalAddr())
+	return listener, nil
+}
+
+// ListenWithTransport creates a QUIC listener using an existing Transport.
+// This avoids competing readers when the Transport is also used for dialing.
+func ListenWithTransport(ctx context.Context, transport *quic.Transport, logger *slog.Logger, config *quic.Config) (*quic.Listener, error) {
+	if transport == nil || transport.Conn == nil {
+		return nil, fmt.Errorf("quic transport is required")
+	}
+	tlsConfig := ServerConfig()
+	if config == nil {
+		config = DefaultServerQUICConfig()
+	}
+
+	fmt.Fprintf(os.Stderr, "[TRACE quic] ListenWithTransport called, localAddr=%v\n", transport.Conn.LocalAddr())
+	listener, err := transport.Listen(tlsConfig, config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[TRACE quic] transport.Listen FAILED: %v\n", err)
+		logger.Error("QUIC listen failed", "error", err, "local_addr", transport.Conn.LocalAddr())
+		return nil, err
+	}
+
+	fmt.Fprintf(os.Stderr, "[TRACE quic] transport.Listen returned OK\n")
+	logger.Info("QUIC listener created", "local_addr", transport.Conn.LocalAddr())
 	return listener, nil
 }
 

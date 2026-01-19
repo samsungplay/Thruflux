@@ -338,7 +338,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 	}
 
-	quicListener, err := quictransport.ListenWithConfig(baseCtx, udpConn, r.logger, quicCfg)
+	// Share the prober transport to avoid multiple QUIC readers on the same UDP socket.
+	quicListener, err := quictransport.ListenWithTransport(baseCtx, prober.Transport(), r.logger, quicCfg)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)
 		exitWith(1)

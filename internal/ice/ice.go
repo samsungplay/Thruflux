@@ -45,12 +45,13 @@ func NewProber(cfg ProberConfig, logger *slog.Logger) (*Prober, error) {
 
 	// Open a single UDP socket for everything
 	// We bind to 0.0.0.0:0 to let the OS pick a port and listen on all interfaces
-	udpAddr, err := net.ResolveUDPAddr("udp", ":0")
+	// FORCE IPv4 to avoid dual-stack/AWDL instability
+	udpAddr, err := net.ResolveUDPAddr("udp4", ":0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve local address: %w", err)
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on UDP: %w", err)
 	}
@@ -156,6 +157,11 @@ func (p *Prober) GetProbingAddresses() []string {
 					continue
 				}
 
+				// STRICT IPv4 ONLY
+				if ip.To4() == nil {
+					continue
+				}
+
 				// Allow both IPv4 and IPv6
 				// ip.String() handles IPv6 format (e.g. ::1) correctly.
 				// net.JoinHostPort handles wrapping IPv6 in brackets [::1]:port.
@@ -167,6 +173,9 @@ func (p *Prober) GetProbingAddresses() []string {
 
 	// 2. Public IP (WAN)
 	if p.publicAddr != nil {
+		// Public address should hopefully be IPv4 if STUN server returned it.
+		// If STUN server is v6, this might be v6. Check?
+		// Usually STUN over UDP4 returns mapped IPv4.
 		candidates = append(candidates, p.publicAddr.String())
 	}
 
@@ -207,7 +216,6 @@ type ProbeUpdate struct {
 
 // ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
 // It returns the first successfully established connection.
-// The onUpdate callback is called whenever a probe's state changes.
 func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (*quic.Conn, error) {
 	// Initialize Transport if not already done.
 	// We do this here (lazy init) or we could do it earlier, but STUN works better on raw UDP.
@@ -251,14 +259,8 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 
 		p.logger.Debug("probing candidate", "addr", addrStr)
 
-		// Use Transport.Dial with a background context to avoid killing the connection
-		// if the parent context is canceled (race condition safety).
-		// We rely on the handshake timeout to clean up stuck dials.
-		if ctx.Err() != nil {
-			return
-		}
-
-		conn, err := p.transport.Dial(context.Background(), udpAddr, tlsConf.(*tls.Config), quicConf)
+		// Use Transport.Dial
+		conn, err := p.transport.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
 		if err != nil {
 			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
 			if onUpdate != nil {
