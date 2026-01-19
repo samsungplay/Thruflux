@@ -486,6 +486,21 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer udpConn.Close()
 	fmt.Fprintf(os.Stderr, "[TRACE] PacketConn created, localAddr=%v\n", udpConn.LocalAddr())
 
+	// Debug: print heartbeat and demux stats every 2 seconds
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-baseCtx.Done():
+				return
+			case <-ticker.C:
+				stun, app, dropped := ice.DemuxStats()
+				fmt.Fprintf(os.Stderr, "[HEARTBEAT] receiver alive, demux stats: stun=%d app=%d dropped=%d\n", stun, app, dropped)
+			}
+		}
+	}()
+
 	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
 	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
 		results := make([]transport.UdpTuneResult, 0, len(udpConns))
