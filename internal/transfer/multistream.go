@@ -787,10 +787,21 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	const controlStreamLabel = "stream-1"
 
-	fmt.Println("DEBUG: RecvManifestMultiStream: Waiting for Control Stream...")
+	// Debug Logger
+	debugLog := func(format string, args ...any) {
+		f, _ := os.OpenFile("debug_receiver.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if f != nil {
+			defer f.Close()
+			msg := fmt.Sprintf("DEBUG: "+format+"\n", args...)
+			f.WriteString(msg)
+		}
+	}
+
+	debugLog("RecvManifestMultiStream: Waiting for Control Stream...")
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
+			debugLog("failed to accept stream: %v", err)
 			return manifest.Manifest{}, fmt.Errorf("failed to accept stream: %w", err)
 		}
 
@@ -803,30 +814,31 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if l, ok := stream.(Labeler); ok {
 			label = l.Label()
 		} else {
+			debugLog("stream does not support Label()")
 			stream.Close()
 			return manifest.Manifest{}, fmt.Errorf("stream does not support Label()")
 		}
 
-		fmt.Printf("DEBUG: Accepted stream label=%s\n", label)
+		debugLog("Accepted stream label=%s", label)
 
 		if label == controlStreamLabel {
 			controlStream = stream
 			break
 		}
 
-		fmt.Printf("DEBUG: Buffering non-control stream label=%s\n", label)
+		debugLog("Buffering non-control stream label=%s", label)
 		pendingStreams = append(pendingStreams, stream)
 	}
 
 	defer controlStream.Close()
 
-	fmt.Println("DEBUG: Reading Control Header...")
+	debugLog("Reading Control Header...")
 	m, err := readControlHeader(controlStream)
 	if err != nil {
-		fmt.Printf("DEBUG: readControlHeader failed: %v\n", err)
+		debugLog("readControlHeader failed: %v", err)
 		return m, err
 	}
-	fmt.Printf("DEBUG: Control Header Read OK. Manifest has %d files.\n", len(m.Items))
+	debugLog("Control Header Read OK. Manifest has %d files.", len(m.Items))
 
 	baseDir := outDir
 	if !opts.NoRootDir {
