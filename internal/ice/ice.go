@@ -133,20 +133,6 @@ func (p *Prober) GetProbingAddresses() []string {
 			if iface.Flags&net.FlagUp == 0 {
 				continue
 			}
-			// Skip loopback unless we really want it (usually we don't for LAN transfer)
-			if iface.Flags&net.FlagLoopback != 0 {
-				continue
-			}
-
-			// Filter unstable/virtual interfaces that cause packet loss
-			name := strings.ToLower(iface.Name)
-			if strings.Contains(name, "awdl") || // Apple Wireless Direct Link (unstable)
-				strings.Contains(name, "llw") || // Low Latency WLAN (unstable)
-				strings.Contains(name, "utun") || // Userspace Tunnel (VPN)
-				strings.Contains(name, "tun") ||
-				strings.Contains(name, "tap") {
-				continue
-			}
 
 			addrs, err := iface.Addrs()
 			if err != nil {
@@ -164,18 +150,19 @@ func (p *Prober) GetProbingAddresses() []string {
 					ip = v.IP
 				}
 
-				if ip == nil {
-					continue
-				}
-				// Skip non-routable, link-local, or multicast candidates.
-				if !ip.IsGlobalUnicast() {
+				if ip == nil || ip.IsMulticast() || ip.IsUnspecified() {
 					continue
 				}
 
 				// Allow both IPv4 and IPv6
 				// ip.String() handles IPv6 format (e.g. ::1) correctly.
 				// net.JoinHostPort handles wrapping IPv6 in brackets [::1]:port.
-				cand := net.JoinHostPort(ip.String(), portStr)
+				host := ip.String()
+				if ip.IsLinkLocalUnicast() {
+					// Link-local IPv6 needs a zone (interface name) to be dialable.
+					host = (&net.IPAddr{IP: ip, Zone: iface.Name}).String()
+				}
+				cand := net.JoinHostPort(host, portStr)
 				candidates = append(candidates, cand)
 			}
 		}
