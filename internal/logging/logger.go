@@ -8,11 +8,23 @@ import (
 // New creates a new structured logger with text output.
 // app: application name (e.g., "thruserv")
 // level: one of "debug", "info", "warn", "error" (default: "info")
-func New(app string, level string) *slog.Logger {
+// logFile: optional path to a log file (default: stdout)
+func New(app string, level string, logFile string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level: parseLevel(level),
 	}
-	handler := slog.NewTextHandler(os.Stdout, opts)
+	var writer *os.File = os.Stdout
+	if logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			writer = f
+		} else {
+			// Fallback to stderr if file fails, so we don't silence logs completely
+			// and print an error
+			os.Stderr.WriteString("failed to open log file: " + err.Error() + "\n")
+		}
+	}
+	handler := slog.NewTextHandler(writer, opts)
 	logger := slog.New(handler)
 
 	// Add default attributes: app and pid
