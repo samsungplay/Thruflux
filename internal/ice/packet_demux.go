@@ -89,10 +89,17 @@ func (p *packetDemux) readLoop() {
 	defer p.readLoopWg.Done()
 	buf := make([]byte, 2048) // MTU + headroom
 
+	if demuxDebug {
+		log.Printf("[demux] readLoop started for %v", p.conn.LocalAddr())
+	}
+
 	for {
 		// We rely on p.conn.Close() to unblock ReadFrom
 		n, addr, err := p.conn.ReadFrom(buf)
 		if err != nil {
+			if demuxDebug {
+				log.Printf("[demux] readLoop read error: %v, closed=%v", err, p.isClosed())
+			}
 			if !p.isClosed() {
 				// If not explicitly closed by us, valid read error
 				// Propagate to virtual connections?
@@ -101,6 +108,9 @@ func (p *packetDemux) readLoop() {
 				p.stunConn.close(err)
 				p.appConn.close(err)
 				p.Close()
+			}
+			if demuxDebug {
+				log.Printf("[demux] readLoop exiting for %v", p.conn.LocalAddr())
 			}
 			return
 		}

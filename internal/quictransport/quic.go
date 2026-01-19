@@ -117,8 +117,11 @@ func ListenWithConfig(ctx context.Context, udpConn net.PacketConn, logger *slog.
 		config = DefaultServerQUICConfig()
 	}
 
+	logger.Info("QUIC listen starting", "local_addr", udpConn.LocalAddr())
+
 	listener, err := quic.Listen(udpConn, tlsConfig, config)
 	if err != nil {
+		logger.Error("QUIC listen failed", "error", err, "local_addr", udpConn.LocalAddr())
 		return nil, err
 	}
 
@@ -138,8 +141,11 @@ func DialWithConfig(ctx context.Context, udpConn net.PacketConn, remoteAddr net.
 		config = DefaultClientQUICConfig()
 	}
 
+	logger.Info("QUIC dial starting", "remote_addr", remoteAddr, "local_addr", udpConn.LocalAddr())
+
 	conn, err := quic.Dial(ctx, udpConn, remoteAddr, tlsConfig, config)
 	if err != nil {
+		logger.Error("QUIC dial failed", "error", err, "remote_addr", remoteAddr)
 		return nil, err
 	}
 
