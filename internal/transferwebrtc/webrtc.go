@@ -346,6 +346,11 @@ func (s *WebRTCStream) StreamID() uint64 {
 	return uint64(s.dcID)
 }
 
+// Label returns the data channel label.
+func (s *WebRTCStream) Label() string {
+	return s.dc.Label()
+}
+
 // Read reads data from the stream using the detached io.Reader.
 func (s *WebRTCStream) Read(p []byte) (n int, err error) {
 	s.mu.Lock()

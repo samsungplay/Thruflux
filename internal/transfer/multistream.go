@@ -774,14 +774,13 @@ scheduleLoop:
 // RecvManifestMultiStream receives a manifest over the control stream and
 // reads each file over a dedicated data stream (sequentially).
 func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts Options) (manifest.Manifest, error) {
-	// Accept streams until we find the Control Stream (ID 1).
-	// Because data streams (ID > 1) are Unordered, they might arrive first.
+	// Accept streams until we find the Control Stream (Label "stream-1").
+	// Data streams (Unordered) might arrive first.
 	// We need to buffer any early data streams to be processed later.
 	var controlStream Stream
 	pendingStreams := make([]Stream, 0)
 
-	// Stream ID 0 is always the Control Stream in our protocol (SCTP/QUIC default)
-	const controlStreamID = 0
+	const controlStreamLabel = "stream-1"
 
 	for {
 		stream, err := conn.AcceptStream(ctx)
@@ -789,14 +788,41 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return manifest.Manifest{}, fmt.Errorf("failed to accept stream: %w", err)
 		}
 
-		idFunc, ok := stream.(StreamIDer)
-		if !ok {
-			stream.Close()
-			return manifest.Manifest{}, fmt.Errorf("stream does not support ID")
+		// Check label if available (Stream interface needs to support it or we cast)
+		// Our WebRTCStream implementation should expose Label via a method or we inspect underlying
+		// But wait, the standard Stream interface doesn't have Label().
+		// We can try to cast to an interface that provides Label, or relies on StreamID.
+		// Since we can't easily change the interface right now without breaking things,
+		// and we know the StreamID of "stream-1" is the first one... but IDs are dynamic.
+
+		// Actually, let's look at the logs again: "stream detached and ready label=stream-1 id=1".
+		// The sender ALWAYS creates "stream-1" as the first one.
+		// If we can't access Label, we essentially have to rely on the *first* stream the sender *created*?
+		// No, they arrive out of order.
+
+		// Let's cast to something that has Label() or look at how we can expose it.
+		// The WebRTCStream struct has a `dc *webrtc.DataChannel` field.
+		// In `func (s *WebRTCStream) Label() string { return s.dc.Label() }` ?
+		// We need to add Label() to the Stream interface or type assert.
+
+		// Type assert is safer for now.
+		type Labeler interface {
+			Label() string
 		}
 
-		sid := idFunc.StreamID()
-		if sid == controlStreamID {
+		var label string
+		if l, ok := stream.(Labeler); ok {
+			label = l.Label()
+		} else {
+			// Fallback: If we can't get label, we might be in trouble.
+			// But wait, we saw "stream-1" logs.
+			// Let's assume we can add Label() to WebRTCStream and then check it here.
+			// For now, let's close and error if we can't identify.
+			stream.Close()
+			return manifest.Manifest{}, fmt.Errorf("stream does not support Label()")
+		}
+
+		if label == controlStreamLabel {
 			controlStream = stream
 			break
 		}
