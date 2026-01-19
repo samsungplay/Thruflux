@@ -49,6 +49,23 @@ type SenderView struct {
 	Benchmark bool
 }
 
+const (
+	colorReset  = "\033[0m"
+	colorDim    = "\033[90m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+)
+
+func colorize(s string, color string, enabled bool) string {
+	if !enabled || color == "" {
+		return s
+	}
+	return color + s + colorReset
+}
+
 func IsTTY(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
@@ -92,41 +109,26 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			lines := 0
 			if v.OutDir != "" {
-				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
-				lines++
-			}
-			if v.IceStage != "" {
-				stage := v.IceStage
-				if strings.Contains(strings.ToUpper(stage), "FAILED") {
-					fmt.Fprintf(w, "conn \033[31m%s\033[0m\n", stage) // Red
-				} else if stage == "connect_ok" {
-					fmt.Fprintf(w, "conn \033[32m%s\033[0m\n", stage) // Green
-				} else {
-					fmt.Fprintf(w, "conn %s\n", stage)
-				}
+				fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("saving to %s", v.OutDir), colorDim, isTTY))
 				lines++
 			}
 			if len(v.TransportLines) > 0 {
 				for _, line := range v.TransportLines {
-					fmt.Fprintln(w, line)
+					fmt.Fprintln(w, colorize(line, colorBlue, isTTY))
 					lines++
 				}
 			}
-			if v.Route != "" {
-				fmt.Fprintf(w, "%s\n", v.Route)
-				lines++
-			}
-			lines += renderProbes(w, "receiver", v.Probes)
-			fmt.Fprintf(w, "%s\n", formatReceiverLine(v))
+			lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, isTTY)
+			fmt.Fprintf(w, "%s\n", colorize(formatReceiverLine(v), colorGreen, isTTY))
 			lines++
 			currentFile := v.CurrentFile
 			if currentFile == "" {
 				currentFile = "-"
 			}
-			fmt.Fprintf(w, "file: %s (%d/%d)\n", currentFile, v.FileDone, v.FileTotal)
+			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
 			lines++
 			if v.Benchmark {
-				fmt.Fprintf(w, "%s\n", formatBenchLine(v.Bench))
+				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorYellow, isTTY))
 				lines++
 			}
 			lastLines = lines
@@ -202,7 +204,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				fmt.Fprint(w, "\033[J")
 			}
 			lines := 0
-			lines += writeHeader(w, v.Header)
+			lines += writeHeader(w, v.Header, isTTY)
 			if v.Benchmark {
 				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "elapsed", "ETA"}
 				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9, 9}
@@ -224,22 +226,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				}
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
-					if row.Stage != "" {
-						stage := row.Stage
-						if strings.Contains(strings.ToUpper(stage), "FAILED") {
-							fmt.Fprintf(w, "  [%s] conn \033[31m%s\033[0m\n", row.Peer, stage) // Red
-						} else if stage == "connect_ok" {
-							fmt.Fprintf(w, "  [%s] conn \033[32m%s\033[0m\n", row.Peer, stage) // Green
-						} else {
-							fmt.Fprintf(w, "  [%s] conn %s\n", row.Peer, stage)
-						}
-						lines++
-					}
-					if row.Route != "" {
-						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
-						lines++
-					}
-					lines += renderProbes(w, row.Peer, row.Probes)
+					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, isTTY)
 				}
 			} else {
 				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
@@ -258,27 +245,12 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				}
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
-					if row.Stage != "" {
-						stage := row.Stage
-						if strings.Contains(strings.ToUpper(stage), "FAILED") {
-							fmt.Fprintf(w, "  [%s] conn \033[31m%s\033[0m\n", row.Peer, stage) // Red
-						} else if stage == "connect_ok" {
-							fmt.Fprintf(w, "  [%s] conn \033[32m%s\033[0m\n", row.Peer, stage) // Green
-						} else {
-							fmt.Fprintf(w, "  [%s] conn %s\n", row.Peer, stage)
-						}
-						lines++
-					}
-					if row.Route != "" {
-						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
-						lines++
-					}
-					lines += renderProbes(w, row.Peer, row.Probes)
+					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, isTTY)
 				}
 			}
 			lastLines = lines
 		} else {
-			writeHeader(w, v.Header)
+			writeHeader(w, v.Header, false)
 			if v.Benchmark {
 				for _, row := range v.Rows {
 					fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
@@ -331,14 +303,14 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 	}
 }
 
-func writeHeader(w io.Writer, header string) int {
+func writeHeader(w io.Writer, header string, isTTY bool) int {
 	header = strings.TrimSuffix(header, "\n")
 	if header == "" {
 		return 0
 	}
 	lines := strings.Split(header, "\n")
 	for _, line := range lines {
-		fmt.Fprintln(w, line)
+		fmt.Fprintln(w, colorize(line, colorBlue, isTTY))
 	}
 	return len(lines)
 }
@@ -368,6 +340,24 @@ func renderBar(percent float64, width int) string {
 		filled = width
 	}
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
+}
+
+func renderConnSection(w io.Writer, peerLabel string, stage string, route string, probes map[string]string, isTTY bool) int {
+	lines := 0
+	if stage != "" && stage != "connect_ok" {
+		stageColor := colorYellow
+		if strings.Contains(strings.ToUpper(stage), "FAILED") {
+			stageColor = colorRed
+		}
+		fmt.Fprintf(w, "  [%s] conn %s\n", peerLabel, colorize(stage, stageColor, isTTY))
+		lines++
+	}
+	if route != "" {
+		fmt.Fprintf(w, "  [%s] %s\n", peerLabel, colorize(route, colorCyan, isTTY))
+		lines++
+	}
+	lines += renderProbes(w, peerLabel, probes, isTTY)
+	return lines
 }
 
 func renderTable(w io.Writer, headers []string, rows [][]string, widths []int) int {
@@ -543,7 +533,7 @@ func formatAge(d time.Duration) string {
 	return fmt.Sprintf("%.1fh", hours)
 }
 
-func renderProbes(w io.Writer, peerID string, probes map[string]string) int {
+func renderProbes(w io.Writer, peerID string, probes map[string]string, isTTY bool) int {
 	if len(probes) == 0 {
 		return 0
 	}
@@ -567,17 +557,17 @@ func renderProbes(w io.Writer, peerID string, probes map[string]string) int {
 		color := ""
 		switch status {
 		case "probing":
-			color = "\033[90m" // Grey
+			color = colorDim
 		case "failed":
-			color = "\033[31m" // Red
+			color = colorRed
 		case "won":
-			color = "\033[32m" // Green
+			color = colorGreen
 		}
+		statusText := status
 		if color != "" {
-			fmt.Fprintf(w, "    [%s] probe %s%s\033[0m  %s\n", peerID, color, status, addr)
-		} else {
-			fmt.Fprintf(w, "    [%s] probe %-8s  %s\n", peerID, status, addr)
+			statusText = colorize(status, color, isTTY)
 		}
+		fmt.Fprintf(w, "    [%s] probe %-8s  %s\n", peerID, statusText, addr)
 		lines++
 	}
 	return lines

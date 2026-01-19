@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,7 @@ type Prober struct {
 	logger     *slog.Logger
 	udpConn    *net.UDPConn
 	transport  *quic.Transport
-	publicAddr net.Addr
+	publicAddrs []net.Addr
 	mu         sync.Mutex
 }
 
@@ -43,15 +44,22 @@ func NewProber(cfg ProberConfig, logger *slog.Logger) (*Prober, error) {
 		return nil, fmt.Errorf("logger is required")
 	}
 
-	// Open a single UDP socket for everything
-	// We bind to 0.0.0.0:0 to let the OS pick a port and listen on all interfaces
-	// FORCE IPv4 to avoid dual-stack/AWDL instability
-	udpAddr, err := net.ResolveUDPAddr("udp4", ":0")
+	// Open a single UDP socket for everything.
+	// Prefer dual-stack to allow IPv4+IPv6 candidates.
+	udpAddr, err := net.ResolveUDPAddr("udp", ":0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve local address: %w", err)
 	}
 
-	conn, err := net.ListenUDP("udp4", udpAddr)
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		// Fallback to IPv4-only if dual-stack isn't available.
+		udpAddr, err = net.ResolveUDPAddr("udp4", ":0")
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve local address: %w", err)
+		}
+		conn, err = net.ListenUDP("udp4", udpAddr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on UDP: %w", err)
 	}
@@ -75,9 +83,12 @@ func (p *Prober) LocalAddr() net.Addr {
 	return p.udpConn.LocalAddr()
 }
 
-// PublicAddr returns the public address discovered via STUN, or nil if failed.
+// PublicAddr returns one public address discovered via STUN, or nil if failed.
 func (p *Prober) PublicAddr() net.Addr {
-	return p.publicAddr
+	if len(p.publicAddrs) == 0 {
+		return nil
+	}
+	return p.publicAddrs[0]
 }
 
 // Listen returns the underlying UDP connection to be used for QUIC listening.
@@ -153,12 +164,11 @@ func (p *Prober) GetProbingAddresses() []string {
 					ip = v.IP
 				}
 
-				if ip == nil || ip.IsLoopback() || ip.IsMulticast() {
+				if ip == nil {
 					continue
 				}
-
-				// STRICT IPv4 ONLY
-				if ip.To4() == nil {
+				// Skip non-routable, link-local, or multicast candidates.
+				if !ip.IsGlobalUnicast() {
 					continue
 				}
 
@@ -171,12 +181,11 @@ func (p *Prober) GetProbingAddresses() []string {
 		}
 	}
 
-	// 2. Public IP (WAN)
-	if p.publicAddr != nil {
-		// Public address should hopefully be IPv4 if STUN server returned it.
-		// If STUN server is v6, this might be v6. Check?
-		// Usually STUN over UDP4 returns mapped IPv4.
-		candidates = append(candidates, p.publicAddr.String())
+	// 2. Public IPs (WAN)
+	if len(p.publicAddrs) > 0 {
+		for _, addr := range p.publicAddrs {
+			candidates = append(candidates, addr.String())
+		}
 	}
 
 	// Log gathered
@@ -317,6 +326,8 @@ func (p *Prober) resolvePublicAddr() error {
 		servers = p.config.StunServers
 	}
 
+	var resolved bool
+	seen := make(map[string]struct{})
 	for _, server := range servers {
 		// We can't use our main p.udpConn for "pion/stun" easily because
 		// pion/stun Client expects to own the connection or at least read from it exclusively
@@ -328,13 +339,11 @@ func (p *Prober) resolvePublicAddr() error {
 		// Parse STUN server address
 		// server format "host:port" or "stun:host:port"
 		addrStr := strings.TrimPrefix(server, "stun:")
-		serverAddr, err := net.ResolveUDPAddr("udp", addrStr)
+		serverAddrs, err := resolveStunAddrs(addrStr)
 		if err != nil {
 			p.logger.Warn("invalid STUN server", "server", server, "error", err)
 			continue
 		}
-
-		p.logger.Debug("sending STUN request", "server", addrStr)
 
 		// Create a STUN client
 		// We use `stun.Dial` usually, but we want to use OUR connection.
@@ -348,40 +357,82 @@ func (p *Prober) resolvePublicAddr() error {
 		// Send a binding request
 		msg := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
 
-		// Write to server
-		if _, err := p.udpConn.WriteToUDP(msg.Raw, serverAddr); err != nil {
-			continue
-		}
+		for _, serverAddr := range serverAddrs {
+			p.logger.Debug("sending STUN request", "server", serverAddr.String())
 
-		// Wait for response with timeout
-		buf := make([]byte, 1024)
-		p.udpConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		n, _, err := p.udpConn.ReadFromUDP(buf)
-		p.udpConn.SetReadDeadline(time.Time{}) // Reset
-		if err != nil {
-			continue
-		}
-
-		res := &stun.Message{Raw: buf[:n]}
-		if err := res.Decode(); err != nil {
-			continue
-		}
-
-		var xorAddr stun.XORMappedAddress
-		if err := xorAddr.GetFrom(res); err != nil {
-			// Try MappedAddress
-			var mappedAddr stun.MappedAddress
-			if err := mappedAddr.GetFrom(res); err != nil {
+			// Write to server
+			if _, err := p.udpConn.WriteToUDP(msg.Raw, serverAddr); err != nil {
 				continue
 			}
-			p.publicAddr = &net.UDPAddr{IP: mappedAddr.IP, Port: mappedAddr.Port}
-		} else {
-			p.publicAddr = &net.UDPAddr{IP: xorAddr.IP, Port: xorAddr.Port}
-		}
 
-		p.logger.Info("public address resolved", "addr", p.publicAddr)
-		return nil
+			// Wait for response with timeout
+			buf := make([]byte, 1024)
+			p.udpConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			n, _, err := p.udpConn.ReadFromUDP(buf)
+			p.udpConn.SetReadDeadline(time.Time{}) // Reset
+			if err != nil {
+				continue
+			}
+
+			res := &stun.Message{Raw: buf[:n]}
+			if err := res.Decode(); err != nil {
+				continue
+			}
+
+			var mapped *net.UDPAddr
+			var xorAddr stun.XORMappedAddress
+			if err := xorAddr.GetFrom(res); err != nil {
+				// Try MappedAddress
+				var mappedAddr stun.MappedAddress
+				if err := mappedAddr.GetFrom(res); err != nil {
+					continue
+				}
+				mapped = &net.UDPAddr{IP: mappedAddr.IP, Port: mappedAddr.Port}
+			} else {
+				mapped = &net.UDPAddr{IP: xorAddr.IP, Port: xorAddr.Port}
+			}
+
+			if mapped != nil {
+				key := mapped.String()
+				if _, ok := seen[key]; !ok {
+					seen[key] = struct{}{}
+					p.publicAddrs = append(p.publicAddrs, mapped)
+					p.logger.Info("public address resolved", "addr", mapped)
+					resolved = true
+				}
+			}
+		}
 	}
 
-	return fmt.Errorf("all STUN servers failed")
+	if !resolved {
+		return fmt.Errorf("all STUN servers failed")
+	}
+	return nil
+}
+
+func resolveStunAddrs(addrStr string) ([]*net.UDPAddr, error) {
+	host, portStr, err := net.SplitHostPort(addrStr)
+	if err != nil {
+		addr, err := net.ResolveUDPAddr("udp", addrStr)
+		if err != nil {
+			return nil, err
+		}
+		return []*net.UDPAddr{addr}, nil
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IPs for %s", host)
+	}
+	addrs := make([]*net.UDPAddr, 0, len(ips))
+	for _, ip := range ips {
+		addrs = append(addrs, &net.UDPAddr{IP: ip.IP, Port: port})
+	}
+	return addrs, nil
 }

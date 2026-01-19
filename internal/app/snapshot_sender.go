@@ -579,7 +579,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	tlsConf := quictransport.ClientConfig()
 
-	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, nil)
+	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, func(upd ice.ProbeUpdate) {
+		s.setSenderProbeStatus(peerID, upd.Addr, upd.State)
+	})
 	if err != nil {
 		return fmt.Errorf("probing failed: %w", err)
 	}
@@ -1028,6 +1030,7 @@ type senderProgress struct {
 	perFile       map[string]int64
 	route         string
 	stage         string
+	probes        map[string]ice.ProbeState
 	appliedSkip   map[string]bool
 	verifySeen    map[string]bool
 	verified      map[string]bool
@@ -1060,6 +1063,7 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	state.perFile = make(map[string]int64)
 	state.route = ""
 	state.stage = ""
+	state.probes = make(map[string]ice.ProbeState)
 	state.appliedSkip = make(map[string]bool)
 	state.verifySeen = make(map[string]bool)
 	state.verified = make(map[string]bool)
@@ -1206,6 +1210,22 @@ func (s *SnapshotSender) setSenderStage(peerID string, stage string) {
 	state.mu.Unlock()
 }
 
+func (s *SnapshotSender) setSenderProbeStatus(peerID string, addr string, state ice.ProbeState) {
+	s.progressMu.Lock()
+	progressState := s.progress[peerID]
+	s.progressMu.Unlock()
+	if progressState == nil {
+		return
+	}
+	progressState.mu.Lock()
+	if progressState.probes[addr] == ice.ProbeStateWon {
+		progressState.mu.Unlock()
+		return
+	}
+	progressState.probes[addr] = state
+	progressState.mu.Unlock()
+}
+
 func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 	s.progressMu.Lock()
 	state := s.progress[peerID]
@@ -1254,6 +1274,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		var stats progress.Stats
 		var route string
 		var stage string
+		var probes map[string]string
 		var benchSnap bench.Snapshot
 		var fileDone int
 		var fileTotal int
@@ -1267,6 +1288,12 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			state.mu.Lock()
 			route = state.route
 			stage = state.stage
+			if len(state.probes) > 0 {
+				probes = make(map[string]string, len(state.probes))
+				for k, v := range state.probes {
+					probes[k] = v.String()
+				}
+			}
 			benchSnap = state.benchSnap
 			fileDone = state.fileDone
 			fileTotal = state.fileTotal
@@ -1285,6 +1312,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			FileDone:  fileDone,
 			FileTotal: fileTotal,
 			Resumed:   resumedFiles,
+			Probes:    probes,
 		})
 	}
 	s.mu.Lock()
