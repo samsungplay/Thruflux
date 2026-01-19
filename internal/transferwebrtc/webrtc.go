@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/datachannel"
 	"github.com/pion/webrtc/v4"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 )
@@ -23,7 +24,8 @@ var (
 // Config holds WebRTC transport configuration.
 type Config struct {
 	// Ordered specifies if data channels should guarantee ordering.
-	// Default: true (reliable ordered)
+	// Set to false for parallel streams to avoid head-of-line blocking.
+	// Default: false (unordered for better parallel performance)
 	Ordered bool
 
 	// MaxChannels is the maximum number of concurrent data channels.
@@ -37,7 +39,7 @@ type Config struct {
 // DefaultConfig returns the default WebRTC transport configuration.
 func DefaultConfig() Config {
 	return Config{
-		Ordered:     true,
+		Ordered:     false, // Unordered by default for parallel streams
 		MaxChannels: 100,
 	}
 }
@@ -141,19 +143,24 @@ func newWebRTCConn(pc *webrtc.PeerConnection, config Config, logger *slog.Logger
 
 	// Set up handler for incoming data channels
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		stream := newWebRTCStream(dc, logger)
+		stream, err := newWebRTCStreamFromDC(dc, logger)
+		if err != nil {
+			logger.Warn("failed to create stream from incoming channel", "error", err)
+			dc.Close()
+			return
+		}
 		c.mu.Lock()
 		closed := c.incomingClosed
 		c.mu.Unlock()
 		if closed {
-			dc.Close()
+			stream.Close()
 			return
 		}
 		select {
 		case c.incomingCh <- stream:
 		default:
 			logger.Warn("incoming data channel buffer full, dropping", "label", dc.Label())
-			dc.Close()
+			stream.Close()
 		}
 	})
 
@@ -180,22 +187,21 @@ func (c *WebRTCConn) OpenStream(ctx context.Context) (transfer.Stream, error) {
 		return nil, fmt.Errorf("failed to create data channel: %w", err)
 	}
 
-	stream := newWebRTCStream(dc, c.logger)
+	stream, err := newWebRTCStreamFromDC(dc, c.logger)
+	if err != nil {
+		dc.Close()
+		return nil, err
+	}
 
 	// Wait for the data channel to open
-	openCh := make(chan struct{})
-	dc.OnOpen(func() {
-		close(openCh)
-	})
-
 	select {
 	case <-ctx.Done():
-		dc.Close()
+		stream.Close()
 		return nil, ctx.Err()
-	case <-openCh:
+	case <-stream.openCh:
 		return stream, nil
 	case <-time.After(30 * time.Second):
-		dc.Close()
+		stream.Close()
 		return nil, errors.New("timeout waiting for data channel to open")
 	}
 }
@@ -217,10 +223,16 @@ func (c *WebRTCConn) AcceptStream(ctx context.Context) (transfer.Stream, error) 
 			return nil, io.ErrClosedPipe
 		}
 		// Wait for the data channel to be open
-		if err := stream.waitOpen(ctx); err != nil {
-			return nil, err
+		select {
+		case <-ctx.Done():
+			stream.Close()
+			return nil, ctx.Err()
+		case <-stream.openCh:
+			return stream, nil
+		case <-time.After(30 * time.Second):
+			stream.Close()
+			return nil, errors.New("timeout waiting for data channel to open")
 		}
-		return stream, nil
 	}
 }
 
@@ -239,166 +251,119 @@ func (c *WebRTCConn) Close() error {
 	return nil
 }
 
-// WebRTCStream wraps a DataChannel and implements transfer.Stream.
+// WebRTCStream wraps a detached DataChannel and implements transfer.Stream.
+// Uses the detached API for high throughput.
 type WebRTCStream struct {
-	dc     *webrtc.DataChannel
-	logger *slog.Logger
+	dc       *webrtc.DataChannel
+	detached datachannel.ReadWriteCloser
+	logger   *slog.Logger
+	dcID     uint16
 
 	mu       sync.Mutex
 	closed   bool
 	openCh   chan struct{}
 	openOnce sync.Once
-
-	// Read buffer
-	readBuf  []byte
-	readCond *sync.Cond
-	readErr  error
 }
 
-func newWebRTCStream(dc *webrtc.DataChannel, logger *slog.Logger) *WebRTCStream {
+func newWebRTCStreamFromDC(dc *webrtc.DataChannel, logger *slog.Logger) (*WebRTCStream, error) {
 	s := &WebRTCStream{
 		dc:     dc,
 		logger: logger,
 		openCh: make(chan struct{}),
 	}
-	s.readCond = sync.NewCond(&s.mu)
 
-	// Handle data channel open
+	// Handle data channel open - detach when ready
 	dc.OnOpen(func() {
+		// Store ID before detach
+		if id := dc.ID(); id != nil {
+			s.dcID = *id
+		}
+
+		// Detach for raw io.ReadWriteCloser access (high performance)
+		detached, err := dc.Detach()
+		if err != nil {
+			logger.Error("failed to detach data channel", "error", err)
+			return
+		}
+		s.mu.Lock()
+		s.detached = detached
+		s.mu.Unlock()
+
 		s.openOnce.Do(func() {
 			close(s.openCh)
 		})
 	})
 
-	// Handle incoming messages
-	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-		s.mu.Lock()
-		s.readBuf = append(s.readBuf, msg.Data...)
-		s.mu.Unlock()
-		s.readCond.Signal()
-	})
-
-	// Handle errors
-	dc.OnError(func(err error) {
-		s.mu.Lock()
-		if s.readErr == nil {
-			s.readErr = err
-		}
-		s.mu.Unlock()
-		s.readCond.Signal()
-	})
-
-	// Handle close
-	dc.OnClose(func() {
-		s.mu.Lock()
-		if s.readErr == nil {
-			s.readErr = io.EOF
-		}
-		s.mu.Unlock()
-		s.readCond.Signal()
-	})
-
-	// Check if the data channel is already open (race condition fix)
-	// ReadyState may already be Open if handlers were registered late
+	// Check if already open
 	if dc.ReadyState() == webrtc.DataChannelStateOpen {
+		if id := dc.ID(); id != nil {
+			s.dcID = *id
+		}
+		detached, err := dc.Detach()
+		if err != nil {
+			return nil, fmt.Errorf("failed to detach open data channel: %w", err)
+		}
+		s.detached = detached
 		s.openOnce.Do(func() {
 			close(s.openCh)
 		})
 	}
 
-	return s
-}
-
-// waitOpen blocks until the data channel is open.
-func (s *WebRTCStream) waitOpen(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.openCh:
-		return nil
-	case <-time.After(30 * time.Second):
-		return errors.New("timeout waiting for data channel to open")
-	}
+	return s, nil
 }
 
 // StreamID returns the data channel ID for multi-stream protocols.
 func (s *WebRTCStream) StreamID() uint64 {
-	if s.dc.ID() == nil {
-		return 0
-	}
-	return uint64(*s.dc.ID())
+	return uint64(s.dcID)
 }
 
-// Read reads data from the stream.
+// Read reads data from the stream using the detached io.Reader.
 func (s *WebRTCStream) Read(p []byte) (n int, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Wait for data or error
-	for len(s.readBuf) == 0 && s.readErr == nil {
-		s.readCond.Wait()
-	}
-
-	if len(s.readBuf) > 0 {
-		n = copy(p, s.readBuf)
-		s.readBuf = s.readBuf[n:]
-		return n, nil
-	}
-
-	return 0, s.readErr
-}
-
-// Write writes data to the stream.
-// Large buffers are fragmented into 64KB chunks for WebRTC compatibility.
-// Flow control using bufferedAmount ensures proper progress synchronization.
-func (s *WebRTCStream) Write(p []byte) (n int, err error) {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return 0, io.ErrClosedPipe
-	}
+	detached := s.detached
 	s.mu.Unlock()
 
-	// Pion WebRTC can handle 64KB messages reliably between pion instances.
-	// This is larger than browser-safe 16KB but works for server-to-server.
-	const maxMessageSize = 64 * 1024 // 64 KiB
-
-	// Maximum buffered amount before we wait for drain.
-	// This provides back-pressure and keeps progress in sync.
-	const maxBufferedAmount = 1 * 1024 * 1024 // 1 MiB
-
-	remaining := p
-	for len(remaining) > 0 {
-		// Wait if buffer is too full (provides back-pressure)
-		for {
-			buffered := s.dc.BufferedAmount()
-			if buffered < maxBufferedAmount {
-				break
-			}
-			// Small sleep to allow buffer to drain
-			time.Sleep(1 * time.Millisecond)
-
-			// Check if closed while waiting
-			s.mu.Lock()
-			closed := s.closed
-			s.mu.Unlock()
-			if closed {
-				return n, io.ErrClosedPipe
-			}
-		}
-
-		chunk := remaining
-		if len(chunk) > maxMessageSize {
-			chunk = remaining[:maxMessageSize]
-		}
-		remaining = remaining[len(chunk):]
-
-		if err := s.dc.Send(chunk); err != nil {
-			return n, fmt.Errorf("failed to send data: %w", err)
-		}
-		n += len(chunk)
+	if detached == nil {
+		// Wait for open
+		<-s.openCh
+		s.mu.Lock()
+		detached = s.detached
+		s.mu.Unlock()
 	}
-	return n, nil
+
+	if detached == nil {
+		return 0, io.ErrClosedPipe
+	}
+
+	return detached.Read(p)
+}
+
+// Write writes data to the stream using the detached io.Writer.
+func (s *WebRTCStream) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	detached := s.detached
+	closed := s.closed
+	s.mu.Unlock()
+
+	if closed {
+		return 0, io.ErrClosedPipe
+	}
+
+	if detached == nil {
+		// Wait for open
+		<-s.openCh
+		s.mu.Lock()
+		detached = s.detached
+		s.mu.Unlock()
+	}
+
+	if detached == nil {
+		return 0, io.ErrClosedPipe
+	}
+
+	// Write directly using the detached channel's writer
+	// The SCTP layer handles chunking internally
+	return detached.Write(p)
 }
 
 // Close closes the stream.
@@ -409,11 +374,16 @@ func (s *WebRTCStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.readErr == nil {
-		s.readErr = io.ErrClosedPipe
-	}
+	detached := s.detached
 	s.mu.Unlock()
-	s.readCond.Signal()
 
+	// Signal open in case someone is waiting
+	s.openOnce.Do(func() {
+		close(s.openCh)
+	})
+
+	if detached != nil {
+		return detached.Close()
+	}
 	return s.dc.Close()
 }

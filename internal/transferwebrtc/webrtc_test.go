@@ -29,8 +29,8 @@ func TestWebRTCTransportInterfaceCompliance(t *testing.T) {
 // TestDefaultConfig ensures default config has sensible values.
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if !cfg.Ordered {
-		t.Error("expected Ordered to be true by default")
+	if cfg.Ordered {
+		t.Error("expected Ordered to be false by default for parallel performance")
 	}
 	if cfg.MaxChannels != 100 {
 		t.Errorf("expected MaxChannels=100, got %d", cfg.MaxChannels)
