@@ -332,74 +332,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		resume.totalChunks = totalChunks
 	}
 
-	useResumeSkip := resume != nil && resume.bitmap != nil
-	if useResumeSkip {
-		var nextToSend uint32
-		bytesProcessed := int64(0)
-		bufPool := chunkPoolFor(chunkSize)
-		var buf []byte
-		if bufPool != nil {
-			buf = bufPool.Get()
-			defer bufPool.Put(buf)
-		} else {
-			buf = make([]byte, chunkSize)
-		}
-		for nextToSend < totalChunks {
-			select {
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			default:
-			}
-
-			sendChunk := true
-			if resume.bitmap.Get(int(nextToSend)) && nextToSend < resume.forceSendFrom {
-				sendChunk = false
-			}
-
-			if sendChunk {
-				offset := int64(nextToSend) * int64(chunkSize)
-				remaining := fileSize - offset
-				chunkLen := int64(chunkSize)
-				if chunkLen > remaining {
-					chunkLen = remaining
-				}
-				n, err := readAtWithPool(ctx, file, offset, buf[:chunkLen])
-				if err != nil && err != io.EOF {
-					return 0, fmt.Errorf("failed to read file: %w", err)
-				}
-				if int64(n) != chunkLen {
-					return 0, fmt.Errorf("incomplete chunk read: got %d, want %d", n, chunkLen)
-				}
-				chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-				if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
-					return 0, fmt.Errorf("failed to write chunk index: %w", err)
-				}
-				if err := writeUint32WithTimeout(ctx, s, uint32(n), relPath, "chunk-length"); err != nil {
-					return 0, fmt.Errorf("failed to write chunk length: %w", err)
-				}
-				if err := writeUint32WithTimeout(ctx, s, chunkCRC, relPath, "chunk-crc32"); err != nil {
-					return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
-				}
-				if err := writeFullWithTimeout(ctx, s, buf[:n], relPath, "chunk-data"); err != nil {
-					return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
-				}
-				bytesProcessed += int64(n)
-				if progressFn != nil {
-					progressFn(relPath, bytesProcessed, fileSize)
-				}
-			} else {
-				resume.skippedChunks++
-			}
-
-			nextToSend++
-		}
-
-		if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
-			return 0, fmt.Errorf("failed to write EOF magic: %w", err)
-		}
-
-		return 0, nil
-	}
+	fileCRC := crc32.New(crc32cTable)
 
 	// Determine read-ahead depth (bounded, fixed)
 	maxReadAhead := uint32(DefaultSendQueueMax)
@@ -481,6 +414,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	bytesProcessed := int64(0)
 
 	// Send chunks in windowed pipeline
+sendLoop:
 	for nextToSend < totalChunks {
 		// Check context cancellation
 		select {
@@ -508,7 +442,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			}
 		}
 		if !ok {
-			break
+			break sendLoop
 		}
 
 		// Verify chunk index matches expected
@@ -526,6 +460,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 
 		if sendChunk {
 			chunkCRC := crc32.Checksum(chunk.buf[:chunk.n], crc32cTable)
+			fileCRC.Write(chunk.buf[:chunk.n])
 
 			// Write chunk_index (uint32, big endian)
 			if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
@@ -572,7 +507,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}
 
-	return 0, nil
+	return fileCRC.Sum32(), nil
 }
 
 // receiveFileChunksWindowed receives file chunks, writes to disk,
@@ -596,6 +531,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 	bytesReceived := uint64(0)
 	initialBytes := uint64(0)
+	fileCRC := crc32.New(crc32cTable)
 
 	if resume != nil && resume.sidecar != nil {
 		resume.totalChunks = resume.sidecar.TotalChunks
@@ -727,6 +663,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				return 0, fmt.Errorf("failed to write to file: %w", err)
 			}
 			bytesReceived += uint64(chunk.n)
+			fileCRC.Write(chunk.buf[:chunk.n])
 			if resume != nil && resume.sidecar != nil {
 				resume.sidecar.MarkComplete(chunk.index)
 				// Flushing is now handled by the background goroutine
@@ -754,7 +691,7 @@ done:
 		}
 	}
 
-	return 0, nil
+	return fileCRC.Sum32(), nil
 }
 
 // sendDirRecord sends a directory record.

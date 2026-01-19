@@ -237,11 +237,10 @@ func (r *snapshotReceiver) sendAccept(manifestID string) {
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
-	var benchCancel context.CancelFunc
 	if r.benchmark {
-		var benchCtx context.Context
-		benchCtx, benchCancel = context.WithCancel(baseCtx)
+		benchCtx, benchCancel := context.WithCancel(baseCtx)
 		r.startReceiverBenchLoop(benchCtx, progressState)
+		defer benchCancel()
 	}
 	stopUI := progress.RenderReceiver(baseCtx, os.Stdout, progressState.View)
 	var stopUIOnce sync.Once
@@ -425,7 +424,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
 				time.Sleep(200 * time.Millisecond)
 				restart = true
-				break
 			}
 			if restart {
 				break
@@ -548,16 +546,10 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
 		fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
 		r.logger.Error("transfer failed", "error", err)
-		if benchCancel != nil {
-			benchCancel()
-		}
 		exitWith(1)
 	}
 
 	if r.benchmark {
-		if benchCancel != nil {
-			benchCancel()
-		}
 		progressState.FreezeBench(time.Now())
 		r.printReceiverBenchSummary(progressState)
 	}

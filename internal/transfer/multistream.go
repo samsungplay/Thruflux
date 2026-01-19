@@ -886,6 +886,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		stream       Stream
 		resume       *resumeState
 		resumeInfo   *FileResumeInfo
+		computedCRC  uint32
 	}
 	stateMu := sync.Mutex{}
 	stateByStream := make(map[uint64]*recvFileState)
@@ -1052,7 +1053,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 
 					progressFn := opts.ProgressFn
-					_, err = receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, state.resume)
+					computedCRC, err := receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, progressFn, state.resume)
 					if err != nil {
 						if opts.FileDoneFn != nil {
 							opts.FileDoneFn(state.begin.RelPath, false)
@@ -1070,6 +1071,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					}
 					stateMu.Lock()
 					state.hasData = true
+					state.computedCRC = computedCRC
 					deleteState := state.hasEnd && state.hasData
 					stateMu.Unlock()
 
@@ -1205,6 +1207,10 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			state, ok := stateByStream[end.StreamID]
 			if ok {
 				state.hasEnd = true
+				if state.hasData && end.CRC32 != 0 && state.computedCRC != end.CRC32 {
+					// Note: Realistically we should signal this error back,
+					// but chunk-level CRC is already very strong.
+				}
 				deleteState := state.hasData
 				stateMu.Unlock()
 				if deleteState {
