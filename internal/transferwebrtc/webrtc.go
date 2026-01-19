@@ -401,23 +401,41 @@ func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	// Check buffer and wait if needed
 	// Note: detached.Write() handles chunking, but we want to apply backpressure
 	// based on the underlying SCTP buffer state.
-	for {
-		buffered := s.dc.BufferedAmount()
-		if buffered < maxBufferedAmount {
-			break
-		}
-		time.Sleep(1 * time.Millisecond)
+	// Write directly using the detached channel's writer
+	// We must fragment large writes because Pion/SCTP has message size limits (often 64KB or 256KB).
+	// Sending 4MB at once causes the receiver to abort with "User Initiated Abort".
+	const maxChunkSize = 64 * 1024 // 64 KiB
 
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			return 0, io.ErrClosedPipe
+	totalWritten := 0
+	for totalWritten < len(p) {
+		end := totalWritten + maxChunkSize
+		if end > len(p) {
+			end = len(p)
 		}
-		s.mu.Unlock()
+
+		// Apply flow control for each chunk
+		for {
+			buffered := s.dc.BufferedAmount()
+			if buffered < maxBufferedAmount {
+				break
+			}
+			time.Sleep(1 * time.Millisecond)
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return totalWritten, io.ErrClosedPipe
+			}
+			s.mu.Unlock()
+		}
+
+		n, err := detached.Write(p[totalWritten:end])
+		if err != nil {
+			return totalWritten + n, err
+		}
+		totalWritten += n
 	}
 
-	// Write directly using the detached channel's writer
-	return detached.Write(p)
+	return totalWritten, nil
 }
 
 // Close closes the stream, waiting for buffered data to be sent.
