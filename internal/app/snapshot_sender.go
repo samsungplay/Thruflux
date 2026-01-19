@@ -1271,7 +1271,7 @@ func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 // Auto-tuning removed; parameters are heuristic-driven.
 
 func formatTuneParams(p perf.Params) string {
-	return fmt.Sprintf("chunk=%s parallel=%d",
+	return fmt.Sprintf("Performance: chunk_size=%s parallel_files=%d",
 		formatMiB(p.ChunkSize),
 		p.ParallelFiles,
 	)
@@ -1337,9 +1337,15 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			Resumed:   resumedFiles,
 		})
 	}
-	header := ""
+	s.mu.Lock()
+	header := s.snapshotLine
+	s.mu.Unlock()
+
 	if tune := s.tuneHeaderLine(); tune != "" {
-		header = tune
+		if header != "" {
+			header += "\n"
+		}
+		header += tune
 	}
 	if s.tuneTTY {
 		if lines := s.transportHeaderLines(); len(lines) > 0 {

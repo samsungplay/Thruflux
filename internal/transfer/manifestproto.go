@@ -438,7 +438,6 @@ sendLoop:
 				if nextToSend < totalChunks {
 					return 0, fmt.Errorf("read-ahead goroutine exited early: expected %d chunks, got %d", totalChunks, nextToSend)
 				}
-				break
 			}
 		}
 		if !ok {
