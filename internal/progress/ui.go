@@ -27,6 +27,7 @@ type ReceiverView struct {
 	FileBytes      int64
 	FileTotalBytes int64
 	Route          string
+	Probes         map[string]string
 }
 
 type SenderRow struct {
@@ -39,6 +40,7 @@ type SenderRow struct {
 	FileDone  int
 	FileTotal int
 	Resumed   int
+	Probes    map[string]string
 }
 
 type SenderView struct {
@@ -236,6 +238,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
 						lines++
 					}
+					lines += renderProbes(w, row.Peer, row.Probes)
 				}
 			} else {
 				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
@@ -269,6 +272,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
 						lines++
 					}
+					lines += renderProbes(w, row.Peer, row.Probes)
 				}
 			}
 			lastLines = lines
@@ -536,4 +540,44 @@ func formatAge(d time.Duration) string {
 		return fmt.Sprintf("%.0fh", hours)
 	}
 	return fmt.Sprintf("%.1fh", hours)
+}
+
+func renderProbes(w io.Writer, peerID string, probes map[string]string) int {
+	if len(probes) == 0 {
+		return 0
+	}
+	lines := 0
+	// Sort addresses for consistent UI
+	addrs := make([]string, 0, len(probes))
+	for addr := range probes {
+		addrs = append(addrs, addr)
+	}
+	// Simple string sort
+	for i := 0; i < len(addrs); i++ {
+		for j := i + 1; j < len(addrs); j++ {
+			if addrs[i] > addrs[j] {
+				addrs[i], addrs[j] = addrs[j], addrs[i]
+			}
+		}
+	}
+
+	for _, addr := range addrs {
+		status := probes[addr]
+		color := ""
+		switch status {
+		case "probing":
+			color = "\033[90m" // Grey
+		case "failed":
+			color = "\033[31m" // Red
+		case "won":
+			color = "\033[32m" // Green
+		}
+		if color != "" {
+			fmt.Fprintf(w, "    [%s] probe %s%s\033[0m  %s\n", peerID, color, status, addr)
+		} else {
+			fmt.Fprintf(w, "    [%s] probe %-8s  %s\n", peerID, status, addr)
+		}
+		lines++
+	}
+	return lines
 }

@@ -150,9 +150,39 @@ func (p *Prober) GetProbingAddresses() []string {
 	return candidates
 }
 
+// ProbeState represents the state of an individual address probe.
+type ProbeState int
+
+const (
+	ProbeStateProbing ProbeState = iota
+	ProbeStateFailed
+	ProbeStateWon
+)
+
+func (s ProbeState) String() string {
+	switch s {
+	case ProbeStateProbing:
+		return "probing"
+	case ProbeStateFailed:
+		return "failed"
+	case ProbeStateWon:
+		return "won"
+	default:
+		return "unknown"
+	}
+}
+
+// ProbeUpdate represents a status update for a single address probe.
+type ProbeUpdate struct {
+	Addr  string
+	State ProbeState
+	Err   error
+}
+
 // ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
 // It returns the first successfully established connection.
-func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config) (*quic.Conn, error) {
+// The onUpdate callback is called whenever a probe's state changes.
+func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (*quic.Conn, error) {
 	// Initialize Transport if not already done.
 	// We do this here (lazy init) or we could do it earlier, but STUN works better on raw UDP.
 	if p.transport == nil {
@@ -178,9 +208,16 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 	dialCandidate := func(addrStr string) {
 		defer wg.Done()
 
+		if onUpdate != nil {
+			onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateProbing})
+		}
+
 		udpAddr, err := parseAddr(addrStr)
 		if err != nil {
 			p.logger.Warn("invalid remote candidate", "addr", addrStr, "error", err)
+			if onUpdate != nil {
+				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
+			}
 			return
 		}
 
@@ -190,6 +227,9 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		conn, err := p.transport.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
 		if err != nil {
 			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
+			if onUpdate != nil {
+				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
+			}
 			return
 		}
 
@@ -197,6 +237,9 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		select {
 		case resultCh <- conn:
 			p.logger.Info("probe won", "addr", addrStr)
+			if onUpdate != nil {
+				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateWon})
+			}
 		default:
 			// Lost the race, close this connection
 			conn.CloseWithError(0, "race_lost")
