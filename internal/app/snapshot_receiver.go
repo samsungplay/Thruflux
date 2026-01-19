@@ -311,8 +311,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	progressState.SetIceStage(fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
 	// Start listening for QUIC immediately
-	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listen starting on %v...\n", prober.LocalAddr())
-
 	udpConn := prober.ListenPacket()
 
 	// Tweak buffers
@@ -346,14 +344,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(1)
 	}
 	defer quicListener.Close()
-	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listener created\n")
-	fmt.Fprintf(os.Stderr, "waiting for QUIC transfer connection (session=%s sender=%s)\n", r.sessionID, r.senderID)
 
 	quicTransport := transferquic.NewListener(quicListener, r.logger)
 	defer quicTransport.Close()
 
 	iceLog("waiting_for_connection")
-	fmt.Fprintf(os.Stderr, "[TRACE] waiting for QUIC Accept...\n")
 	transferConn, err := quicTransport.Accept(baseCtx)
 	if err != nil {
 		r.logger.Error("failed to accept transfer connection", "error", err)

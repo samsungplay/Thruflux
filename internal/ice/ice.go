@@ -101,16 +101,22 @@ func (p *Prober) GetProbingAddresses() []string {
 		p.logger.Error("failed to list interfaces", "error", err)
 	} else {
 		for _, iface := range ifaces {
+			// Skip down interfaces
 			if iface.Flags&net.FlagUp == 0 {
 				continue
 			}
+			// Skip loopback unless we really want it (usually we don't for LAN transfer)
 			if iface.Flags&net.FlagLoopback != 0 {
-				continue // Skip loopback usually
+				continue
 			}
+
 			addrs, err := iface.Addrs()
 			if err != nil {
 				continue
 			}
+
+			_, portStr, _ := net.SplitHostPort(p.udpConn.LocalAddr().String())
+
 			for _, addr := range addrs {
 				var ip net.IP
 				switch v := addr.(type) {
@@ -119,15 +125,16 @@ func (p *Prober) GetProbingAddresses() []string {
 				case *net.IPAddr:
 					ip = v.IP
 				}
-				if ip == nil {
-					continue
-				}
-				if ip.To4() == nil {
+
+				if ip == nil || ip.IsLoopback() || ip.IsMulticast() {
 					continue
 				}
 
-				_, portStr, _ := net.SplitHostPort(p.udpConn.LocalAddr().String())
-				candidates = append(candidates, net.JoinHostPort(ip.String(), portStr))
+				// Allow both IPv4 and IPv6
+				// ip.String() handles IPv6 format (e.g. ::1) correctly.
+				// net.JoinHostPort handles wrapping IPv6 in brackets [::1]:port.
+				cand := net.JoinHostPort(ip.String(), portStr)
+				candidates = append(candidates, cand)
 			}
 		}
 	}
@@ -136,6 +143,9 @@ func (p *Prober) GetProbingAddresses() []string {
 	if p.publicAddr != nil {
 		candidates = append(candidates, p.publicAddr.String())
 	}
+
+	// Log gathered
+	p.logger.Info("gathered probing candidates", "count", len(candidates), "candidates", candidates)
 
 	return candidates
 }
