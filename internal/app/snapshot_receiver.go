@@ -506,12 +506,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 	}
 
-	// If using srflx/relay, disable PMTUD to avoid blackholes
-	if icePeer.IsRemoteCandidateSrflxOrRelay() {
-		fmt.Fprintf(os.Stderr, "Using conservative MTU (DisablePathMTUDiscovery) for srflx/relay connection\n")
-		quicCfg.DisablePathMTUDiscovery = true
-	}
-
 	quicListener, err := quictransport.ListenWithConfig(baseCtx, udpConn, r.logger, quicCfg)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)

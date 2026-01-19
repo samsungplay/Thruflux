@@ -182,8 +182,8 @@ func Run(args []string) {
 		stunServers = append([]string{}, senderDefaultStunServers...)
 	}
 
-	logLevel := "debug"
-	logger := logging.New("thruflux-sender", logLevel, "debug_sender.log")
+	logLevel := "error"
+	logger := logging.New("thruflux-sender", logLevel)
 	if err := app.RunSnapshotSender(context.Background(), logger, app.SnapshotSenderConfig{
 		ServerURL:              serverURL,
 		Paths:                  paths,

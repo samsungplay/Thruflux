@@ -656,12 +656,6 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		[]string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)},
 	)
 
-	// If using srflx/relay, disable PMTUD to avoid blackholes
-	if icePeer.IsRemoteCandidateSrflxOrRelay() {
-		fmt.Fprintf(os.Stderr, "Using conservative MTU (DisablePathMTUDiscovery) for srflx/relay connection\n")
-		quicCfg.DisablePathMTUDiscovery = true
-	}
-
 	quicConn, err := quictransport.DialWithConfig(ctx, udpConn, remoteAddr, s.logger, quicCfg)
 	if err != nil {
 		return fmt.Errorf("failed to dial QUIC connection: %w", err)

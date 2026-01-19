@@ -3,7 +3,6 @@ package ice
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -410,6 +409,8 @@ func (p *ICEPeer) UDPConns() []*net.UDPConn {
 
 // CreatePacketConn returns a PacketConn for QUIC data using the ICE-established
 // UDP socket, then hands off control by stopping ICE.
+// CreatePacketConn returns a PacketConn for QUIC data using the ICE-established
+// UDP socket. The ICE agent is kept alive to maintain the NAT mapping.
 func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	p.mu.Lock()
 	if p.conn == nil {
@@ -417,106 +418,24 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		return nil, fmt.Errorf("ICE connection not established")
 	}
 	demux, err := p.demuxForSelectedPairLocked()
-	agent := p.agent
-	p.agent = nil
+	// We do NOT nil out p.agent; we want to keep it alive for NAT keepalives.
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 
-	if agent != nil {
-		_ = agent.Close()
-	}
 	if demux == nil {
 		return nil, fmt.Errorf("no UDP demuxer for handoff")
 	}
-	demux.Stop() // Used to be Stop, now we want to keep buffers.
-	// Wait, caller of CreatePacketConn expects net.PacketConn.
-	// We need to change implementation to grab buffered packets.
 
-	buffered := demux.StopAndGetBuffered()
-	conn := demux.Conn()
-	p.logger.Debug("CreatePacketConn: demux stopped", "buffered_packets", len(buffered), "local_addr", conn.LocalAddr())
+	// demux.Stop() is a no-op in the new implementation, but we call it for API compatibility
+	// if it was intended to signal mode switch.
+	demux.Stop()
 
+	// Return the virtual connection for the application (QUIC), not the raw socket
+	conn := demux.AppConn()
 	_ = conn.SetDeadline(time.Time{})
-
-	if len(buffered) > 0 {
-		return &ReplayPacketConn{
-			conn:     conn,
-			buffered: buffered,
-			logger:   p.logger,
-		}, nil
-	}
-
 	return conn, nil
-}
-
-// ReplayPacketConn wraps a UDPConn and replays buffered packets before reading new ones.
-type ReplayPacketConn struct {
-	conn     *net.UDPConn
-	buffered []demuxPacket
-	mu       sync.Mutex
-	logger   *slog.Logger
-}
-
-func (c *ReplayPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	c.mu.Lock()
-	if len(c.buffered) > 0 {
-		pkt := c.buffered[0]
-		c.buffered = c.buffered[1:]
-		if len(c.buffered) == 0 {
-			c.logger.Debug("ReplayPacketConn: finished replaying buffered packets")
-		}
-		c.mu.Unlock()
-
-		n = copy(p, pkt.buf)
-		if pkt.release != nil {
-			pkt.release()
-		}
-
-		c.logger.Debug("ReplayPacketConn: replayed packet", "len", n, "src", pkt.addr)
-
-		if n < len(pkt.buf) {
-			return n, pkt.addr, io.ErrShortBuffer
-		}
-		return n, pkt.addr, nil
-	}
-	c.mu.Unlock()
-	return c.conn.ReadFrom(p)
-}
-
-func (c *ReplayPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	return c.conn.WriteTo(p, addr)
-}
-
-func (c *ReplayPacketConn) Close() error {
-	c.logger.Debug("ReplayPacketConn: closing")
-	// Release any remaining buffered packets
-	c.mu.Lock()
-	for _, pkt := range c.buffered {
-		if pkt.release != nil {
-			pkt.release()
-		}
-	}
-	c.buffered = nil
-	c.mu.Unlock()
-	return c.conn.Close()
-}
-
-func (c *ReplayPacketConn) LocalAddr() net.Addr {
-	return c.conn.LocalAddr()
-}
-
-func (c *ReplayPacketConn) SetDeadline(t time.Time) error {
-	return c.conn.SetDeadline(t)
-}
-
-func (c *ReplayPacketConn) SetReadDeadline(t time.Time) error {
-	return c.conn.SetReadDeadline(t)
-}
-
-func (c *ReplayPacketConn) SetWriteDeadline(t time.Time) error {
-	return c.conn.SetWriteDeadline(t)
 }
 
 func (p *ICEPeer) demuxForSelectedPairLocked() (*packetDemux, error) {
@@ -553,17 +472,6 @@ func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.selectedPair
-}
-
-// IsRemoteCandidateSrflxOrRelay returns true if the selected remote candidate is srflx or relay.
-func (p *ICEPeer) IsRemoteCandidateSrflxOrRelay() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.selectedPair == nil {
-		return false
-	}
-	typ := p.selectedPair.Remote.Type()
-	return typ == ice.CandidateTypeServerReflexive || typ == ice.CandidateTypePeerReflexive || typ == ice.CandidateTypeRelay
 }
 
 func (p *ICEPeer) Close() error {

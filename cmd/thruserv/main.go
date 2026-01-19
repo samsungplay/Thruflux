@@ -37,7 +37,7 @@ func main() {
 		return
 	}
 	cfg := config.ParseServerConfig()
-	logger := logging.New("thruserv", "error", "")
+	logger := logging.New("thruserv", "error")
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	fmt.Printf("starting server addr=%s\n", addr)

@@ -160,8 +160,8 @@ func Run(args []string) {
 		stunServers = append([]string{}, receiverDefaultStunServers...)
 	}
 
-	logLevel := "debug"
-	logger := logging.New("thruflux-receiver", logLevel, "debug_receiver.log")
+	logLevel := "error"
+	logger := logging.New("thruflux-receiver", logLevel)
 	if err := app.RunSnapshotReceiver(context.Background(), logger, app.SnapshotReceiverConfig{
 		ServerURL:              serverURL,
 		JoinCode:               joinCode,
