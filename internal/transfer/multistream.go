@@ -787,30 +787,14 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	const controlStreamLabel = "stream-1"
 
+	fmt.Println("DEBUG: RecvManifestMultiStream: Waiting for Control Stream...")
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
 			return manifest.Manifest{}, fmt.Errorf("failed to accept stream: %w", err)
 		}
 
-		// Check label if available (Stream interface needs to support it or we cast)
-		// Our WebRTCStream implementation should expose Label via a method or we inspect underlying
-		// But wait, the standard Stream interface doesn't have Label().
-		// We can try to cast to an interface that provides Label, or relies on StreamID.
-		// Since we can't easily change the interface right now without breaking things,
-		// and we know the StreamID of "stream-1" is the first one... but IDs are dynamic.
-
-		// Actually, let's look at the logs again: "stream detached and ready label=stream-1 id=1".
-		// The sender ALWAYS creates "stream-1" as the first one.
-		// If we can't access Label, we essentially have to rely on the *first* stream the sender *created*?
-		// No, they arrive out of order.
-
-		// Let's cast to something that has Label() or look at how we can expose it.
-		// The WebRTCStream struct has a `dc *webrtc.DataChannel` field.
-		// In `func (s *WebRTCStream) Label() string { return s.dc.Label() }` ?
-		// We need to add Label() to the Stream interface or type assert.
-
-		// Type assert is safer for now.
+		// Check label
 		type Labeler interface {
 			Label() string
 		}
@@ -819,29 +803,30 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if l, ok := stream.(Labeler); ok {
 			label = l.Label()
 		} else {
-			// Fallback: If we can't get label, we might be in trouble.
-			// But wait, we saw "stream-1" logs.
-			// Let's assume we can add Label() to WebRTCStream and then check it here.
-			// For now, let's close and error if we can't identify.
 			stream.Close()
 			return manifest.Manifest{}, fmt.Errorf("stream does not support Label()")
 		}
+
+		fmt.Printf("DEBUG: Accepted stream label=%s\n", label)
 
 		if label == controlStreamLabel {
 			controlStream = stream
 			break
 		}
 
-		// Buffer non-control streams
+		fmt.Printf("DEBUG: Buffering non-control stream label=%s\n", label)
 		pendingStreams = append(pendingStreams, stream)
 	}
 
 	defer controlStream.Close()
 
+	fmt.Println("DEBUG: Reading Control Header...")
 	m, err := readControlHeader(controlStream)
 	if err != nil {
+		fmt.Printf("DEBUG: readControlHeader failed: %v\n", err)
 		return m, err
 	}
+	fmt.Printf("DEBUG: Control Header Read OK. Manifest has %d files.\n", len(m.Items))
 
 	baseDir := outDir
 	if !opts.NoRootDir {
@@ -1174,14 +1159,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
+	fmt.Println("DEBUG: Entering main Control Message Read Loop...")
 	for {
 		select {
 		case <-recvCtx.Done():
 			if recvErr != nil {
+				fmt.Printf("DEBUG: recvCtx Done with error: %v\n", recvErr)
 				return m, recvErr
 			}
+			fmt.Printf("DEBUG: recvCtx Done with ctx error: %v\n", recvCtx.Err())
 			return m, recvCtx.Err()
 		case err := <-acceptErrChan:
+			fmt.Printf("DEBUG: acceptErrChan received: %v\n", err)
 			if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, len(fileItems)) {
 				return m, nil
 			}
