@@ -780,8 +780,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	var controlStream Stream
 	pendingStreams := make([]Stream, 0)
 
-	// Stream ID 1 is always the Control Stream in our protocol
-	const controlStreamID = 1
+	// Stream ID 0 is always the Control Stream in our protocol (SCTP/QUIC default)
+	const controlStreamID = 0
 
 	for {
 		stream, err := conn.AcceptStream(ctx)
