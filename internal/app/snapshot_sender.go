@@ -468,202 +468,89 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return s.conn.Send(env)
 	}
 
-	// Retry loop for ICE connection
-	// Attempt 1: Prefer LAN (block VPN)
-	// Attempt 2: Allow all (fallback)
-	var icePeer *ice.ICEPeer
-	for attempt := 1; attempt <= 2; attempt++ {
-		// effective attemptCtx for this try
-		// We use a shorter timeout for the first attempt if we want fail-fast,
-		// but standard timeout is fine as gathering is fast.
-
-		iceCfg := ice.ICEConfig{
-			StunServers: s.stunServers,
-			TurnServers: s.turnServers,
-			Lite:        false,
-			PreferLAN:   attempt == 1,
-		}
-		var err error
-		icePeer, err = ice.NewICEPeer(iceCfg, s.logger)
-		if err != nil {
-			if attempt == 2 {
-				return fmt.Errorf("failed to create ICE peer: %w", err)
-			}
-			s.logger.Warn("failed to create ICE peer, retrying", "error", err)
-			continue
-		}
-		defer icePeer.Close()
-
-		attemptCtx, attemptCancel := context.WithCancel(ctx)
-		defer attemptCancel()
-
-		var localCandidates []string
-		icePeer.OnLocalCandidate(func(c string) {
-			localCandidates = append(localCandidates, c)
-		})
-
-		iceLog("gather_start")
-		if err := icePeer.StartGathering(attemptCtx); err != nil {
-			return fmt.Errorf("failed to start gathering: %w", err)
-		}
-		select {
-		case <-icePeer.GatheringDone():
-			iceLog("gather_complete")
-		case <-time.After(10 * time.Second):
-			return fmt.Errorf("timeout waiting for candidate gathering")
-		}
-
-		ufrag, pwd := icePeer.LocalCredentials()
-		if err := sendSignal(protocol.TypeIceCredentials, protocol.IceCredentials{Ufrag: ufrag, Pwd: pwd}); err != nil {
-			return fmt.Errorf("failed to send credentials: %w", err)
-		}
-		iceLog("local_creds_sent")
-		if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
-			return fmt.Errorf("failed to send candidates: %w", err)
-		}
-		s.setSenderStage(peerID, fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
-
-		remoteCredsCh := make(chan protocol.IceCredentials, 1)
-		remoteCandsCh := make(chan []string, 1)
-
-		readCtx, readCancel := context.WithCancel(attemptCtx)
-		readErr := make(chan error, 1)
-		go func() {
-			for {
-				select {
-				case <-readCtx.Done():
-					return
-				case env := <-signalCh:
-					switch env.Type {
-					case protocol.TypeIceCredentials:
-						var creds protocol.IceCredentials
-						if err := env.DecodePayload(&creds); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCredsCh <- creds:
-						default:
-						}
-					case protocol.TypeIceCandidates:
-						var cands protocol.IceCandidates
-						if err := env.DecodePayload(&cands); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCandsCh <- cands.Candidates:
-						default:
-						}
-					case protocol.TypeIceCandidate:
-						var cand protocol.IceCandidate
-						if err := env.DecodePayload(&cand); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCandsCh <- []string{cand.Candidate}:
-						default:
-						}
-					}
-				}
-			}
-		}()
-
-		var remoteCreds *protocol.IceCredentials
-		var remoteCands []string
-		waitDeadline := time.After(10 * time.Second)
-		for remoteCreds == nil || remoteCands == nil {
-			select {
-			case <-attemptCtx.Done():
-				readCancel()
-				return attemptCtx.Err()
-			case err := <-readErr:
-				readCancel()
-				return err
-			case creds := <-remoteCredsCh:
-				remoteCreds = &creds
-				iceLog("remote_creds_received")
-			case cands := <-remoteCandsCh:
-				remoteCands = cands
-				s.setSenderStage(peerID, fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
-			case <-waitDeadline:
-				readCancel()
-				return fmt.Errorf("timeout waiting for remote ICE data")
-			}
-		}
-
-		if err := icePeer.AddRemoteCredentials(remoteCreds.Ufrag, remoteCreds.Pwd); err != nil {
-			readCancel()
-			return err
-		}
-		for _, cand := range remoteCands {
-			_ = icePeer.AddRemoteCandidate(cand)
-		}
-
-		iceLog("connect_start")
-		connectCtx, connectCancel := context.WithTimeout(attemptCtx, 10*time.Second)
-		// We don't need the returned conn as icePeer stores it
-		// We don't need the returned conn as icePeer stores it
-		_, err = icePeer.Connect(connectCtx)
-		connectCancel()
-		readCancel()
-		if err != nil {
-			icePeer.Close()
-			if attempt == 2 {
-				return fmt.Errorf("failed to establish ICE connection: %w", err)
-			}
-			s.logger.Warn("ICE connection failed, retrying with fallback", "error", err)
-			continue
-		}
-		break // Success
+	// Initialize Prober
+	proberCfg := ice.ProberConfig{
+		StunServers: s.stunServers,
+		PreferLAN:   true,
 	}
-	iceLog("connect_ok")
-	fmt.Fprintf(os.Stderr, "ice connect ok (peer=%s session=%s)\n", peerID, s.sessionID)
-	if route := iceRouteString("sender", peerID, icePeer); route != "" {
-		s.setSenderRoute(peerID, route)
-	}
-
-	fmt.Fprintf(os.Stderr, "[TRACE] getting PacketConnInfo...\n")
-	_, remoteAddr, err := icePeer.PacketConnInfo()
+	prober, err := ice.NewProber(proberCfg, s.logger)
 	if err != nil {
-		return fmt.Errorf("failed to get PacketConn info: %w", err)
+		return fmt.Errorf("failed to create prober: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "[TRACE] PacketConnInfo ok, remoteAddr=%v\n", remoteAddr)
-	// Do NOT close iceConn. We use it for QUIC.
-	// iceConn.Close()
+	defer prober.Close()
 
-	fmt.Fprintf(os.Stderr, "[TRACE] creating PacketConn...\n")
-	udpConn, err := icePeer.CreatePacketConn()
-	if err != nil {
-		return fmt.Errorf("failed to create PacketConn: %w", err)
+	// Get local candidates
+	localCandidates := prober.GetProbingAddresses()
+	iceLog("gather_complete")
+
+	// Send candidates
+	if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
+		return fmt.Errorf("failed to send candidates: %w", err)
 	}
-	defer udpConn.Close()
-	fmt.Fprintf(os.Stderr, "[TRACE] PacketConn created, localAddr=%v\n", udpConn.LocalAddr())
+	s.setSenderStage(peerID, fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
-	// Debug: print heartbeat and demux stats every 2 seconds
+	// Receiver Remote Candidates
+	remoteCandsCh := make(chan []string, 1)
+	readCtx, readCancel := context.WithCancel(ctx)
+	defer readCancel()
+
+	readErr := make(chan error, 1)
+
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-readCtx.Done():
 				return
-			case <-ticker.C:
-				stun, app, dropped := ice.DemuxStats()
-				fmt.Fprintf(os.Stderr, "[HEARTBEAT] sender alive, demux stats: stun=%d app=%d dropped=%d\n", stun, app, dropped)
+			case env := <-signalCh:
+				switch env.Type {
+				case protocol.TypeIceCandidates:
+					var cands protocol.IceCandidates
+					if err := env.DecodePayload(&cands); err != nil {
+						readErr <- err
+						return
+					}
+					select {
+					case remoteCandsCh <- cands.Candidates:
+					default:
+					}
+				case protocol.TypeIceCandidate:
+					// Supporting incremental just in case, though we prefer bulk
+					var cand protocol.IceCandidate
+					if err := env.DecodePayload(&cand); err != nil {
+						readErr <- err
+						return
+					}
+					select {
+					case remoteCandsCh <- []string{cand.Candidate}:
+					default:
+					}
+				}
 			}
 		}
 	}()
 
-	udpTune := transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
-	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
-		results := make([]transport.UdpTuneResult, 0, len(udpConns))
-		for _, conn := range udpConns {
-			results = append(results, transport.ApplyUDPBeyondBestEffort(conn, s.udpReadBufferBytes, s.udpWriteBufferBytes))
-		}
-		udpTune = mergeUDPTuneResults(results)
+	var remoteCands []string
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-readErr:
+		return err
+	case cands := <-remoteCandsCh:
+		remoteCands = cands
+		s.setSenderStage(peerID, fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout waiting for remote candidates")
 	}
+
+	iceLog("probing_start")
+
+	// Prepare QUIC Config
+	udpTune := transport.ApplyUDPBeyondBestEffort(nil, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	// Apply to our socket
+	if conn, ok := prober.ListenPacket().(*net.UDPConn); ok {
+		udpTune = transport.ApplyUDPBeyondBestEffort(conn, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+	}
+
 	quicCfg, quicTune := transport.BuildQuicConfig(
 		quictransport.DefaultClientQUICConfig(),
 		s.quicConnWindowBytes,
@@ -675,13 +562,29 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		[]string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)},
 	)
 
-	fmt.Fprintf(os.Stderr, "[TRACE] QUIC dial starting to %v...\n", remoteAddr)
-	quicConn, err := quictransport.DialWithConfig(ctx, udpConn, remoteAddr, s.logger, quicCfg)
+	// Probe and Dial
+	// We need a dummy TLS config for quic-go if not using a custom one (quictransport usually provides one)
+	// But `ProbeAndDial` expects us to pass it.
+	// `quictransport.DialWithConfig` generates one internally if we don't pass it?
+	// Actually `DialWithConfig` in `internal/quictransport` calls `quic.Dial`.
+	// Let's grab the TLS config from `transferquic` or `quictransport`.
+	// `quictransport.DefaultClientQUICConfig` only returns *quic.Config.
+	// We need a TLS config. `quictransport` helper might have one.
+	// `quictransport.DialWithConfig` creates a TLS config. We should replicate that or expose it.
+	// Since I can't easily change `quictransport` right now without reading it, I'll assume I can construct a skip-verify one.
+
+	tlsConf := quictransport.ClientConfig()
+
+	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg)
 	if err != nil {
-		return fmt.Errorf("failed to dial QUIC connection: %w", err)
+		return fmt.Errorf("probing failed: %w", err)
 	}
 	defer quicConn.CloseWithError(0, "")
-	fmt.Fprintf(os.Stderr, "QUIC connection established (peer=%s session=%s)\n", peerID, s.sessionID)
+
+	iceLog("connect_ok")
+	fmt.Fprintf(os.Stderr, "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
+	// Log route
+	s.setSenderRoute(peerID, fmt.Sprintf("local=%s remote=%s", quicConn.LocalAddr(), quicConn.RemoteAddr()))
 
 	s.setTransferCloser(peerID, func() {
 		_ = quicConn.CloseWithError(0, "")

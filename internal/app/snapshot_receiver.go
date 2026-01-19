@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -278,243 +279,54 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	var (
-		icePeer *ice.ICEPeer
-		err     error
+		prober *ice.Prober
+		err    error
 	)
-	drain := func() {
-		for {
-			select {
-			case <-r.signalCh:
-			default:
-				return
-			}
-		}
+
+	// Initialize Prober
+	proberCfg := ice.ProberConfig{
+		StunServers: r.stunServers,
+		PreferLAN:   true, // We can make this configurable if needed
 	}
-	for attempt := 1; ; attempt++ {
-		if attempt > 1 {
-			drain()
-		}
-		attemptCtx, attemptCancel := context.WithCancel(baseCtx)
-
-		// First attempt: Prefer LAN
-		iceCfg := ice.ICEConfig{
-			StunServers: r.stunServers,
-			TurnServers: r.turnServers,
-			Lite:        false,
-			PreferLAN:   attempt == 1,
-		}
-		icePeer, err = ice.NewICEPeer(iceCfg, r.logger)
-		if err != nil {
-			attemptCancel()
-			r.logger.Error("failed to create ICE peer", "error", err)
-			exitWith(1)
-		}
-
-		var localCandidates []string
-		icePeer.OnLocalCandidate(func(c string) {
-			localCandidates = append(localCandidates, c)
-		})
-
-		iceLog("gather_start")
-		if err := icePeer.StartGathering(attemptCtx); err != nil {
-			attemptCancel()
-			icePeer.Close()
-			r.logger.Error("failed to start gathering", "error", err)
-			exitWith(1)
-		}
-		select {
-		case <-icePeer.GatheringDone():
-			iceLog("gather_complete")
-		case <-time.After(10 * time.Second):
-			attemptCancel()
-			icePeer.Close()
-			progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-
-		ufrag, pwd := icePeer.LocalCredentials()
-		if err := sendSignal(protocol.TypeIceCredentials, protocol.IceCredentials{Ufrag: ufrag, Pwd: pwd}); err != nil {
-			attemptCancel()
-			icePeer.Close()
-			r.logger.Error("failed to send credentials", "error", err)
-			exitWith(1)
-		}
-		iceLog("local_creds_sent")
-		if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
-			attemptCancel()
-			icePeer.Close()
-			r.logger.Error("failed to send candidates", "error", err)
-			exitWith(1)
-		}
-		progressState.SetIceStage(fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
-
-		remoteCredsCh := make(chan protocol.IceCredentials, 1)
-		remoteCandsCh := make(chan []string, 1)
-
-		readCtx, readCancel := context.WithCancel(attemptCtx)
-		readErr := make(chan error, 1)
-		go func() {
-			for {
-				select {
-				case <-readCtx.Done():
-					return
-				case env := <-r.signalCh:
-					switch env.Type {
-					case protocol.TypeIceCredentials:
-						var creds protocol.IceCredentials
-						if err := env.DecodePayload(&creds); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCredsCh <- creds:
-						default:
-						}
-					case protocol.TypeIceCandidate:
-						var cand protocol.IceCandidate
-						if err := env.DecodePayload(&cand); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCandsCh <- []string{cand.Candidate}:
-						default:
-						}
-					case protocol.TypeIceCandidates:
-						var cands protocol.IceCandidates
-						if err := env.DecodePayload(&cands); err != nil {
-							readErr <- err
-							return
-						}
-						select {
-						case remoteCandsCh <- cands.Candidates:
-						default:
-						}
-					}
-				}
-			}
-		}()
-
-		var remoteCreds *protocol.IceCredentials
-		var remoteCands []string
-		restart := false
-		waitDeadline := time.After(10 * time.Second)
-		for remoteCreds == nil || remoteCands == nil {
-			select {
-			case <-attemptCtx.Done():
-				readCancel()
-				icePeer.Close()
-				r.logger.Error("transfer canceled")
-				exitWith(1)
-			case err := <-readErr:
-				readCancel()
-				attemptCancel()
-				icePeer.Close()
-				r.logger.Error("signal error", "error", err)
-				exitWith(1)
-			case creds := <-remoteCredsCh:
-				remoteCreds = &creds
-				iceLog("remote_creds_received")
-			case cands := <-remoteCandsCh:
-				remoteCands = cands
-				progressState.SetIceStage(fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
-			case <-waitDeadline:
-				readCancel()
-				attemptCancel()
-				icePeer.Close()
-				progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
-				time.Sleep(200 * time.Millisecond)
-				restart = true
-			}
-			if restart {
-				break
-			}
-		}
-		if restart {
-			continue
-		}
-
-		if err := icePeer.AddRemoteCredentials(remoteCreds.Ufrag, remoteCreds.Pwd); err != nil {
-			readCancel()
-			attemptCancel()
-			icePeer.Close()
-			r.logger.Error("failed to set remote credentials", "error", err)
-			exitWith(1)
-		}
-		for _, cand := range remoteCands {
-			_ = icePeer.AddRemoteCandidate(cand)
-		}
-
-		iceLog("connect_start")
-		acceptCtx, acceptCancel := context.WithTimeout(attemptCtx, 10*time.Second)
-		// We don't need the returned conn as icePeer stores it
-		_, err = icePeer.Accept(acceptCtx)
-		acceptCancel()
-		readCancel()
-		attemptCancel()
-		if err == nil {
-			break
-		}
-		icePeer.Close()
-		progressState.SetIceStage(fmt.Sprintf("restart attempt=%d", attempt+1))
-		time.Sleep(200 * time.Millisecond)
-		continue
-	}
-	iceLog("connect_ok")
-	r.logger.Info("ice connected", "session_id", r.sessionID, "peer_id", r.peerID, "sender_id", r.senderID)
-	if route := iceRouteString("receiver", r.peerID, icePeer); route != "" {
-		progressState.SetRoute(route)
-	}
-
-	fmt.Fprintf(os.Stderr, "[TRACE] getting PacketConnInfo...\n")
-	_, _, err = icePeer.PacketConnInfo()
+	prober, err = ice.NewProber(proberCfg, r.logger)
 	if err != nil {
-		r.logger.Error("failed to get PacketConn info", "error", err)
+		r.logger.Error("failed to create prober", "error", err)
 		exitWith(1)
 	}
-	fmt.Fprintf(os.Stderr, "[TRACE] PacketConnInfo ok\n")
-	// Do NOT close iceConn here. We use it for QUIC.
-	// iceConn.Close()
+	defer prober.Close()
 
-	fmt.Fprintf(os.Stderr, "[TRACE] creating PacketConn...\n")
-	udpConn, err := icePeer.CreatePacketConn()
-	if err != nil {
-		r.logger.Error("failed to create PacketConn", "error", err)
+	// Get local candidates (IP:Port)
+	localCandidates := prober.GetProbingAddresses()
+	iceLog("gather_complete")
+
+	// Send candidates to sender
+	// We reuse IceCandidates message type for simplicity
+	if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
+		r.logger.Error("failed to send candidates", "error", err)
 		exitWith(1)
 	}
-	defer udpConn.Close()
-	fmt.Fprintf(os.Stderr, "[TRACE] PacketConn created, localAddr=%v\n", udpConn.LocalAddr())
+	progressState.SetIceStage(fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
-	// Debug: print heartbeat and demux stats every 2 seconds
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-baseCtx.Done():
-				return
-			case <-ticker.C:
-				stun, app, dropped := ice.DemuxStats()
-				fmt.Fprintf(os.Stderr, "[HEARTBEAT] receiver alive, demux stats: stun=%d app=%d dropped=%d\n", stun, app, dropped)
-			}
-		}
-	}()
+	// Start listening for QUIC immediately
+	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listen starting on %v...\n", prober.LocalAddr())
 
-	udpTune := transport.ApplyUDPBeyondBestEffort(nil, r.udpReadBufferBytes, r.udpWriteBufferBytes)
-	if udpConns := icePeer.UDPConns(); len(udpConns) > 0 {
-		results := make([]transport.UdpTuneResult, 0, len(udpConns))
-		for _, conn := range udpConns {
-			results = append(results, transport.ApplyUDPBeyondBestEffort(conn, r.udpReadBufferBytes, r.udpWriteBufferBytes))
-		}
-		udpTune = mergeUDPTuneResults(results)
+	udpConn := prober.ListenPacket()
+
+	// Tweak buffers
+	// udpTune := transport.ApplyUDPBeyondBestEffort(udpConn.(*net.UDPConn), r.udpReadBufferBytes, r.udpWriteBufferBytes)
+	// TypAssertion might fail if it's not *net.UDPConn (it is in our case)
+	var udpTune transport.UdpTuneResult
+	if conn, ok := udpConn.(*net.UDPConn); ok {
+		udpTune = transport.ApplyUDPBeyondBestEffort(conn, r.udpReadBufferBytes, r.udpWriteBufferBytes)
 	}
+
 	quicCfg, quicTune := transport.BuildQuicConfig(
 		quictransport.DefaultServerQUICConfig(),
 		r.quicConnWindowBytes,
 		r.quicStreamWindowBytes,
 		r.quicMaxIncomingStreams,
 	)
+
 	transportSummary := formatTransportSummary(udpTune, quicTune)
 	transportLines := []string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)}
 	progressState.SetTransportLines(append([]string{transportSummary}, transportLines...))
@@ -525,7 +337,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "[TRACE] QUIC listen starting...\n")
 	quicListener, err := quictransport.ListenWithConfig(baseCtx, udpConn, r.logger, quicCfg)
 	if err != nil {
 		r.logger.Error("failed to listen for QUIC", "error", err)

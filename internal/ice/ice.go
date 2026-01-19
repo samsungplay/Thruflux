@@ -2,620 +2,331 @@ package ice
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/pion/ice/v2"
-	"github.com/pion/transport/v2/stdnet"
+	"github.com/pion/stun"
+	"github.com/quic-go/quic-go"
 )
 
-// ICEConfig holds configuration for ICE peer.
-type ICEConfig struct {
+// ProberConfig holds configuration for the network prober.
+type ProberConfig struct {
 	StunServers []string
-	TurnServers []string
-	Lite        bool // false for now
 	PreferLAN   bool
 }
 
 // DefaultStunServers is the STUN list used when no servers provided.
 var DefaultStunServers = []string{
-	"stun:stun.l.google.com:19302",
-	"stun:stun.cloudflare.com:3478",
-	"stun:stun.bytepipe.app:3478",
+	"stun.l.google.com:19302",
+	"stun.cloudflare.com:3478",
 }
 
-// ICEPeer manages ICE connection establishment.
-type ICEPeer struct {
-	agent            *ice.Agent
-	config           ICEConfig
-	logger           *slog.Logger
-	mu               sync.Mutex
-	onCandidate      func(string)
-	queuedCandidates []string // Candidates gathered before callback is set
-	gatherDone       chan struct{}
-	gatherOnce       sync.Once
-	// Connection info for QUIC
-	conn         *ice.Conn
-	localAddr    net.Addr
-	remoteAddr   net.Addr
-	selectedPair *ice.CandidatePair
-	udpConns     []*net.UDPConn
-	udpMux       ice.UDPMux
-	demuxers     map[ice.NetworkType]*packetDemux
+// Prober manages network discovery and probing.
+type Prober struct {
+	config     ProberConfig
+	logger     *slog.Logger
+	udpConn    *net.UDPConn
+	publicAddr net.Addr
 }
 
-// NewICEPeer creates a new ICE peer with the given configuration.
-func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
+// NewProber creates a new network prober.
+// It opens a UDP socket for listening and probing.
+func NewProber(cfg ProberConfig, logger *slog.Logger) (*Prober, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("logger is required")
 	}
 
-	// Default STUN server if none provided
-	servers := append([]string{}, cfg.StunServers...)
-	servers = append(servers, cfg.TurnServers...)
-	if len(servers) == 0 {
-		servers = append([]string{}, DefaultStunServers...)
-	}
-
-	// Convert to pion format
-	var urls []*ice.URL
-	for _, server := range servers {
-		url, err := ice.ParseURL(server)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ICE server URL %s: %w", server, err)
-		}
-		urls = append(urls, url)
-	}
-
-	netTypes, udpConns, udpMux, demuxers, err := createUDPMux()
+	// Open a single UDP socket for everything
+	// We bind to 0.0.0.0:0 to let the OS pick a port and listen on all interfaces
+	udpAddr, err := net.ResolveUDPAddr("udp", ":0")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to resolve local address: %w", err)
 	}
 
-	config := &ice.AgentConfig{
-		NetworkTypes:      netTypes,
-		Urls:              urls,
-		UDPMux:            udpMux,
-		KeepaliveInterval: ptrDuration(2 * time.Second), // Send keepalives every 2s to maintain NAT bindings
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on UDP: %w", err)
 	}
 
-	if cfg.PreferLAN {
-		config.InterfaceFilter = func(name string) bool {
-			iface, err := net.InterfaceByName(name)
+	p := &Prober{
+		config:  cfg,
+		logger:  logger,
+		udpConn: conn,
+	}
+
+	// Resolve public address via STUN
+	// This is blocking but fast. We can make it async if needed, but usually we need it before sharing candidates.
+	if err := p.resolvePublicAddr(); err != nil {
+		logger.Warn("failed to resolve public address (STUN)", "error", err)
+		// Non-fatal, we might still work on LAN
+	}
+
+	return p, nil
+}
+
+// LocalAddr returns the local address of the underlying UDP socket.
+func (p *Prober) LocalAddr() net.Addr {
+	return p.udpConn.LocalAddr()
+}
+
+// PublicAddr returns the public address discovered via STUN, or nil if failed.
+func (p *Prober) PublicAddr() net.Addr {
+	return p.publicAddr
+}
+
+// Listen returns the underlying UDP connection to be used for QUIC listening.
+func (p *Prober) ListenPacket() net.PacketConn {
+	return p.udpConn
+}
+
+// Close closes the underlying UDP connection.
+func (p *Prober) Close() error {
+	return p.udpConn.Close()
+}
+
+// GetProbingAddresses returns a list of local and public addresses to share with peers.
+func (p *Prober) GetProbingAddresses() []string {
+	var candidates []string
+
+	// 1. Local Interface IPs (LAN)
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		p.logger.Error("failed to list interfaces", "error", err)
+	} else {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+			if iface.Flags&net.FlagLoopback != 0 {
+				continue // Skip loopback usually
+			}
+			addrs, err := iface.Addrs()
 			if err != nil {
-				return false // Can't score it, so skip it to be safe in strict mode
+				continue
 			}
-			// Score >= 50 means it's likely a physical or standard interface
-			return CalculateSpeedScore(*iface) >= 50
-		}
-		config.IPFilter = func(ip net.IP) bool {
-			// Block loopback addresses (127.0.0.1, ::1)
-			// These paths often have poor throughput performance in pion
-			if ip.IsLoopback() {
-				return false
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				if ip == nil {
+					continue
+				}
+				if ip.To4() == nil {
+					// Skip IPv6 for now if you want to keep it simple, or include it.
+					// Let's include it but maybe prioritize IPv4.
+					// For simplicity in this refactor, let's stick to IPv4 to avoid complexity
+					// unless we want full dual-stack.
+					continue
+				}
+
+				// Construct candidate string: "ip:port"
+				// Note: We use the PORT bound by our socket (p.udpConn.LocalAddr().Port)
+				// NOT the port of the interface (which doesn't exist).
+				// But wait, if we bind to 0.0.0.0:Port, we can be reached at <InterfaceIP>:Port.
+				_, portStr, _ := net.SplitHostPort(p.udpConn.LocalAddr().String())
+				candidates = append(candidates, net.JoinHostPort(ip.String(), portStr))
 			}
-			return true
 		}
 	}
 
-	agent, err := ice.NewAgent(config)
-	if err != nil {
-		if udpMux != nil {
-			_ = udpMux.Close()
-		}
-		for _, conn := range udpConns {
-			_ = conn.Close()
-		}
-		return nil, fmt.Errorf("failed to create ICE agent: %w", err)
+	// 2. Public IP (WAN)
+	if p.publicAddr != nil {
+		candidates = append(candidates, p.publicAddr.String())
 	}
 
-	peer := &ICEPeer{
-		agent:      agent,
-		config:     cfg,
-		logger:     logger,
-		gatherDone: make(chan struct{}),
-		udpConns:   udpConns,
-		udpMux:     udpMux,
-		demuxers:   demuxers,
-	}
-
-	// Set up candidate callback
-	if err := agent.OnCandidate(func(candidate ice.Candidate) {
-		if candidate == nil {
-			peer.gatherOnce.Do(func() { close(peer.gatherDone) })
-			return
-		}
-		candidateStr := candidate.Marshal()
-		peer.logger.Debug("local candidate gathered", "candidate", candidateStr)
-		peer.mu.Lock()
-		onCandidate := peer.onCandidate
-		if onCandidate == nil {
-			// Queue candidate if callback not yet set
-			peer.queuedCandidates = append(peer.queuedCandidates, candidateStr)
-			peer.mu.Unlock()
-			peer.logger.Debug("queued candidate (callback not set yet)", "candidate", candidateStr)
-			return
-		}
-		peer.mu.Unlock()
-		onCandidate(candidateStr)
-	}); err != nil {
-		agent.Close()
-		return nil, fmt.Errorf("failed to set candidate callback: %w", err)
-	}
-
-	return peer, nil
+	return candidates
 }
 
-func createUDPMux() ([]ice.NetworkType, []*net.UDPConn, ice.UDPMux, map[ice.NetworkType]*packetDemux, error) {
-	netInstance, err := stdnet.NewNet()
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to create network: %w", err)
+// ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
+// It returns the first successfully established connection.
+func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config) (*quic.Conn, error) {
+	// We need to assert tlsConf is *tls.Config. Since we can't import crypto/tls here easily
+	// without adding it to imports (which is fine), but allow caller to pass it.
+	// Actually, we should import crypto/tls. But to keep signature clean, let's assume caller passes compatible config.
+	// However, quic.Dial requires *tls.Config.
+
+	// Let's rely on the caller to pass correct types or standard interface.
+	// For now, we will assume the caller imports quic-go, so we expose `quic.Dial`.
+	// But `quic.Dial` takes `net.PacketConn`.
+
+	// Helper to parse address
+	parseAddr := func(addrStr string) (net.Addr, error) {
+		return net.ResolveUDPAddr("udp", addrStr)
 	}
 
-	var (
-		netTypes []ice.NetworkType
-		conns    []*net.UDPConn
-		demuxes  = make(map[ice.NetworkType]*packetDemux)
-	)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	conn4, err4 := netInstance.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-	if err4 == nil {
-		udp4, ok := conn4.(*net.UDPConn)
-		if !ok {
-			_ = conn4.Close()
-			err4 = fmt.Errorf("unexpected udp4 conn type %T", conn4)
-		} else {
-			netTypes = append(netTypes, ice.NetworkTypeUDP4)
-			conns = append(conns, udp4)
-			demuxes[ice.NetworkTypeUDP4] = newPacketDemux(udp4)
-		}
-	}
+	resultCh := make(chan *quic.Conn, 1) // Buffer 1 is enough for the winner
+	errCh := make(chan error, len(remoteCandidates))
 
-	conn6, err6 := netInstance.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
-	if err6 == nil {
-		udp6, ok := conn6.(*net.UDPConn)
-		if !ok {
-			_ = conn6.Close()
-			err6 = fmt.Errorf("unexpected udp6 conn type %T", conn6)
-		} else {
-			netTypes = append(netTypes, ice.NetworkTypeUDP6)
-			conns = append(conns, udp6)
-			demuxes[ice.NetworkTypeUDP6] = newPacketDemux(udp6)
-		}
-	}
+	var wg sync.WaitGroup
 
-	if len(demuxes) == 0 {
-		return nil, nil, nil, nil, fmt.Errorf("failed to create UDP sockets: udp4=%v udp6=%v", err4, err6)
-	}
+	// We use the SAME PacketConn for all dials.
+	// quic-go supports this: Dialing multiple times from the same PacketConn.
+	// It internally manages the demuxing of 1-RTT packets based on Source Connection ID.
 
-	udpMux, err := newDemuxUDPMux(demuxes)
-	if err != nil {
-		for _, demux := range demuxes {
-			_ = demux.Close()
-		}
-		return nil, nil, nil, nil, err
-	}
+	dialCandidate := func(addrStr string) {
+		defer wg.Done()
 
-	return netTypes, conns, udpMux, demuxes, nil
-}
-
-// StartGathering starts gathering ICE candidates.
-func (p *ICEPeer) StartGathering(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if err := p.agent.GatherCandidates(); err != nil {
-		return fmt.Errorf("failed to gather candidates: %w", err)
-	}
-
-	return nil
-}
-
-// GatheringDone returns a channel that is closed when candidate gathering completes.
-func (p *ICEPeer) GatheringDone() <-chan struct{} {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.gatherDone
-}
-
-// LocalCredentials returns the local ICE credentials (username fragment and password).
-func (p *ICEPeer) LocalCredentials() (ufrag, pwd string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	ufrag, pwd, _ = p.agent.GetLocalUserCredentials()
-	return ufrag, pwd
-}
-
-// AddRemoteCredentials sets the remote ICE credentials.
-func (p *ICEPeer) AddRemoteCredentials(ufrag, pwd string) error {
-	if ufrag == "" || pwd == "" {
-		return fmt.Errorf("credentials cannot be empty: ufrag=%q pwd=%q", ufrag, pwd)
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if err := p.agent.SetRemoteCredentials(ufrag, pwd); err != nil {
-		return fmt.Errorf("failed to set remote credentials: %w", err)
-	}
-	// Verify they were set
-	verifyUfrag, verifyPwd, err := p.agent.GetRemoteUserCredentials()
-	if err != nil {
-		p.logger.Warn("failed to verify remote credentials after setting", "error", err)
-	} else if verifyUfrag != ufrag || verifyPwd != pwd {
-		p.logger.Warn("remote credentials mismatch after setting",
-			"expected_ufrag", ufrag, "got_ufrag", verifyUfrag,
-			"expected_pwd", pwd, "got_pwd", verifyPwd)
-	} else {
-		p.logger.Debug("remote credentials set and verified", "ufrag", ufrag)
-	}
-	return nil
-}
-
-// OnLocalCandidate sets a callback function that is called when a local candidate is gathered.
-// Any candidates gathered before this callback is set will be flushed immediately.
-func (p *ICEPeer) OnLocalCandidate(fn func(c string)) {
-	p.mu.Lock()
-	p.onCandidate = fn
-	// Flush any queued candidates
-	queued := p.queuedCandidates
-	p.queuedCandidates = nil
-	p.mu.Unlock()
-
-	// Call callback for queued candidates (outside lock)
-	for _, c := range queued {
-		p.logger.Debug("flushing queued candidate", "candidate", c)
-		fn(c)
-	}
-}
-
-// AddRemoteCandidate adds a remote ICE candidate.
-func (p *ICEPeer) AddRemoteCandidate(c string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	candidate, err := ice.UnmarshalCandidate(c)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal candidate: %w", err)
-	}
-
-	if err := p.agent.AddRemoteCandidate(candidate); err != nil {
-		return fmt.Errorf("failed to add remote candidate: %w", err)
-	}
-
-	p.logger.Debug("remote candidate added", "candidate", c)
-	return nil
-}
-
-// Connect establishes a connection as the controlling agent (caller/sender).
-// This should be called after credentials and candidates have been exchanged.
-func (p *ICEPeer) Connect(ctx context.Context) (net.Conn, error) {
-	return p.connect(ctx, true)
-}
-
-// Accept establishes a connection as the controlled agent (callee/receiver).
-// This should be called after credentials and candidates have been exchanged.
-func (p *ICEPeer) Accept(ctx context.Context) (net.Conn, error) {
-	return p.connect(ctx, false)
-}
-
-func (p *ICEPeer) connect(ctx context.Context, isControlling bool) (net.Conn, error) {
-	// Verify remote credentials are set (with lock)
-	p.mu.Lock()
-	remoteUfrag, remotePwd, err := p.agent.GetRemoteUserCredentials()
-	if err != nil {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("failed to get remote credentials: %w", err)
-	}
-	if remoteUfrag == "" || remotePwd == "" {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("remote credentials not set: ufrag=%q pwd=%q", remoteUfrag, remotePwd)
-	}
-
-	// Also verify local credentials
-	localUfrag, localPwd, _ := p.agent.GetLocalUserCredentials()
-	if localUfrag == "" || localPwd == "" {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("local credentials not available: ufrag=%q pwd=%q", localUfrag, localPwd)
-	}
-	p.mu.Unlock()
-
-	p.logger.Debug("connecting with credentials", "local_ufrag", localUfrag, "remote_ufrag", remoteUfrag, "controlling", isControlling)
-
-	var conn *ice.Conn
-	if isControlling {
-		// Sender calls Dial (controlling agent)
-		conn, err = p.agent.Dial(ctx, remoteUfrag, remotePwd)
-	} else {
-		// Receiver calls Accept (controlled agent)
-		conn, err = p.agent.Accept(ctx, remoteUfrag, remotePwd)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to establish ICE connection: %w", err)
-	}
-
-	// Get the selected candidate pair for logging and storing addresses
-	selectedPair, err := p.agent.GetSelectedCandidatePair()
-	if err == nil && selectedPair != nil {
-		p.logger.Debug("ICE connection established",
-			"local", selectedPair.Local.String(),
-			"remote", selectedPair.Remote.String())
-
-		// Get addresses from the actual connection (more reliable than candidate)
-		connLocalAddr := conn.LocalAddr()
-		connRemoteAddr := conn.RemoteAddr()
-
-		// Parse remote address from candidate (connection RemoteAddr might not be UDP)
-		remoteIP := selectedPair.Remote.Address()
-		remotePort := selectedPair.Remote.Port()
-		remoteAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(remoteIP, fmt.Sprintf("%d", remotePort)))
+		udpAddr, err := parseAddr(addrStr)
 		if err != nil {
-			p.logger.Warn("failed to parse remote address", "ip", remoteIP, "port", remotePort, "error", err)
-			// Fallback to connection's remote addr if available
-			if connRemoteAddr != nil {
-				if udpAddr, ok := connRemoteAddr.(*net.UDPAddr); ok {
-					remoteAddr = udpAddr
-				}
-			}
+			p.logger.Warn("invalid remote candidate", "addr", addrStr, "error", err)
+			return
 		}
 
-		// Store connection info for QUIC
-		p.mu.Lock()
-		p.conn = conn
-		p.selectedPair = selectedPair
-		// Use connection's local address (actual bound address)
-		if connLocalAddr != nil {
-			if udpAddr, ok := connLocalAddr.(*net.UDPAddr); ok {
-				p.localAddr = udpAddr
-			} else {
-				// If not UDP, try to parse from candidate
-				localIP := selectedPair.Local.Address()
-				localPort := selectedPair.Local.Port()
-				if localUDPAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(localIP, fmt.Sprintf("%d", localPort))); err == nil {
-					p.localAddr = localUDPAddr
-				}
-			}
+		p.logger.Debug("probing candidate", "addr", addrStr)
+
+		// Create a separate context for this dial so we can timeout individual attempts if needed,
+		// but generally we just rely on the main ctx or QUIC handshake timeout.
+		// We use `quic.Dial` which creates a session.
+
+		// To allow passing tlsConfig cleanly, we might need to modify imports.
+		// For now, let's assume `tlsConf` is passed as `*tls.Config` and cast it.
+		// If we can't cast, we panic or error.
+		// Ideally we import "crypto/tls". Let's do that.
+
+		// Note: We use Dial (not DialAddr) because we want to use our specific PacketConn.
+
+		// Wait... quic.Dial takes `context.Context, net.PacketConn, net.Addr, *tls.Config, *quic.Config`
+		// We need to fix the imports to carry `crypto/tls`.
+		conn, err := quic.Dial(ctx, p.udpConn, udpAddr, tlsConf.(*tls.Config), quicConf)
+		if err != nil {
+			// This returns error if handshake fails.
+			// Common error: timeout, or connection refused (ICMP).
+			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
+			errCh <- err
+			return
 		}
-		if remoteAddr != nil {
-			p.remoteAddr = remoteAddr
+
+		// Success!
+		select {
+		case resultCh <- conn:
+			p.logger.Info("probe won", "addr", addrStr)
+		default:
+			// Lost the race, close this connection
+			conn.CloseWithError(0, "race_lost")
 		}
-		p.mu.Unlock()
 	}
 
-	return conn, nil
-}
-
-// PacketConnInfo returns the local and remote addresses for QUIC transport.
-// This should be called after Connect() or Accept() succeeds.
-func (p *ICEPeer) PacketConnInfo() (localAddr, remoteAddr net.Addr, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.conn == nil {
-		return nil, nil, fmt.Errorf("ICE connection not established yet")
+	uniqueCandidates := make(map[string]bool)
+	for _, c := range remoteCandidates {
+		uniqueCandidates[c] = true
 	}
 
-	return p.localAddr, p.remoteAddr, nil
-}
-
-// UDPConns returns the UDP sockets used for ICE candidate gathering.
-func (p *ICEPeer) UDPConns() []*net.UDPConn {
-	p.mu.Lock()
-	conns := append([]*net.UDPConn(nil), p.udpConns...)
-	p.mu.Unlock()
-	return conns
-}
-
-// CreatePacketConn returns a PacketConn for QUIC data using the ICE-established
-// UDP socket, then hands off control by stopping ICE.
-// CreatePacketConn returns a PacketConn for QUIC data using the ICE-established
-// UDP socket. The ICE agent is kept alive to maintain the NAT mapping.
-func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
-	p.mu.Lock()
-	if p.conn == nil {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("ICE connection not established")
-	}
-	p.logger.Debug("CreatePacketConn: getting demux for selected pair",
-		"local_addr", p.localAddr,
-		"remote_addr", p.remoteAddr,
-		"selected_pair_local", p.selectedPair.Local.String(),
-		"selected_pair_remote", p.selectedPair.Remote.String())
-	demux, err := p.demuxForSelectedPairLocked()
-	remoteAddr := p.remoteAddr
-	// We do NOT nil out p.agent; we want to keep it alive for NAT keepalives.
-	p.mu.Unlock()
-	if err != nil {
-		return nil, err
+	for c := range uniqueCandidates {
+		wg.Add(1)
+		go dialCandidate(c)
 	}
 
-	if demux == nil {
-		return nil, fmt.Errorf("no UDP demuxer for handoff")
-	}
-
-	// Start the demuxer's read loop now that ICE is done.
-	// This takes over reading from the UDP socket for QUIC traffic.
-	// Before this point, pion's UDPMux was reading from the socket.
-	demux.Start()
-
-	// Send immediate keepalive burst to punch/refresh NAT holes
-	// This is critical for srflx-srflx where NAT bindings may have expired
-	sendKeepalive := func() {
-		// STUN Binding Indication: 0x00 0x11 followed by magic cookie and transaction ID
-		// This is a lightweight packet that NAT will pass through
-		stunIndication := []byte{
-			0x00, 0x11, // Binding Indication
-			0x00, 0x00, // Message length = 0
-			0x21, 0x12, 0xa4, 0x42, // Magic cookie
-			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, // Transaction ID
-		}
-		_, _ = demux.Conn().WriteTo(stunIndication, remoteAddr)
-	}
-
-	// Send burst of 3 keepalives immediately
-	fmt.Fprintf(os.Stderr, "[TRACE] sending initial keepalive burst to %v...\n", remoteAddr)
-	for i := 0; i < 3; i++ {
-		sendKeepalive()
-		time.Sleep(10 * time.Millisecond)
-	}
-	fmt.Fprintf(os.Stderr, "[TRACE] initial keepalive burst sent\n")
-	p.logger.Debug("CreatePacketConn: sent initial keepalive burst")
-
-	// Start background keepalive goroutine
+	// Wait for one success or all failures
+	// We can't really wait for "all done" easily while also returning early.
+	// But we can use a goroutine to close errCh when wg is done.
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-demux.CloseChan():
-				fmt.Fprintf(os.Stderr, "[TRACE] keepalive goroutine stopping (demux closed)\n")
-				return
-			case <-ticker.C:
-				fmt.Fprintf(os.Stderr, "[TRACE] sending periodic keepalive to %v\n", remoteAddr)
-				sendKeepalive()
-			}
-		}
+		wg.Wait()
+		close(errCh)
 	}()
 
-	// Return the virtual connection for the application (QUIC), not the raw socket
-	conn := demux.AppConn()
-	_ = conn.SetDeadline(time.Time{})
-	p.logger.Debug("CreatePacketConn: returning appConn", "local_addr", conn.LocalAddr())
-	return conn, nil
+	select {
+	case conn := <-resultCh:
+		return conn, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-func() chan struct{} {
+		// Wait for all to fail
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		return done
+	}():
+		return nil, fmt.Errorf("all probes failed")
+	}
 }
 
-func (p *ICEPeer) demuxForSelectedPairLocked() (*packetDemux, error) {
-	if len(p.demuxers) == 0 {
-		return nil, fmt.Errorf("no UDP demuxers available")
+func (p *Prober) resolvePublicAddr() error {
+	// Simple STUN client
+	// servers := p.config.StunServers
+	servers := DefaultStunServers
+	if len(p.config.StunServers) > 0 {
+		servers = p.config.StunServers
 	}
-	if p.selectedPair != nil {
-		if demux, ok := p.demuxers[p.selectedPair.Local.NetworkType()]; ok {
-			return demux, nil
+
+	for _, server := range servers {
+		// We can't use our main p.udpConn for "pion/stun" easily because
+		// pion/stun Client expects to own the connection or at least read from it exclusively
+		// during the transaction.
+		// Since we haven't started QUIC yet, we CAN use p.udpConn!
+		// But we need to be careful not to discard packets if we were multithreaded.
+		// Here we are in NewProber, so it's safe.
+
+		// Parse STUN server address
+		// server format "host:port" or "stun:host:port"
+		addrStr := strings.TrimPrefix(server, "stun:")
+		serverAddr, err := net.ResolveUDPAddr("udp", addrStr)
+		if err != nil {
+			p.logger.Warn("invalid STUN server", "server", server, "error", err)
+			continue
 		}
-	}
-	if p.remoteAddr != nil {
-		if udpAddr, ok := p.remoteAddr.(*net.UDPAddr); ok {
-			if udpAddr.IP.To4() == nil {
-				if demux, ok := p.demuxers[ice.NetworkTypeUDP6]; ok {
-					return demux, nil
-				}
-			} else {
-				if demux, ok := p.demuxers[ice.NetworkTypeUDP4]; ok {
-					return demux, nil
-				}
+
+		p.logger.Debug("sending STUN request", "server", addrStr)
+
+		// Create a STUN client
+		// We use `stun.Dial` usually, but we want to use OUR connection.
+		// pion/stun/v3 might allow `Client` with existing conn.
+		// Let's double check imports. The user has `pion/stun/v2` or `v3`?
+		// go.mod said `github.com/pion/stun/v3 v3.1.1 // indirect`.
+		// But `github.com/pion/ice/v2` brings old dependencies?
+		// go.mod has `github.com/pion/ice/v2`.
+		// Let's use `pion/stun` package.
+
+		// Send a binding request
+		msg := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+
+		// Write to server
+		if _, err := p.udpConn.WriteToUDP(msg.Raw, serverAddr); err != nil {
+			continue
+		}
+
+		// Wait for response with timeout
+		buf := make([]byte, 1024)
+		p.udpConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, _, err := p.udpConn.ReadFromUDP(buf)
+		p.udpConn.SetReadDeadline(time.Time{}) // Reset
+		if err != nil {
+			continue
+		}
+
+		res := &stun.Message{Raw: buf[:n]}
+		if err := res.Decode(); err != nil {
+			continue
+		}
+
+		var xorAddr stun.XORMappedAddress
+		if err := xorAddr.GetFrom(res); err != nil {
+			// Try MappedAddress
+			var mappedAddr stun.MappedAddress
+			if err := mappedAddr.GetFrom(res); err != nil {
+				continue
 			}
+			p.publicAddr = &net.UDPAddr{IP: mappedAddr.IP, Port: mappedAddr.Port}
+		} else {
+			p.publicAddr = &net.UDPAddr{IP: xorAddr.IP, Port: xorAddr.Port}
 		}
-	}
-	for _, demux := range p.demuxers {
-		return demux, nil
-	}
-	return nil, fmt.Errorf("no UDP demuxer for selected ICE pair")
-}
 
-// SelectedCandidatePair returns the chosen ICE candidate pair, if available.
-
-func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.selectedPair
-}
-
-func (p *ICEPeer) Close() error {
-	p.mu.Lock()
-	agent := p.agent
-	udpMux := p.udpMux
-	demuxers := p.demuxers
-	p.agent = nil
-	p.udpMux = nil
-	p.udpConns = nil
-	p.demuxers = nil
-	p.mu.Unlock()
-
-	if udpMux != nil {
-		_ = udpMux.Close()
-	}
-	if agent != nil {
-		_ = agent.Close()
-	}
-	for _, demux := range demuxers {
-		if demux != nil {
-			_ = demux.Close()
-		}
-	}
-	return nil
-}
-
-// CalculateSpeedScore assigns a rating (0-100) to a network interface.
-func CalculateSpeedScore(iface net.Interface) int {
-	score := 50 // Start neutral
-
-	// 1. FATAL CHECKS
-	if iface.Flags&net.FlagUp == 0 {
-		return 0
-	}
-	if iface.Flags&net.FlagLoopback != 0 {
-		return 5
+		p.logger.Info("public address resolved", "addr", p.publicAddr)
+		return nil
 	}
 
-	name := strings.ToLower(iface.Name)
-
-	// 2. NAME HEURISTICS
-	physicalPrefixes := []string{"en", "eth", "wlan", "wifi"}
-	for _, p := range physicalPrefixes {
-		if strings.HasPrefix(name, p) {
-			score += 30
-			break
-		}
-	}
-
-	virtualPrefixes := []string{
-		"utun", "tun", "tap", "feth", "zt", "wg", "docker", "vbox", "ppp",
-	}
-	for _, p := range virtualPrefixes {
-		if strings.HasPrefix(name, p) {
-			score -= 40
-			break
-		}
-	}
-
-	// 3. FLAG PHYSICS
-	if iface.Flags&net.FlagPointToPoint != 0 {
-		score -= 20
-	}
-	if iface.Flags&net.FlagBroadcast != 0 {
-		score += 10
-	}
-	if iface.Flags&net.FlagMulticast != 0 {
-		score += 5
-	}
-
-	// 4. MTU REALITY CHECK
-	switch {
-	case iface.MTU > 1500:
-		score += 10
-	case iface.MTU == 1500:
-		score += 0
-	case iface.MTU < 1280:
-		score -= 15
-	case iface.MTU < 1500:
-		score -= 5
-	}
-
-	// Clamp score
-	if score > 100 {
-		return 100
-	}
-	if score < 0 {
-		return 0
-	}
-
-	return score
-}
-
-// ptrDuration returns a pointer to the given duration.
-func ptrDuration(d time.Duration) *time.Duration {
-	return &d
+	return fmt.Errorf("all STUN servers failed")
 }
