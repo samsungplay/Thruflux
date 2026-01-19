@@ -298,6 +298,14 @@ func newWebRTCStream(dc *webrtc.DataChannel, logger *slog.Logger) *WebRTCStream 
 		s.readCond.Signal()
 	})
 
+	// Check if the data channel is already open (race condition fix)
+	// ReadyState may already be Open if handlers were registered late
+	if dc.ReadyState() == webrtc.DataChannelStateOpen {
+		s.openOnce.Do(func() {
+			close(s.openCh)
+		})
+	}
+
 	return s
 }
 
