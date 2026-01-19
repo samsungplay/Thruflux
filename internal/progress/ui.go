@@ -224,16 +224,16 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 					if row.Stage != "" {
 						stage := row.Stage
 						if strings.Contains(strings.ToUpper(stage), "FAILED") {
-							fmt.Fprintf(w, "  ice \033[31m%s\033[0m\n", stage) // Red
+							fmt.Fprintf(w, "  [%s] ice \033[31m%s\033[0m\n", row.Peer, stage) // Red
 						} else if stage == "connect_ok" {
-							fmt.Fprintf(w, "  ice \033[32m%s\033[0m\n", stage) // Green
+							fmt.Fprintf(w, "  [%s] ice \033[32m%s\033[0m\n", row.Peer, stage) // Green
 						} else {
-							fmt.Fprintf(w, "  ice %s\n", stage)
+							fmt.Fprintf(w, "  [%s] ice %s\n", row.Peer, stage)
 						}
 						lines++
 					}
 					if row.Route != "" {
-						fmt.Fprintf(w, "  %s\n", row.Route)
+						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
 						lines++
 					}
 				}
@@ -257,16 +257,16 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 					if row.Stage != "" {
 						stage := row.Stage
 						if strings.Contains(strings.ToUpper(stage), "FAILED") {
-							fmt.Fprintf(w, "  ice \033[31m%s\033[0m\n", stage) // Red
+							fmt.Fprintf(w, "  [%s] ice \033[31m%s\033[0m\n", row.Peer, stage) // Red
 						} else if stage == "connect_ok" {
-							fmt.Fprintf(w, "  ice \033[32m%s\033[0m\n", stage) // Green
+							fmt.Fprintf(w, "  [%s] ice \033[32m%s\033[0m\n", row.Peer, stage) // Green
 						} else {
-							fmt.Fprintf(w, "  ice %s\n", stage)
+							fmt.Fprintf(w, "  [%s] ice %s\n", row.Peer, stage)
 						}
 						lines++
 					}
 					if row.Route != "" {
-						fmt.Fprintf(w, "  %s\n", row.Route)
+						fmt.Fprintf(w, "  [%s] %s\n", row.Peer, row.Route)
 						lines++
 					}
 				}
