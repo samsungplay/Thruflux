@@ -349,6 +349,7 @@ func (s *WebRTCStream) Read(p []byte) (n int, err error) {
 }
 
 // Write writes data to the stream.
+// Large buffers are fragmented into 16KB chunks for WebRTC compatibility.
 func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	s.mu.Lock()
 	if s.closed {
@@ -357,11 +358,24 @@ func (s *WebRTCStream) Write(p []byte) (n int, err error) {
 	}
 	s.mu.Unlock()
 
-	// Send data
-	if err := s.dc.Send(p); err != nil {
-		return 0, fmt.Errorf("failed to send data: %w", err)
+	// WebRTC data channels have a practical message size limit.
+	// Fragment large messages into 16KB chunks for maximum compatibility.
+	const maxMessageSize = 16 * 1024 // 16 KiB
+
+	remaining := p
+	for len(remaining) > 0 {
+		chunk := remaining
+		if len(chunk) > maxMessageSize {
+			chunk = remaining[:maxMessageSize]
+		}
+		remaining = remaining[len(chunk):]
+
+		if err := s.dc.Send(chunk); err != nil {
+			return n, fmt.Errorf("failed to send data: %w", err)
+		}
+		n += len(chunk)
 	}
-	return len(p), nil
+	return n, nil
 }
 
 // Close closes the stream.
