@@ -224,7 +224,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	s.logSnapshotState()
 	s.tuneTTY = progress.IsTTY(os.Stdout)
 	s.initParams()
-	s.initTransport()
+	// s.initTransport() - removed, WebRTC handles transport internally
 
 	if s.benchmark {
 		s.startBenchmarkLoop(ctx)
@@ -1067,7 +1067,7 @@ func (s *SnapshotSender) forwardSignal(env protocol.Envelope) {
 		return
 	}
 	switch env.Type {
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeOffer, protocol.TypeAnswer:
 		select {
 		case ch <- env:
 		default:
