@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ type ICEConfig struct {
 	StunServers []string
 	TurnServers []string
 	Lite        bool // false for now
+	PreferLAN   bool
 }
 
 // DefaultStunServers is the STUN list used when no servers provided.
@@ -78,6 +80,25 @@ func NewICEPeer(cfg ICEConfig, logger *slog.Logger) (*ICEPeer, error) {
 		NetworkTypes: netTypes,
 		Urls:         urls,
 		UDPMux:       udpMux,
+	}
+
+	if cfg.PreferLAN {
+		config.InterfaceFilter = func(name string) bool {
+			iface, err := net.InterfaceByName(name)
+			if err != nil {
+				return false // Can't score it, so skip it to be safe in strict mode
+			}
+			// Score >= 50 means it's likely a physical or standard interface
+			return CalculateSpeedScore(*iface) >= 50
+		}
+		config.IPFilter = func(ip net.IP) bool {
+			// Block loopback addresses (127.0.0.1, ::1)
+			// These paths often have poor throughput performance in pion
+			if ip.IsLoopback() {
+				return false
+			}
+			return true
+		}
 	}
 
 	agent, err := ice.NewAgent(config)
@@ -450,7 +471,6 @@ func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
 	return p.selectedPair
 }
 
-// Close closes the ICE agent and cleans up resources.
 func (p *ICEPeer) Close() error {
 	p.mu.Lock()
 	agent := p.agent
@@ -474,4 +494,71 @@ func (p *ICEPeer) Close() error {
 		}
 	}
 	return nil
+}
+
+// CalculateSpeedScore assigns a rating (0-100) to a network interface.
+func CalculateSpeedScore(iface net.Interface) int {
+	score := 50 // Start neutral
+
+	// 1. FATAL CHECKS
+	if iface.Flags&net.FlagUp == 0 {
+		return 0
+	}
+	if iface.Flags&net.FlagLoopback != 0 {
+		return 5
+	}
+
+	name := strings.ToLower(iface.Name)
+
+	// 2. NAME HEURISTICS
+	physicalPrefixes := []string{"en", "eth", "wlan", "wifi"}
+	for _, p := range physicalPrefixes {
+		if strings.HasPrefix(name, p) {
+			score += 30
+			break
+		}
+	}
+
+	virtualPrefixes := []string{
+		"utun", "tun", "tap", "feth", "zt", "wg", "docker", "vbox", "ppp",
+	}
+	for _, p := range virtualPrefixes {
+		if strings.HasPrefix(name, p) {
+			score -= 40
+			break
+		}
+	}
+
+	// 3. FLAG PHYSICS
+	if iface.Flags&net.FlagPointToPoint != 0 {
+		score -= 20
+	}
+	if iface.Flags&net.FlagBroadcast != 0 {
+		score += 10
+	}
+	if iface.Flags&net.FlagMulticast != 0 {
+		score += 5
+	}
+
+	// 4. MTU REALITY CHECK
+	switch {
+	case iface.MTU > 1500:
+		score += 10
+	case iface.MTU == 1500:
+		score += 0
+	case iface.MTU < 1280:
+		score -= 15
+	case iface.MTU < 1500:
+		score -= 5
+	}
+
+	// Clamp score
+	if score > 100 {
+		return 100
+	}
+	if score < 0 {
+		return 0
+	}
+
+	return score
 }
