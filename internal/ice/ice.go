@@ -31,6 +31,7 @@ type Prober struct {
 	config     ProberConfig
 	logger     *slog.Logger
 	udpConn    *net.UDPConn
+	transport  *quic.Transport
 	publicAddr net.Addr
 }
 
@@ -60,10 +61,8 @@ func NewProber(cfg ProberConfig, logger *slog.Logger) (*Prober, error) {
 	}
 
 	// Resolve public address via STUN
-	// This is blocking but fast. We can make it async if needed, but usually we need it before sharing candidates.
 	if err := p.resolvePublicAddr(); err != nil {
 		logger.Warn("failed to resolve public address (STUN)", "error", err)
-		// Non-fatal, we might still work on LAN
 	}
 
 	return p, nil
@@ -84,8 +83,11 @@ func (p *Prober) ListenPacket() net.PacketConn {
 	return p.udpConn
 }
 
-// Close closes the underlying UDP connection.
+// Close closes the underlying UDP connection or transport.
 func (p *Prober) Close() error {
+	if p.transport != nil {
+		return p.transport.Close()
+	}
 	return p.udpConn.Close()
 }
 
@@ -121,17 +123,9 @@ func (p *Prober) GetProbingAddresses() []string {
 					continue
 				}
 				if ip.To4() == nil {
-					// Skip IPv6 for now if you want to keep it simple, or include it.
-					// Let's include it but maybe prioritize IPv4.
-					// For simplicity in this refactor, let's stick to IPv4 to avoid complexity
-					// unless we want full dual-stack.
 					continue
 				}
 
-				// Construct candidate string: "ip:port"
-				// Note: We use the PORT bound by our socket (p.udpConn.LocalAddr().Port)
-				// NOT the port of the interface (which doesn't exist).
-				// But wait, if we bind to 0.0.0.0:Port, we can be reached at <InterfaceIP>:Port.
 				_, portStr, _ := net.SplitHostPort(p.udpConn.LocalAddr().String())
 				candidates = append(candidates, net.JoinHostPort(ip.String(), portStr))
 			}
@@ -149,31 +143,27 @@ func (p *Prober) GetProbingAddresses() []string {
 // ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
 // It returns the first successfully established connection.
 func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config) (*quic.Conn, error) {
-	// We need to assert tlsConf is *tls.Config. Since we can't import crypto/tls here easily
-	// without adding it to imports (which is fine), but allow caller to pass it.
-	// Actually, we should import crypto/tls. But to keep signature clean, let's assume caller passes compatible config.
-	// However, quic.Dial requires *tls.Config.
-
-	// Let's rely on the caller to pass correct types or standard interface.
-	// For now, we will assume the caller imports quic-go, so we expose `quic.Dial`.
-	// But `quic.Dial` takes `net.PacketConn`.
+	// Initialize Transport if not already done.
+	// We do this here (lazy init) or we could do it earlier, but STUN works better on raw UDP.
+	if p.transport == nil {
+		p.transport = &quic.Transport{
+			Conn: p.udpConn,
+		}
+	}
 
 	// Helper to parse address
 	parseAddr := func(addrStr string) (net.Addr, error) {
 		return net.ResolveUDPAddr("udp", addrStr)
 	}
 
+	// We use a child context for dialing to cancel losers
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resultCh := make(chan *quic.Conn, 1) // Buffer 1 is enough for the winner
-	errCh := make(chan error, len(remoteCandidates))
+	resultCh := make(chan *quic.Conn, 1)
 
+	// Track active attempts
 	var wg sync.WaitGroup
-
-	// We use the SAME PacketConn for all dials.
-	// quic-go supports this: Dialing multiple times from the same PacketConn.
-	// It internally manages the demuxing of 1-RTT packets based on Source Connection ID.
 
 	dialCandidate := func(addrStr string) {
 		defer wg.Done()
@@ -186,25 +176,10 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 
 		p.logger.Debug("probing candidate", "addr", addrStr)
 
-		// Create a separate context for this dial so we can timeout individual attempts if needed,
-		// but generally we just rely on the main ctx or QUIC handshake timeout.
-		// We use `quic.Dial` which creates a session.
-
-		// To allow passing tlsConfig cleanly, we might need to modify imports.
-		// For now, let's assume `tlsConf` is passed as `*tls.Config` and cast it.
-		// If we can't cast, we panic or error.
-		// Ideally we import "crypto/tls". Let's do that.
-
-		// Note: We use Dial (not DialAddr) because we want to use our specific PacketConn.
-
-		// Wait... quic.Dial takes `context.Context, net.PacketConn, net.Addr, *tls.Config, *quic.Config`
-		// We need to fix the imports to carry `crypto/tls`.
-		conn, err := quic.Dial(ctx, p.udpConn, udpAddr, tlsConf.(*tls.Config), quicConf)
+		// Use Transport.Dial
+		conn, err := p.transport.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
 		if err != nil {
-			// This returns error if handshake fails.
-			// Common error: timeout, or connection refused (ICMP).
 			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
-			errCh <- err
 			return
 		}
 
@@ -228,12 +203,11 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		go dialCandidate(c)
 	}
 
-	// Wait for one success or all failures
-	// We can't really wait for "all done" easily while also returning early.
-	// But we can use a goroutine to close errCh when wg is done.
+	// Wait for all to finish in a separate goroutine to detect failure
+	allDone := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(errCh)
+		close(allDone)
 	}()
 
 	select {
@@ -241,15 +215,7 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		return conn, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-func() chan struct{} {
-		// Wait for all to fail
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		return done
-	}():
+	case <-allDone:
 		return nil, fmt.Errorf("all probes failed")
 	}
 }
