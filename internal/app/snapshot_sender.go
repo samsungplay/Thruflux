@@ -1219,8 +1219,11 @@ func (s *SnapshotSender) setProbeStatus(peerID string, addr string, state ice.Pr
 		return
 	}
 	pstate.mu.Lock()
+	defer pstate.mu.Unlock()
+	if pstate.probes[addr] == ice.ProbeStateWon {
+		return
+	}
 	pstate.probes[addr] = state
-	pstate.mu.Unlock()
 }
 
 func (s *SnapshotSender) getSenderProbes(peerID string) map[string]ice.ProbeState {

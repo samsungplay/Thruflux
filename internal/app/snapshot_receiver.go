@@ -413,6 +413,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	case tc := <-acceptResCh:
 		transferConn = tc
 		iceLog("connect_ok (accept)")
+		// Mark the remote address as "won" so it shows as green in the UI
+		progressState.SetProbeStatus(transferConn.RemoteAddr().String(), ice.ProbeStateWon)
 	}
 	probeCancel() // Stop other attempts
 
@@ -581,8 +583,11 @@ func (p *receiverProgress) SetTransportLines(lines []string) {
 
 func (p *receiverProgress) SetProbeStatus(addr string, state ice.ProbeState) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.probes[addr] == ice.ProbeStateWon {
+		return
+	}
 	p.probes[addr] = state
-	p.mu.Unlock()
 }
 
 func (p *receiverProgress) TickBench(now time.Time) {
