@@ -156,8 +156,15 @@ func newWebRTCConn(pc *webrtc.PeerConnection, config Config, logger *slog.Logger
 			stream.Close()
 			return
 		}
+
+		// Wait for open implies we can read the ID
+		// But here we are in the callback, ID might not be set until OnOpen?
+		// newWebRTCStreamFromDC handles OnOpen.
+		// We can log what we have.
+
 		select {
 		case c.incomingCh <- stream:
+			// Log handled in stream creation or reader
 		default:
 			logger.Warn("incoming data channel buffer full, dropping", "label", dc.Label())
 			stream.Close()
@@ -211,7 +218,11 @@ func (c *WebRTCConn) OpenStream(ctx context.Context) (transfer.Stream, error) {
 		stream.Close()
 		return nil, ctx.Err()
 	case <-stream.openCh:
-		c.logger.Debug("stream opened", "label", label)
+		id := "nil"
+		if dc.ID() != nil {
+			id = fmt.Sprintf("%d", *dc.ID())
+		}
+		c.logger.Debug("stream opened", "label", label, "id", id)
 		return stream, nil
 	case <-time.After(30 * time.Second):
 		stream.Close()
@@ -304,6 +315,12 @@ func newWebRTCStreamFromDC(dc *webrtc.DataChannel, logger *slog.Logger) (*WebRTC
 		s.openOnce.Do(func() {
 			close(s.openCh)
 		})
+
+		pid := "nil"
+		if dc.ID() != nil {
+			pid = fmt.Sprintf("%d", *dc.ID())
+		}
+		logger.Debug("stream detached and ready", "label", dc.Label(), "id", pid)
 	})
 
 	// Check if already open
