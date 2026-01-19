@@ -368,6 +368,15 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 						continue
 					}
 					r.logger.Info("received sender candidates", "count", len(cands.Candidates))
+
+					// Delayed Dial: Wait 500ms to let the Sender (initiator) win the race if possible.
+					// This avoids "Split Brain" where both sides dial simultaneously and deadlock on different connections.
+					select {
+					case <-probeCtx.Done():
+						return
+					case <-time.After(500 * time.Millisecond):
+					}
+
 					// We use ProbeAndDial (which expects ClientConfig)
 					quicConn, err := prober.ProbeAndDial(probeCtx, cands.Candidates, quictransport.ClientConfig(), quicCfg, func(upd ice.ProbeUpdate) {
 						progressState.SetProbeStatus(upd.Addr, upd.State)
