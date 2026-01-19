@@ -113,15 +113,47 @@ func (d *packetDemux) Close() error {
 }
 
 func (d *packetDemux) Stop() {
+	_ = d.StopAndGetBuffered()
+}
+
+// StopAndGetBuffered stops the demuxer and returns any data packets that were buffered.
+// This is critical to avoid dropping initial QUIC packets that arrived during the handover.
+func (d *packetDemux) StopAndGetBuffered() []demuxPacket {
+	var buffered []demuxPacket
 	d.stopOnce.Do(func() {
 		close(d.closed)
 		_ = d.conn.SetReadDeadline(time.Now())
 		<-d.readDone
-		d.drain()
+
+		// Drain data channel into slice
+		for {
+			select {
+			case pkt := <-d.dataCh:
+				buffered = append(buffered, pkt)
+			default:
+				goto Drained
+			}
+		}
+	Drained:
+
+		// Drain stun channel (discard)
+		for {
+			select {
+			case pkt := <-d.stunCh:
+				if pkt.release != nil {
+					pkt.release()
+				}
+			default:
+				goto StunDrained
+			}
+		}
+	StunDrained:
+
 		close(d.stunCh)
 		close(d.dataCh)
 		_ = d.conn.SetReadDeadline(time.Time{})
 	})
+	return buffered
 }
 
 func (d *packetDemux) STUNConn() net.PacketConn {
