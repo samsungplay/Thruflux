@@ -436,12 +436,15 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 
 	buffered := demux.StopAndGetBuffered()
 	conn := demux.Conn()
+	p.logger.Debug("CreatePacketConn: demux stopped", "buffered_packets", len(buffered), "local_addr", conn.LocalAddr())
+
 	_ = conn.SetDeadline(time.Time{})
 
 	if len(buffered) > 0 {
 		return &ReplayPacketConn{
 			conn:     conn,
 			buffered: buffered,
+			logger:   p.logger,
 		}, nil
 	}
 
@@ -453,6 +456,7 @@ type ReplayPacketConn struct {
 	conn     *net.UDPConn
 	buffered []demuxPacket
 	mu       sync.Mutex
+	logger   *slog.Logger
 }
 
 func (c *ReplayPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
@@ -460,12 +464,18 @@ func (c *ReplayPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	if len(c.buffered) > 0 {
 		pkt := c.buffered[0]
 		c.buffered = c.buffered[1:]
+		if len(c.buffered) == 0 {
+			c.logger.Debug("ReplayPacketConn: finished replaying buffered packets")
+		}
 		c.mu.Unlock()
 
 		n = copy(p, pkt.buf)
 		if pkt.release != nil {
 			pkt.release()
 		}
+
+		c.logger.Debug("ReplayPacketConn: replayed packet", "len", n, "src", pkt.addr)
+
 		if n < len(pkt.buf) {
 			return n, pkt.addr, io.ErrShortBuffer
 		}
@@ -480,6 +490,7 @@ func (c *ReplayPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 }
 
 func (c *ReplayPacketConn) Close() error {
+	c.logger.Debug("ReplayPacketConn: closing")
 	// Release any remaining buffered packets
 	c.mu.Lock()
 	for _, pkt := range c.buffered {
