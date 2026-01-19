@@ -579,7 +579,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	tlsConf := quictransport.ClientConfig()
 
-	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg)
+	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, nil)
 	if err != nil {
 		return fmt.Errorf("probing failed: %w", err)
 	}
