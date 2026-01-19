@@ -39,11 +39,22 @@ func newPacketDemux(conn *net.UDPConn) *packetDemux {
 	}
 	p.stunConn = newVirtualPacketConn(p)
 	p.appConn = newVirtualPacketConn(p)
-
-	p.readLoopWg.Add(1)
-	go p.readLoop()
+	// Don't start readLoop here - call Start() after ICE connects
+	// This avoids competing with pion's internal UDPMux reader
 
 	return p
+}
+
+// Start begins the packet read loop. Call this after ICE connects
+// to take over reading from the UDP socket for QUIC traffic.
+func (p *packetDemux) Start() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.readLoopWg.Add(1)
+	go p.readLoop()
 }
 
 func (p *packetDemux) STUNConn() net.PacketConn {

@@ -434,9 +434,10 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		return nil, fmt.Errorf("no UDP demuxer for handoff")
 	}
 
-	// demux.Stop() is a no-op in the new implementation, but we call it for API compatibility
-	// if it was intended to signal mode switch.
-	demux.Stop()
+	// Start the demuxer's read loop now that ICE is done.
+	// This takes over reading from the UDP socket for QUIC traffic.
+	// Before this point, pion's UDPMux was reading from the socket.
+	demux.Start()
 
 	// Return the virtual connection for the application (QUIC), not the raw socket
 	conn := demux.AppConn()
