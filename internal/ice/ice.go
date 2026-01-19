@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -455,10 +456,12 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 	}
 
 	// Send burst of 3 keepalives immediately
+	fmt.Fprintf(os.Stderr, "[TRACE] sending initial keepalive burst to %v...\n", remoteAddr)
 	for i := 0; i < 3; i++ {
 		sendKeepalive()
 		time.Sleep(10 * time.Millisecond)
 	}
+	fmt.Fprintf(os.Stderr, "[TRACE] initial keepalive burst sent\n")
 	p.logger.Debug("CreatePacketConn: sent initial keepalive burst")
 
 	// Start background keepalive goroutine
@@ -468,8 +471,10 @@ func (p *ICEPeer) CreatePacketConn() (net.PacketConn, error) {
 		for {
 			select {
 			case <-demux.CloseChan():
+				fmt.Fprintf(os.Stderr, "[TRACE] keepalive goroutine stopping (demux closed)\n")
 				return
 			case <-ticker.C:
+				fmt.Fprintf(os.Stderr, "[TRACE] sending periodic keepalive to %v\n", remoteAddr)
 				sendKeepalive()
 			}
 		}
