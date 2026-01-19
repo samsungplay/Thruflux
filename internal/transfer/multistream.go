@@ -563,11 +563,6 @@ scheduleLoop:
 			break scheduleLoop
 		}
 
-		// Yield briefly to allow FileBegin to traverse the network and be processed by the receiver
-		// before we flood the link with file data on the parallel stream.
-		// This prevents potential SCTP head-of-line blocking or receive window exhaustion deadlock.
-		time.Sleep(50 * time.Millisecond)
-
 		statsMu.Lock()
 		scheduledCount++
 		activeCount++
@@ -779,106 +774,41 @@ scheduleLoop:
 // RecvManifestMultiStream receives a manifest over the control stream and
 // reads each file over a dedicated data stream (sequentially).
 func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts Options) (manifest.Manifest, error) {
-	// Accept streams until we find the Control Stream (Label "stream-1").
-	// Data streams (Unordered) might arrive first.
-	// We need to buffer any early data streams to be processed later.
-	var controlStream Stream
-	pendingStreams := make([]Stream, 0)
-
-	const controlStreamLabel = "stream-1"
-
-	// Debug Logger
-	debugLog := func(format string, args ...any) {
-		f, _ := os.OpenFile("debug_receiver.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if f != nil {
-			defer f.Close()
-			msg := fmt.Sprintf("DEBUG: "+format+"\n", args...)
-			f.WriteString(msg)
-		}
+	controlStream, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return manifest.Manifest{}, fmt.Errorf("failed to accept control stream: %w", err)
 	}
-
-	debugLog("RecvManifestMultiStream: Waiting for Control Stream...")
-	for {
-		stream, err := conn.AcceptStream(ctx)
-		if err != nil {
-			debugLog("failed to accept stream: %v", err)
-			return manifest.Manifest{}, fmt.Errorf("failed to accept stream: %w", err)
-		}
-
-		// Check label
-		type Labeler interface {
-			Label() string
-		}
-
-		var label string
-		if l, ok := stream.(Labeler); ok {
-			label = l.Label()
-		} else {
-			debugLog("stream does not support Label()")
-			stream.Close()
-			return manifest.Manifest{}, fmt.Errorf("stream does not support Label()")
-		}
-
-		debugLog("Accepted stream label=%s", label)
-
-		if label == controlStreamLabel {
-			controlStream = stream
-			break
-		}
-
-		debugLog("Buffering non-control stream label=%s", label)
-		pendingStreams = append(pendingStreams, stream)
-	}
-
 	defer controlStream.Close()
 
-	debugLog("Reading Control Header...")
 	m, err := readControlHeader(controlStream)
 	if err != nil {
-		debugLog("readControlHeader failed: %v", err)
 		return m, err
 	}
-	debugLog("Control Header Read OK. Manifest has %d files.", len(m.Items))
 
 	baseDir := outDir
 	if !opts.NoRootDir {
 		baseDir = filepath.Join(outDir, m.Root)
 	}
-	debugLog("Creating base directory: %s", baseDir)
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		debugLog("failed to create output directory %s: %v", baseDir, err)
 		return m, fmt.Errorf("failed to create output directory %s: %w", baseDir, err)
 	}
 
-	debugLog("Creating subdirectories...")
 	for _, item := range m.Items {
 		if !item.IsDir {
 			continue
 		}
 		dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			debugLog("failed to create directory %s: %v", dirPath, err)
 			return m, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 		}
 	}
 
-	debugLog("Setting up stream registry...")
 	registry := newStreamRegistry()
-
-	// Register any streams we buffered while waiting for control stream
-	debugLog("Registering %d pending streams", len(pendingStreams))
-	for _, s := range pendingStreams {
-		idFunc, _ := s.(StreamIDer)
-		debugLog("Registering pending stream ID %d", idFunc.StreamID())
-		registry.add(idFunc.StreamID(), s)
-	}
-
 	acceptErrChan := make(chan error, 1)
 
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
 	defer acceptCancel()
 
-	debugLog("Starting accept loop...")
 	go func() {
 		for {
 			select {
@@ -907,7 +837,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
-	debugLog("Processing file items...")
 	fileItems := make([]manifest.FileItem, 0, len(m.Items))
 	expectedFiles := make(map[string]int64)
 	itemByRelPath := make(map[string]manifest.FileItem)
@@ -935,8 +864,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if parallelFiles > 32 {
 		parallelFiles = 32
 	}
-
-	debugLog("Setup complete. ParallelFiles=%d, RemainingFiles=%d", parallelFiles, remainingFiles)
 
 	var remainingBytes int64
 	for _, item := range fileItems {
@@ -981,7 +908,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if err == nil {
 			return
 		}
-		debugLog("setRecvErr called: %v", err)
 		recvErrMu.Lock()
 		if recvErr == nil {
 			recvErr = err
@@ -1045,7 +971,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	// Watchdog disabled per request to avoid aborting stalled streams.
 
-	debugLog("Starting control writer loop...")
 	go func() {
 		for {
 			select {
@@ -1068,10 +993,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
-	debugLog("Starting scheduler loop...")
 	go func() {
 		defer close(schedulerDone)
-
 		for {
 			select {
 			case <-recvCtx.Done():
@@ -1186,18 +1109,14 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
-	fmt.Println("DEBUG: Entering main Control Message Read Loop...")
 	for {
 		select {
 		case <-recvCtx.Done():
 			if recvErr != nil {
-				fmt.Printf("DEBUG: recvCtx Done with error: %v\n", recvErr)
 				return m, recvErr
 			}
-			fmt.Printf("DEBUG: recvCtx Done with ctx error: %v\n", recvCtx.Err())
 			return m, recvCtx.Err()
 		case err := <-acceptErrChan:
-			fmt.Printf("DEBUG: acceptErrChan received: %v\n", err)
 			if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, len(fileItems)) {
 				return m, nil
 			}

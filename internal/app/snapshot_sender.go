@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v4"
 	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
@@ -25,7 +24,6 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
-	"github.com/sheerbytes/sheerbytes/internal/transferwebrtc"
 	"github.com/sheerbytes/sheerbytes/internal/transport"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
@@ -123,15 +121,9 @@ type transferSlot struct {
 
 // RunSnapshotSender runs the snapshot sender flow.
 func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSenderConfig) error {
-	// Force logging to file for debugging
-	logFile, _ := os.OpenFile("debug_sender.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// We don't close logFile here as it needs to stay open for the duration of the program
-	// simplified for debugging context.
-
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
-	logger = slog.New(slog.NewTextHandler(logFile, opts))
 	if len(cfg.Paths) == 0 {
 		return fmt.Errorf("no input paths provided")
 	}
@@ -223,14 +215,14 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		now:                    time.Now,
 		exitFn:                 os.Exit,
 	}
-	s.transferFn = s.runWebRTCTransfer
+	s.transferFn = s.runICEQUICTransfer
 	s.transferOpts.ResolveFilePath = resolver
 	s.closeConn = func() { conn.Close() }
 	s.onChange = s.logSnapshotState
 	s.logSnapshotState()
 	s.tuneTTY = progress.IsTTY(os.Stdout)
 	s.initParams()
-	// s.initTransport() - removed, WebRTC handles transport internally
+	s.initTransport()
 
 	if s.benchmark {
 		s.startBenchmarkLoop(ctx)
@@ -288,7 +280,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 		s.logger.Error("receiver left session", "peer_id", peerLeft.PeerID, "session_id", s.sessionID)
 		s.handlePeerLeft(peerLeft.PeerID)
 
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeOffer, protocol.TypeAnswer:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		s.forwardSignal(env)
 	}
 }
@@ -713,262 +705,6 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	return nil
 }
 
-func (s *SnapshotSender) runWebRTCTransfer(ctx context.Context, peerID string) error {
-	signalCh := s.getSignalCh(peerID)
-	if signalCh == nil {
-		return fmt.Errorf("no signal channel for %s", peerID)
-	}
-	progressState := s.initSenderProgress(peerID, s.manifest.TotalBytes)
-
-	iceLog := func(stage string) {
-		s.setSenderStage(peerID, stage)
-	}
-
-	sendSignal := func(msgType string, payload any) error {
-		env, err := protocol.NewEnvelope(msgType, protocol.NewMsgID(), payload)
-		if err != nil {
-			return err
-		}
-		env.SessionID = s.sessionID
-		env.From = s.peerID
-		env.To = peerID
-		return s.conn.Send(env)
-	}
-
-	// Create WebRTC PeerConnection
-	iceLog("webrtc_init")
-	config := transferwebrtc.DefaultPeerConnectionConfig(s.stunServers, s.turnServers)
-	pc, err := transferwebrtc.NewPeerConnection(config)
-	if err != nil {
-		return fmt.Errorf("failed to create PeerConnection: %w", err)
-	}
-	defer pc.Close()
-
-	// Track connection state
-	connectedCh := make(chan struct{})
-	failedCh := make(chan error, 1)
-	var connectedOnce sync.Once
-
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		s.logger.Debug("WebRTC connection state", "state", state.String())
-		switch state {
-		case webrtc.PeerConnectionStateConnected:
-			connectedOnce.Do(func() { close(connectedCh) })
-		case webrtc.PeerConnectionStateFailed:
-			select {
-			case failedCh <- fmt.Errorf("WebRTC connection failed"):
-			default:
-			}
-		case webrtc.PeerConnectionStateClosed:
-			select {
-			case failedCh <- fmt.Errorf("WebRTC connection closed"):
-			default:
-			}
-		}
-	})
-
-	// Handle ICE candidates - send to remote peer
-	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
-		if c == nil {
-			return // Gathering complete
-		}
-		candJSON := c.ToJSON()
-		if err := sendSignal(protocol.TypeIceCandidate, protocol.IceCandidate{
-			Candidate: candJSON.Candidate,
-		}); err != nil {
-			s.logger.Warn("failed to send ICE candidate", "error", err)
-		}
-	})
-
-	// Create a data channel to trigger offer creation (sender creates offer)
-	iceLog("creating_offer")
-	dc, err := pc.CreateDataChannel("init", nil)
-	if err != nil {
-		return fmt.Errorf("failed to create initial data channel: %w", err)
-	}
-	dc.Close() // We don't need this channel, it's just to trigger offer
-
-	// Create offer
-	offer, err := pc.CreateOffer(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create offer: %w", err)
-	}
-
-	// Set local description
-	if err := pc.SetLocalDescription(offer); err != nil {
-		return fmt.Errorf("failed to set local description: %w", err)
-	}
-
-	// Wait for ICE gathering to complete (for non-trickle ICE, simpler)
-	gatherComplete := webrtc.GatheringCompletePromise(pc)
-	select {
-	case <-gatherComplete:
-		iceLog("gather_complete")
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("timeout waiting for ICE gathering")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Send SDP offer with all candidates
-	localDesc := pc.LocalDescription()
-	if err := sendSignal(protocol.TypeOffer, protocol.Offer{SDP: localDesc.SDP}); err != nil {
-		return fmt.Errorf("failed to send offer: %w", err)
-	}
-	iceLog("offer_sent")
-
-	// Wait for answer
-	answerCh := make(chan string, 1)
-	candidateCh := make(chan string, 64)
-
-	readCtx, readCancel := context.WithCancel(ctx)
-	defer readCancel()
-
-	go func() {
-		for {
-			select {
-			case <-readCtx.Done():
-				return
-			case env := <-signalCh:
-				switch env.Type {
-				case protocol.TypeAnswer:
-					var answer protocol.Answer
-					if err := env.DecodePayload(&answer); err != nil {
-						s.logger.Warn("failed to decode answer", "error", err)
-						continue
-					}
-					select {
-					case answerCh <- answer.SDP:
-					default:
-					}
-				case protocol.TypeIceCandidate:
-					var cand protocol.IceCandidate
-					if err := env.DecodePayload(&cand); err != nil {
-						s.logger.Warn("failed to decode ICE candidate", "error", err)
-						continue
-					}
-					select {
-					case candidateCh <- cand.Candidate:
-					default:
-					}
-				}
-			}
-		}
-	}()
-
-	// Wait for answer
-	var answerSDP string
-	select {
-	case answerSDP = <-answerCh:
-		iceLog("answer_received")
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("timeout waiting for answer")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Set remote description
-	answer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeAnswer,
-		SDP:  answerSDP,
-	}
-	if err := pc.SetRemoteDescription(answer); err != nil {
-		return fmt.Errorf("failed to set remote description: %w", err)
-	}
-	iceLog("remote_desc_set")
-
-	// Process any trickled ICE candidates
-	go func() {
-		for {
-			select {
-			case <-readCtx.Done():
-				return
-			case candStr := <-candidateCh:
-				if candStr == "" {
-					continue
-				}
-				if err := pc.AddICECandidate(webrtc.ICECandidateInit{
-					Candidate: candStr,
-				}); err != nil {
-					s.logger.Warn("failed to add ICE candidate", "error", err)
-				}
-			}
-		}
-	}()
-
-	// Wait for connection
-	iceLog("connecting")
-	select {
-	case <-connectedCh:
-		iceLog("connect_ok")
-	case err := <-failedCh:
-		return err
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("timeout waiting for WebRTC connection")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	fmt.Fprintf(os.Stderr, "webrtc connect ok (peer=%s session=%s)\n", peerID, s.sessionID)
-
-	// Get selected candidate pair for route info
-	if stats := pc.GetStats(); stats != nil {
-		for _, stat := range stats {
-			if pair, ok := stat.(webrtc.ICECandidatePairStats); ok && pair.State == webrtc.StatsICECandidatePairStateSucceeded {
-				route := fmt.Sprintf("route sender peer=%s local=%s remote=%s",
-					peerID[:10], pair.LocalCandidateID, pair.RemoteCandidateID)
-				s.setSenderRoute(peerID, route)
-				break
-			}
-		}
-	}
-
-	// Create WebRTC Transport
-	transportConfig := transferwebrtc.DefaultConfig()
-	transportConfig.Ordered = true    // Force Ordered to test stability
-	transportConfig.Logger = s.logger // Pass logger to transport
-	webrtcTransport := transferwebrtc.NewTransport(pc, transportConfig)
-	defer webrtcTransport.Close()
-
-	s.setTransferCloser(peerID, func() {
-		_ = webrtcTransport.Close()
-	})
-
-	transferConn, err := webrtcTransport.Dial(ctx, peerID)
-	if err != nil {
-		return fmt.Errorf("failed to dial transfer connection: %w", err)
-	}
-	defer transferConn.Close()
-	fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
-
-	opts := s.transferOptions()
-	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
-		if skippedChunks == 0 || totalChunks == 0 {
-			return
-		}
-		skippedBytes := int64(skippedChunks) * int64(chunkSize)
-		if totalBytes > 0 && skippedBytes > totalBytes {
-			skippedBytes = totalBytes
-		}
-		verifyBytes := computeVerifyBytes(totalBytes, totalChunks, chunkSize)
-		s.addSenderSkipped(progressState, relpath, skippedBytes, verifyBytes)
-	}
-	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
-		s.updateSenderProgress(progressState, relpath, bytesSent)
-	}
-	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
-		s.updateSenderStats(progressState, completedFiles)
-	}
-	opts.FileDoneFn = func(relpath string, ok bool) {
-		s.markSenderVerified(progressState, relpath, ok)
-	}
-	if err := transfer.SendManifestMultiStream(ctx, transferConn, ".", s.manifest, opts); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (s *SnapshotSender) sendManifestOffer(peerID string) {
 	if s.conn == nil {
 		return
@@ -1071,7 +807,7 @@ func (s *SnapshotSender) forwardSignal(env protocol.Envelope) {
 		return
 	}
 	switch env.Type {
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeOffer, protocol.TypeAnswer:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		select {
 		case ch <- env:
 		default:

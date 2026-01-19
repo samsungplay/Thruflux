@@ -315,15 +315,6 @@ type resumeState struct {
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
 func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, resume *resumePlan) (uint32, error) {
-	debugLog := func(format string, args ...any) {
-		f, _ := os.OpenFile("debug_sender.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if f != nil {
-			defer f.Close()
-			msg := fmt.Sprintf("DEBUG_SEND: "+format+"\n", args...)
-			f.WriteString(msg)
-		}
-	}
-
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -331,12 +322,9 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	// Open file
 	file, err := os.Open(filePath)
 	if err != nil {
-		debugLog("failed to open file %s: %v", filePath, err)
 		return 0, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
-
-	debugLog("sendFileChunksWindowed: sending %s size=%d chunk=%d", relPath, fileSize, chunkSize)
 
 	// Calculate total number of chunks
 	totalChunks := uint32((fileSize + int64(chunkSize) - 1) / int64(chunkSize))
@@ -399,7 +387,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 			// Read chunk from file via global read pool
 			n, err := readAtWithPool(readAheadCtx, file, fileOffset, buf[:chunkLen])
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				debugLog("readAtWithPool failed: %v", err)
 				readAheadErrChan <- fmt.Errorf("failed to read file: %w", err)
 				bufPool.Put(buf) // Return buffer on error
 				return
@@ -436,10 +423,8 @@ sendLoop:
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			debugLog("ctx done in sendLoop: %v", ctx.Err())
 			return 0, ctx.Err()
 		case err := <-readAheadErrChan:
-			debugLog("readAheadErr: %v", err)
 			return 0, err
 		default:
 		}
@@ -449,15 +434,12 @@ sendLoop:
 		var ok bool
 		select {
 		case <-ctx.Done():
-			debugLog("ctx done waiting for chunk: %v", ctx.Err())
 			return 0, ctx.Err()
 		case err := <-readAheadErrChan:
-			debugLog("readAheadErr waiting for chunk: %v", err)
 			return 0, err
 		case chunk, ok = <-chunkChan:
 			if !ok {
 				if nextToSend < totalChunks {
-					debugLog("read-ahead exited early. NextToSend=%d Total=%d", nextToSend, totalChunks)
 					return 0, fmt.Errorf("read-ahead goroutine exited early: expected %d chunks, got %d", totalChunks, nextToSend)
 				}
 			}
@@ -469,7 +451,6 @@ sendLoop:
 		// Verify chunk index matches expected
 		if chunk.index != nextToSend {
 			bufPool.Put(chunk.buf)
-			debugLog("chunk index mismatch: expected %d, got %d", nextToSend, chunk.index)
 			return 0, fmt.Errorf("chunk index mismatch: expected %d, got %d", nextToSend, chunk.index)
 		}
 
@@ -488,28 +469,24 @@ sendLoop:
 			// Write chunk_index (uint32, big endian)
 			if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
 				bufPool.Put(chunk.buf)
-				debugLog("write chunk index failed: %v", err)
 				return 0, fmt.Errorf("failed to write chunk index: %w", err)
 			}
 
 			// Write chunk_len (uint32, big endian)
 			if err := writeUint32WithTimeout(ctx, s, uint32(chunk.n), relPath, "chunk-length"); err != nil {
 				bufPool.Put(chunk.buf)
-				debugLog("write chunk length failed: %v", err)
 				return 0, fmt.Errorf("failed to write chunk length: %w", err)
 			}
 
 			// Write chunk_crc32 (uint32, big endian)
 			if err := writeUint32WithTimeout(ctx, s, chunkCRC, relPath, "chunk-crc32"); err != nil {
 				bufPool.Put(chunk.buf)
-				debugLog("write chunk crc32 failed: %v", err)
 				return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
 			}
 
 			// Write chunk bytes
 			if err := writeFullWithTimeout(ctx, s, chunk.buf[:chunk.n], relPath, "chunk-data"); err != nil {
 				bufPool.Put(chunk.buf)
-				debugLog("write chunk data failed: %v", err)
 				return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
 			}
 		} else if resume != nil {
@@ -531,11 +508,8 @@ sendLoop:
 
 	// Write EOF marker: "EOF1"
 	if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
-		debugLog("write EOF failed: %v", err)
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}
-
-	debugLog("sendFileChunksWindowed DONE. Sent %d bytes", bytesProcessed)
 
 	return fileCRC.Sum32(), nil
 }
@@ -543,18 +517,8 @@ sendLoop:
 // receiveFileChunksWindowed receives file chunks, writes to disk,
 // and returns the computed CRC32.
 func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, resume *resumeState) (uint32, error) {
-	debugLog := func(format string, args ...any) {
-		f, _ := os.OpenFile("debug_receiver.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if f != nil {
-			defer f.Close()
-			msg := fmt.Sprintf("DEBUG_RECV: "+format+"\n", args...)
-			f.WriteString(msg)
-		}
-	}
-
 	outFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		debugLog("failed to open output file %s: %v", filePath, err)
 		return 0, fmt.Errorf("failed to open output file %s: %w", filePath, err)
 	}
 	defer outFile.Close()
@@ -603,9 +567,6 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 		default:
 		}
 	}
-
-	debugLog("receiveFileChunksWindowed: starting reader loop for %s", relPath)
-
 	go func() {
 		defer close(chunkChan)
 		header := make([]byte, 4)
@@ -618,12 +579,10 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 			default:
 			}
 			if err := readFullWithTimeout(readerCtx, s, header, relPath, "header"); err != nil {
-				debugLog("reader failed to read header: %v", err)
 				sendReadErr(fmt.Errorf("failed to read chunk header: %w", err))
 				return
 			}
 			if string(header) == eofMagic {
-				debugLog("reader received EOF magic")
 				return
 			}
 			chunkIndex := binary.BigEndian.Uint32(header)
@@ -697,13 +656,10 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	for {
 		select {
 		case <-ctx.Done():
-			debugLog("ctx done in main loop: %v", ctx.Err())
 			return 0, ctx.Err()
 		case err := <-readErrChan:
-			debugLog("readErrChan: %v", err)
 			return 0, err
 		case err := <-writeErrChan:
-			debugLog("writeErrChan: %v", err)
 			return 0, err
 		case chunk, ok := <-chunkChan:
 			if !ok {
@@ -759,7 +715,6 @@ done:
 	writeWg.Wait() // Wait for all writes to complete
 	select {
 	case err := <-writeErrChan:
-		debugLog("writeErrChan after done: %v", err)
 		return 0, err
 	default:
 	}
@@ -774,12 +729,9 @@ done:
 
 	if resume == nil || resume.sidecar == nil {
 		if bytesReceived != fileSize {
-			debugLog("size mismatch: recv=%d expected=%d", bytesReceived, fileSize)
-			// return 0, ErrCRC32Mismatch // Relaxing this for now if needed?
+			return 0, ErrCRC32Mismatch
 		}
 	}
-
-	debugLog("receiveFileChunksWindowed DONE. Received %d", bytesReceived)
 
 	return fileCRC.Sum32(), nil
 }
