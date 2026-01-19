@@ -84,26 +84,6 @@ func (c *Conn) ReadLoop(ctx context.Context, onEnv func(env protocol.Envelope)) 
 		return err
 	})
 
-	// Start pinger
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				c.writeMu.Lock()
-				c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				err := c.conn.WriteMessage(websocket.PingMessage, nil)
-				c.writeMu.Unlock()
-				if err != nil {
-					return
-				}
-			}
-		}
-	}()
-
 	go func() {
 		<-ctx.Done()
 		// Closing the connection forces ReadMessage() to unblock instantly
