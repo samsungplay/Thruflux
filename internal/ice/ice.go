@@ -471,6 +471,17 @@ func (p *ICEPeer) SelectedCandidatePair() *ice.CandidatePair {
 	return p.selectedPair
 }
 
+// IsRemoteCandidateSrflxOrRelay returns true if the selected remote candidate is srflx or relay.
+func (p *ICEPeer) IsRemoteCandidateSrflxOrRelay() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.selectedPair == nil {
+		return false
+	}
+	typ := p.selectedPair.Remote.Type()
+	return typ == ice.CandidateTypeServerReflexive || typ == ice.CandidateTypePeerReflexive || typ == ice.CandidateTypeRelay
+}
+
 func (p *ICEPeer) Close() error {
 	p.mu.Lock()
 	agent := p.agent
