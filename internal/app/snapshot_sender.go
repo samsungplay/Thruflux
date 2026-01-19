@@ -923,13 +923,11 @@ func (s *SnapshotSender) runWebRTCTransfer(ctx context.Context, peerID string) e
 		}
 	}
 
-	// Create WebRTC transport
-	webrtcConfig := transferwebrtc.Config{
-		Ordered:     true, // Could be made configurable
-		MaxChannels: 100,
-		Logger:      s.logger,
-	}
-	webrtcTransport := transferwebrtc.NewTransport(pc, webrtcConfig)
+	// Create WebRTC Transport
+	transportConfig := transferwebrtc.DefaultConfig()
+	transportConfig.Ordered = false   // Explicitly force Unordered for data streams
+	transportConfig.Logger = s.logger // Pass logger to transport
+	webrtcTransport := transferwebrtc.NewTransport(pc, transportConfig)
 	defer webrtcTransport.Close()
 
 	s.setTransferCloser(peerID, func() {

@@ -754,12 +754,10 @@ func (r *snapshotReceiver) runWebRTCTransfer(start protocol.TransferStart) {
 
 	// Create WebRTC transport BEFORE waiting for connection
 	// This registers OnDataChannel early so we don't miss data channels from sender
-	webrtcConfig := transferwebrtc.Config{
-		Ordered:     true,
-		MaxChannels: 100,
-		Logger:      r.logger,
-	}
-	webrtcTransport := transferwebrtc.NewTransport(pc, webrtcConfig)
+	// Create WebRTC Transport (wraps the PeerConnection)
+	transportConfig := transferwebrtc.DefaultConfig()
+	transportConfig.Logger = r.logger
+	webrtcTransport := transferwebrtc.NewTransport(pc, transportConfig)
 	defer webrtcTransport.Close()
 
 	// Pre-create the transferConn to register OnDataChannel handler

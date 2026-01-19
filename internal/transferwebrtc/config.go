@@ -34,9 +34,9 @@ func DefaultSettingEngine() webrtc.SettingEngine {
 	// Enable detached data channels for direct io.ReadWriteCloser access
 	se.DetachDataChannels()
 
-	// Increase SCTP buffers for high throughput
-	// 4MB receive buffer (default is usually small, e.g. 1MB or less)
-	se.SetSCTPMaxReceiveBufferSize(4 * 1024 * 1024)
+	// Increase SCTP buffers for high throughput but keep it safe (1MB)
+	// 4MB caused instability/crashes on some receivers.
+	se.SetSCTPMaxReceiveBufferSize(1 * 1024 * 1024)
 
 	return se
 }
