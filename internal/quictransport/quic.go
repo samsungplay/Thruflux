@@ -66,6 +66,7 @@ func DefaultClientQUICConfig() *quic.Config {
 		KeepAlivePeriod:                10 * time.Second,
 		MaxIdleTimeout:                 30 * time.Second,
 		DisablePathMTUDiscovery:        true,
+		MaxIncomingStreams:             100, // Critical for receiving streams when acting as client
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
