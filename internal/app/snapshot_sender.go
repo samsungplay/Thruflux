@@ -422,6 +422,10 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 			state.Status = ReceiverStatusDone
 		} else {
 			state.Status = ReceiverStatusFailed
+			// Mark stage as failed if it hasn't reached connect_ok
+			s.mu.Unlock() // avoid deadlock as setSenderStage locks s.progressMu then state.mu
+			s.setSenderStage(peerID, fmt.Sprintf("FAILED: %v", err))
+			s.mu.Lock()
 		}
 	}
 	delete(s.active, peerID)

@@ -257,6 +257,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if code != 0 {
 			view := progressState.View()
 			stats := view.Stats
+			// Set stage to FAILED for UI/logs
+			progressState.SetIceStage(fmt.Sprintf("FAILED (code=%d)", code))
+
 			r.logger.Error("receiver exiting", "code", code, "ice_stage", view.IceStage, "route", view.Route, "current_file", view.CurrentFile, "bytes_done", stats.BytesDone, "bytes_total", stats.Total, "session_id", r.sessionID, "sender_id", r.senderID)
 			fmt.Fprintf(os.Stderr, "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
 		}
@@ -349,6 +352,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	quicTransport := transferquic.NewListener(quicListener, r.logger)
 	defer quicTransport.Close()
 
+	iceLog("waiting_for_connection")
 	fmt.Fprintf(os.Stderr, "[TRACE] waiting for QUIC Accept...\n")
 	transferConn, err := quicTransport.Accept(baseCtx)
 	if err != nil {

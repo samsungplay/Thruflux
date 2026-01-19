@@ -94,7 +94,14 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 				lines++
 			}
 			if v.IceStage != "" {
-				fmt.Fprintf(w, "ice %s\n", v.IceStage)
+				stage := v.IceStage
+				if strings.Contains(strings.ToUpper(stage), "FAILED") {
+					fmt.Fprintf(w, "ice \033[31m%s\033[0m\n", stage) // Red
+				} else if stage == "connect_ok" {
+					fmt.Fprintf(w, "ice \033[32m%s\033[0m\n", stage) // Green
+				} else {
+					fmt.Fprintf(w, "ice %s\n", stage)
+				}
 				lines++
 			}
 			if len(v.TransportLines) > 0 {
@@ -215,7 +222,14 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
 					if row.Stage != "" {
-						fmt.Fprintf(w, "  ice %s\n", row.Stage)
+						stage := row.Stage
+						if strings.Contains(strings.ToUpper(stage), "FAILED") {
+							fmt.Fprintf(w, "  ice \033[31m%s\033[0m\n", stage) // Red
+						} else if stage == "connect_ok" {
+							fmt.Fprintf(w, "  ice \033[32m%s\033[0m\n", stage) // Green
+						} else {
+							fmt.Fprintf(w, "  ice %s\n", stage)
+						}
 						lines++
 					}
 					if row.Route != "" {
@@ -241,7 +255,14 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
 					if row.Stage != "" {
-						fmt.Fprintf(w, "  ice %s\n", row.Stage)
+						stage := row.Stage
+						if strings.Contains(strings.ToUpper(stage), "FAILED") {
+							fmt.Fprintf(w, "  ice \033[31m%s\033[0m\n", stage) // Red
+						} else if stage == "connect_ok" {
+							fmt.Fprintf(w, "  ice \033[32m%s\033[0m\n", stage) // Green
+						} else {
+							fmt.Fprintf(w, "  ice %s\n", stage)
+						}
 						lines++
 					}
 					if row.Route != "" {
