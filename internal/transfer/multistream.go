@@ -844,25 +844,32 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if !opts.NoRootDir {
 		baseDir = filepath.Join(outDir, m.Root)
 	}
+	debugLog("Creating base directory: %s", baseDir)
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		debugLog("failed to create output directory %s: %v", baseDir, err)
 		return m, fmt.Errorf("failed to create output directory %s: %w", baseDir, err)
 	}
 
+	debugLog("Creating subdirectories...")
 	for _, item := range m.Items {
 		if !item.IsDir {
 			continue
 		}
 		dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			debugLog("failed to create directory %s: %v", dirPath, err)
 			return m, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 		}
 	}
 
+	debugLog("Setting up stream registry...")
 	registry := newStreamRegistry()
 
 	// Register any streams we buffered while waiting for control stream
+	debugLog("Registering %d pending streams", len(pendingStreams))
 	for _, s := range pendingStreams {
 		idFunc, _ := s.(StreamIDer)
+		debugLog("Registering pending stream ID %d", idFunc.StreamID())
 		registry.add(idFunc.StreamID(), s)
 	}
 
@@ -871,6 +878,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	acceptCtx, acceptCancel := context.WithCancel(ctx)
 	defer acceptCancel()
 
+	debugLog("Starting accept loop...")
 	go func() {
 		for {
 			select {
@@ -899,6 +907,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
+	debugLog("Processing file items...")
 	fileItems := make([]manifest.FileItem, 0, len(m.Items))
 	expectedFiles := make(map[string]int64)
 	itemByRelPath := make(map[string]manifest.FileItem)
@@ -926,6 +935,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if parallelFiles > 32 {
 		parallelFiles = 32
 	}
+
+	debugLog("Setup complete. ParallelFiles=%d, RemainingFiles=%d", parallelFiles, remainingFiles)
 
 	var remainingBytes int64
 	for _, item := range fileItems {
@@ -970,6 +981,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if err == nil {
 			return
 		}
+		debugLog("setRecvErr called: %v", err)
 		recvErrMu.Lock()
 		if recvErr == nil {
 			recvErr = err
@@ -1033,6 +1045,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	// Watchdog disabled per request to avoid aborting stalled streams.
 
+	debugLog("Starting control writer loop...")
 	go func() {
 		for {
 			select {
@@ -1055,8 +1068,10 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}()
 
+	debugLog("Starting scheduler loop...")
 	go func() {
 		defer close(schedulerDone)
+
 		for {
 			select {
 			case <-recvCtx.Done():
