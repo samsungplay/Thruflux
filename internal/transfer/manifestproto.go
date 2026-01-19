@@ -348,6 +348,7 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		index uint32
 		n     int
 		buf   []byte
+		crc   uint32
 	}
 
 	// Read-ahead channel (bounded to maxReadAhead)
@@ -395,13 +396,16 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				break
 			}
 
+			// Calculate CRC in read-ahead
+			chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
+
 			// Send chunk data to sender
 			// If channel is full, wait for space or cancellation
 			select {
 			case <-readAheadCtx.Done():
 				bufPool.Put(buf)
 				return
-			case chunkChan <- chunkData{index: nextToRead, n: n, buf: buf}:
+			case chunkChan <- chunkData{index: nextToRead, n: n, buf: buf, crc: chunkCRC}:
 			}
 			fileOffset += int64(n)
 			nextToRead++
@@ -458,7 +462,8 @@ sendLoop:
 		}
 
 		if sendChunk {
-			chunkCRC := crc32.Checksum(chunk.buf[:chunk.n], crc32cTable)
+			// CRC is already calculated in read-ahead
+			chunkCRC := chunk.crc
 			fileCRC.Write(chunk.buf[:chunk.n])
 
 			// Write chunk_index (uint32, big endian)
@@ -642,11 +647,19 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 		close(flushDone)
 	}
 
+	// Async write pipeline
+	const maxConcurrentWrites = 32
+	writeSem := make(chan struct{}, maxConcurrentWrites)
+	writeErrChan := make(chan error, 1)
+	var writeWg sync.WaitGroup
+
 	for {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		case err := <-readErrChan:
+			return 0, err
+		case err := <-writeErrChan:
 			return 0, err
 		case chunk, ok := <-chunkChan:
 			if !ok {
@@ -656,27 +669,57 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				bufPool.Put(chunk.buf)
 				return 0, ErrCRC32Mismatch
 			}
-			offset := int64(chunk.index) * int64(chunkSize)
-			if err := writeAtWithTimeout(ctx, outFile, chunk.buf[:chunk.n], offset, relPath); err != nil {
-				bufPool.Put(chunk.buf)
-				return 0, fmt.Errorf("failed to write to file: %w", err)
-			}
+
+			// Update Rolling File CRC
 			bytesReceived += uint64(chunk.n)
 			fileCRC.Write(chunk.buf[:chunk.n])
-			if resume != nil && resume.sidecar != nil {
-				resume.sidecar.MarkComplete(chunk.index)
-				// Flushing is now handled by the background goroutine
+
+			// Prepare Async Write
+			writeWg.Add(1)
+			select {
+			case writeSem <- struct{}{}:
+			case <-ctx.Done():
+				writeWg.Done()
+				bufPool.Put(chunk.buf)
+				return 0, ctx.Err()
 			}
+
+			go func(c recvChunk, offset int64) {
+				defer func() {
+					<-writeSem
+					writeWg.Done()
+					bufPool.Put(c.buf)
+				}()
+
+				if err := writeAtWithTimeout(ctx, outFile, c.buf[:c.n], offset, relPath); err != nil {
+					select {
+					case writeErrChan <- fmt.Errorf("failed to write to file: %w", err):
+					default:
+					}
+					return
+				}
+
+				if resume != nil && resume.sidecar != nil {
+					resume.sidecar.MarkComplete(c.index)
+				}
+			}(chunk, int64(chunk.index)*int64(chunkSize))
+
 			if progressFn != nil {
 				progressFn(relPath, int64(bytesReceived), int64(fileSize))
 			}
-			bufPool.Put(chunk.buf)
 		}
 	}
 
 done:
 	readerCancel() // Stop the reader
-	<-flushDone    // Wait for flusher to exit
+	writeWg.Wait() // Wait for all writes to complete
+	select {
+	case err := <-writeErrChan:
+		return 0, err
+	default:
+	}
+
+	<-flushDone // Wait for flusher to exit
 	if resume != nil && resume.sidecar != nil {
 		// Final flush
 		if err := resume.sidecar.Flush(); err != nil {
