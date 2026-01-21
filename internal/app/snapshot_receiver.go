@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
@@ -36,6 +37,7 @@ type SnapshotReceiverConfig struct {
 	QuicMaxIncomingStreams int
 	StunServers            []string
 	TurnServers            []string
+	TurnOnly               bool
 }
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
@@ -98,6 +100,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
 		stunServers:            cfg.StunServers,
 		turnServers:            cfg.TurnServers,
+		turnOnly:               cfg.TurnOnly,
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
@@ -133,6 +136,7 @@ type snapshotReceiver struct {
 	quicMaxIncomingStreams int
 	stunServers            []string
 	turnServers            []string
+	turnOnly               bool
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -289,7 +293,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	// Initialize Prober
 	proberCfg := ice.ProberConfig{
 		StunServers: r.stunServers,
-		PreferLAN:   true, // We can make this configurable if needed
+		TurnServers: r.turnServers,
+		TurnOnly:    r.turnOnly,
 	}
 	prober, err = ice.NewProber(proberCfg, r.logger)
 	if err != nil {
@@ -349,6 +354,19 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	quicTransport := transferquic.NewListener(quicListener, r.logger)
 	defer quicTransport.Close()
 
+	var turnListener *quic.Listener
+	var turnTransport *transferquic.QUICTransport
+	if tr := prober.TurnTransport(); tr != nil {
+		turnListener, err = quictransport.ListenWithTransport(baseCtx, tr, r.logger, quicCfg)
+		if err != nil {
+			r.logger.Warn("failed to listen on TURN relay", "error", err)
+		} else {
+			turnTransport = transferquic.NewListener(turnListener, r.logger)
+			defer turnListener.Close()
+			defer turnTransport.Close()
+		}
+	}
+
 	iceLog("waiting_for_connection")
 
 	// Bidirectional Probing: Dial sender candidates while accepting
@@ -369,6 +387,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 						continue
 					}
 					r.logger.Info("received sender candidates", "count", len(cands.Candidates))
+					for _, cand := range cands.Candidates {
+						if ice.IsTurnCandidate(cand) {
+							progressState.SetProbeStatus(cand, ice.ProbeStateReadyFallback)
+						}
+					}
 
 					// Delayed Dial: Wait 500ms to let the Sender (initiator) win the race if possible.
 					// This avoids "Split Brain" where both sides dial simultaneously and deadlock on different connections.
@@ -401,8 +424,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}()
 
 	acceptResCh := make(chan transfer.Conn, 1)
-	go func() {
-		conn, err := quicTransport.Accept(probeCtx)
+	acceptOnce := func(t *transferquic.QUICTransport) {
+		conn, err := t.Accept(probeCtx)
 		if err == nil {
 			select {
 			case acceptResCh <- conn:
@@ -411,7 +434,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				conn.Close()
 			}
 		}
-	}()
+	}
+	go acceptOnce(quicTransport)
+	if turnTransport != nil {
+		go acceptOnce(turnTransport)
+	}
 
 	var transferConn transfer.Conn
 	select {

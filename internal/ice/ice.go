@@ -6,19 +6,22 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pion/stun"
+	"github.com/pion/turn/v2"
 	"github.com/quic-go/quic-go"
 )
 
 // ProberConfig holds configuration for the network prober.
 type ProberConfig struct {
 	StunServers []string
-	PreferLAN   bool
+	TurnServers []string
+	TurnOnly    bool
 }
 
 // DefaultStunServers is the STUN list used when no servers provided.
@@ -29,12 +32,16 @@ var DefaultStunServers = []string{
 
 // Prober manages network discovery and probing.
 type Prober struct {
-	config     ProberConfig
-	logger     *slog.Logger
-	udpConn    *net.UDPConn
-	transport  *quic.Transport
-	publicAddrs []net.Addr
-	mu         sync.Mutex
+	config        ProberConfig
+	logger        *slog.Logger
+	udpConn       *net.UDPConn
+	transport     *quic.Transport
+	publicAddrs   []net.Addr
+	turnClient    *turn.Client
+	turnConn      *net.UDPConn
+	turnRelayConn net.PacketConn
+	turnTransport *quic.Transport
+	mu            sync.Mutex
 }
 
 // NewProber creates a new network prober.
@@ -74,6 +81,9 @@ func NewProber(cfg ProberConfig, logger *slog.Logger) (*Prober, error) {
 	if err := p.resolvePublicAddr(); err != nil {
 		logger.Warn("failed to resolve public address (STUN)", "error", err)
 	}
+	if err := p.initTurnRelay(); err != nil {
+		logger.Warn("failed to initialize TURN relay", "error", err)
+	}
 
 	return p, nil
 }
@@ -100,10 +110,25 @@ func (p *Prober) ListenPacket() net.PacketConn {
 func (p *Prober) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var err error
 	if p.transport != nil {
-		return p.transport.Close()
+		err = p.transport.Close()
+	} else if p.udpConn != nil {
+		err = p.udpConn.Close()
 	}
-	return p.udpConn.Close()
+	if p.turnTransport != nil {
+		_ = p.turnTransport.Close()
+	}
+	if p.turnRelayConn != nil {
+		_ = p.turnRelayConn.Close()
+	}
+	if p.turnClient != nil {
+		p.turnClient.Close()
+	}
+	if p.turnConn != nil {
+		_ = p.turnConn.Close()
+	}
+	return err
 }
 
 // Transport returns the underlying quic.Transport, initializing it if needed.
@@ -117,6 +142,13 @@ func (p *Prober) Transport() *quic.Transport {
 		}
 	}
 	return p.transport
+}
+
+// TurnTransport returns a QUIC transport backed by a TURN relay allocation, if available.
+func (p *Prober) TurnTransport() *quic.Transport {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.turnTransport
 }
 
 // GetProbingAddresses returns a list of local and public addresses to share with peers.
@@ -175,6 +207,18 @@ func (p *Prober) GetProbingAddresses() []string {
 		}
 	}
 
+	// 3. TURN relay (if allocated)
+	if p.turnRelayConn != nil {
+		turnCand := turnCandidatePrefix + p.turnRelayConn.LocalAddr().String()
+		if p.config.TurnOnly {
+			return []string{turnCand}
+		}
+		candidates = append(candidates, turnCand)
+	} else if p.config.TurnOnly {
+		p.logger.Warn("turn-only enabled but no relay allocation")
+		return nil
+	}
+
 	// Log gathered
 	p.logger.Info("gathered probing candidates", "count", len(candidates), "candidates", candidates)
 
@@ -186,6 +230,7 @@ type ProbeState int
 
 const (
 	ProbeStateProbing ProbeState = iota
+	ProbeStateReadyFallback
 	ProbeStateFailed
 	ProbeStateWon
 )
@@ -194,6 +239,8 @@ func (s ProbeState) String() string {
 	switch s {
 	case ProbeStateProbing:
 		return "probing"
+	case ProbeStateReadyFallback:
+		return "ready as fallback"
 	case ProbeStateFailed:
 		return "failed"
 	case ProbeStateWon:
@@ -210,6 +257,17 @@ type ProbeUpdate struct {
 	Err   error
 }
 
+const turnCandidatePrefix = "turn:"
+
+// IsTurnCandidate reports whether the candidate is a TURN relay address.
+func IsTurnCandidate(addr string) bool {
+	return strings.HasPrefix(addr, turnCandidatePrefix)
+}
+
+func stripTurnPrefix(addr string) string {
+	return strings.TrimPrefix(addr, turnCandidatePrefix)
+}
+
 // ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
 // It returns the first successfully established connection.
 func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (*quic.Conn, error) {
@@ -221,88 +279,127 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 			Conn: p.udpConn,
 		}
 	}
+	turnTransport := p.turnTransport
 	p.mu.Unlock()
 
 	// Helper to parse address
 	parseAddr := func(addrStr string) (net.Addr, error) {
-		return net.ResolveUDPAddr("udp", addrStr)
+		return net.ResolveUDPAddr("udp", stripTurnPrefix(addrStr))
 	}
 
 	// We use a child context for dialing to cancel losers
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resultCh := make(chan *quic.Conn, 1)
-
-	// Track active attempts
-	var wg sync.WaitGroup
-
-	dialCandidate := func(addrStr string) {
-		defer wg.Done()
-
-		if onUpdate != nil {
-			onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateProbing})
-		}
-
-		udpAddr, err := parseAddr(addrStr)
-		if err != nil {
-			p.logger.Warn("invalid remote candidate", "addr", addrStr, "error", err)
-			if onUpdate != nil {
-				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
-			}
-			return
-		}
-
-		p.logger.Debug("probing candidate", "addr", addrStr)
-
-		// Use Transport.Dial
-		conn, err := p.transport.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
-		if err != nil {
-			p.logger.Debug("probe failed", "addr", addrStr, "error", err)
-			if onUpdate != nil {
-				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
-			}
-			return
-		}
-
-		// Success!
-		select {
-		case resultCh <- conn:
-			p.logger.Info("probe won", "addr", addrStr)
-			if onUpdate != nil {
-				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateWon})
-			}
-		default:
-			// Lost the race, close this connection
-			conn.CloseWithError(0, "race_lost")
-		}
-	}
-
 	uniqueCandidates := make(map[string]bool)
 	for _, c := range remoteCandidates {
 		uniqueCandidates[c] = true
 	}
 
+	directCandidates := make([]string, 0, len(uniqueCandidates))
+	turnCandidates := make([]string, 0, len(uniqueCandidates))
 	for c := range uniqueCandidates {
-		wg.Add(1)
-		go dialCandidate(c)
+		if IsTurnCandidate(c) {
+			turnCandidates = append(turnCandidates, c)
+		} else {
+			directCandidates = append(directCandidates, c)
+		}
 	}
 
-	// Wait for all to finish in a separate goroutine to detect failure
-	allDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(allDone)
-	}()
+	probeWithTransport := func(cands []string, tr *quic.Transport) (*quic.Conn, error) {
+		if tr == nil || len(cands) == 0 {
+			return nil, fmt.Errorf("no candidates")
+		}
 
-	select {
-	case conn := <-resultCh:
-		return conn, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-allDone:
-		return nil, fmt.Errorf("all probes failed")
+		resultCh := make(chan *quic.Conn, 1)
+		var wg sync.WaitGroup
+		dialCandidate := func(addrStr string) {
+			defer wg.Done()
+
+			if onUpdate != nil {
+				onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateProbing})
+			}
+
+			udpAddr, err := parseAddr(addrStr)
+			if err != nil {
+				p.logger.Warn("invalid remote candidate", "addr", addrStr, "error", err)
+				if onUpdate != nil {
+					onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
+				}
+				return
+			}
+
+			p.logger.Debug("probing candidate", "addr", addrStr)
+
+			// Use Transport.Dial
+			conn, err := tr.Dial(ctx, udpAddr, tlsConf.(*tls.Config), quicConf)
+			if err != nil {
+				p.logger.Debug("probe failed", "addr", addrStr, "error", err)
+				if onUpdate != nil {
+					onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
+				}
+				return
+			}
+
+			// Success!
+			select {
+			case resultCh <- conn:
+				p.logger.Info("probe won", "addr", addrStr)
+				if onUpdate != nil {
+					onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateWon})
+				}
+			default:
+				// Lost the race, close this connection
+				conn.CloseWithError(0, "race_lost")
+			}
+		}
+
+		// Wait for all to finish in a separate goroutine to detect failure
+		allDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(allDone)
+		}()
+
+		for _, c := range cands {
+			wg.Add(1)
+			go dialCandidate(c)
+		}
+
+		select {
+		case conn := <-resultCh:
+			return conn, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-allDone:
+			return nil, fmt.Errorf("all probes failed")
+		}
 	}
+
+	var directErr error
+	if !p.config.TurnOnly && len(directCandidates) > 0 {
+		conn, err := probeWithTransport(directCandidates, p.transport)
+		if err == nil {
+			return conn, nil
+		}
+		directErr = err
+	}
+
+	if turnTransport != nil && len(turnCandidates) > 0 {
+		conn, err := probeWithTransport(turnCandidates, turnTransport)
+		if err == nil {
+			return conn, nil
+		}
+		if directErr != nil {
+			return nil, fmt.Errorf("all probes failed: direct=%v turn=%v", directErr, err)
+		}
+		return nil, err
+	}
+
+	if directErr != nil {
+		return nil, directErr
+	}
+	return nil, fmt.Errorf("all probes failed")
 }
 
 func (p *Prober) resolvePublicAddr() error {
@@ -395,6 +492,130 @@ func (p *Prober) resolvePublicAddr() error {
 		return fmt.Errorf("all STUN servers failed")
 	}
 	return nil
+}
+
+type turnServerConfig struct {
+	addr     string
+	username string
+	password string
+	realm    string
+}
+
+func (p *Prober) initTurnRelay() error {
+	if len(p.config.TurnServers) == 0 {
+		return nil
+	}
+
+	for _, raw := range p.config.TurnServers {
+		cfg, err := parseTurnServer(raw)
+		if err != nil {
+			p.logger.Warn("invalid TURN server", "server", raw, "error", err)
+			continue
+		}
+
+		baseConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			p.logger.Warn("failed to create TURN UDP socket", "server", cfg.addr, "error", err)
+			continue
+		}
+
+		client, err := turn.NewClient(&turn.ClientConfig{
+			TURNServerAddr: cfg.addr,
+			Username:       cfg.username,
+			Password:       cfg.password,
+			Realm:          cfg.realm,
+			Conn:           baseConn,
+		})
+		if err != nil {
+			baseConn.Close()
+			p.logger.Warn("failed to create TURN client", "server", cfg.addr, "error", err)
+			continue
+		}
+
+		if err := client.Listen(); err != nil {
+			client.Close()
+			baseConn.Close()
+			p.logger.Warn("failed to listen on TURN client", "server", cfg.addr, "error", err)
+			continue
+		}
+
+		relayConn, err := client.Allocate()
+		if err != nil {
+			client.Close()
+			baseConn.Close()
+			p.logger.Warn("TURN allocation failed", "server", cfg.addr, "error", err)
+			continue
+		}
+
+		p.turnClient = client
+		p.turnConn = baseConn
+		p.turnRelayConn = relayConn
+		p.turnTransport = &quic.Transport{Conn: relayConn}
+		p.logger.Info("TURN relay allocated", "server", cfg.addr, "relay", relayConn.LocalAddr())
+		return nil
+	}
+
+	return fmt.Errorf("all TURN servers failed")
+}
+
+func parseTurnServer(raw string) (turnServerConfig, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return turnServerConfig{}, fmt.Errorf("empty TURN server")
+	}
+
+	switch {
+	case strings.HasPrefix(raw, "turns://"):
+		return turnServerConfig{}, fmt.Errorf("turns scheme not supported for UDP relay")
+	case strings.HasPrefix(raw, "turns:"):
+		return turnServerConfig{}, fmt.Errorf("turns scheme not supported for UDP relay")
+	case strings.HasPrefix(raw, "turn://"):
+		// already has scheme
+	case strings.HasPrefix(raw, "turn:"):
+		raw = "turn://" + strings.TrimPrefix(raw, "turn:")
+	default:
+		raw = "turn://" + raw
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return turnServerConfig{}, err
+	}
+	if u.Scheme != "turn" {
+		return turnServerConfig{}, fmt.Errorf("unsupported TURN scheme %q", u.Scheme)
+	}
+
+	host := u.Host
+	if host == "" {
+		host = u.Path
+	}
+	if host == "" {
+		return turnServerConfig{}, fmt.Errorf("missing TURN host")
+	}
+	if !strings.Contains(host, ":") {
+		return turnServerConfig{}, fmt.Errorf("missing TURN port")
+	}
+
+	username := ""
+	password := ""
+	if u.User != nil {
+		username = u.User.Username()
+		if pwd, ok := u.User.Password(); ok {
+			password = pwd
+		}
+	}
+
+	transport := u.Query().Get("transport")
+	if transport != "" && transport != "udp" {
+		return turnServerConfig{}, fmt.Errorf("unsupported TURN transport %q", transport)
+	}
+
+	return turnServerConfig{
+		addr:     host,
+		username: username,
+		password: password,
+		realm:    u.Query().Get("realm"),
+	}, nil
 }
 
 func resolveStunAddrs(addrStr string) ([]*net.UDPAddr, error) {

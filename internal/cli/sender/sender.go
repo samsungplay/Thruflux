@@ -48,6 +48,7 @@ func Run(args []string) {
 	quicMaxIncomingStreams := 100
 	stunServers := make([]string, 0)
 	turnServers := make([]string, 0)
+	turnOnly := false
 	var chunkSize uint64
 	parallelFiles := 0
 	for i := 0; i < len(args); i++ {
@@ -80,6 +81,10 @@ func Run(args []string) {
 		if arg == "--turn-server" && i+1 < len(args) {
 			i++
 			turnServers = append(turnServers, splitServers(args[i])...)
+			continue
+		}
+		if arg == "--test-turn" {
+			turnOnly = true
 			continue
 		}
 		if arg == "--udp-read-buffer-bytes" && i+1 < len(args) {
@@ -192,6 +197,7 @@ func Run(args []string) {
 		QuicMaxIncomingStreams: quicMaxIncomingStreams,
 		StunServers:            stunServers,
 		TurnServers:            turnServers,
+		TurnOnly:               turnOnly,
 		TransferOpts: transfer.Options{
 			ChunkSize:     uint32(chunkSize),
 			ParallelFiles: parallelFiles,
@@ -210,6 +216,7 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "                              example: --stun-server stun:stun.l.google.com:19302")
 	fmt.Fprintln(os.Stderr, "  --turn-server URLS          TURN server URLs (comma-separated, default none)")
 	fmt.Fprintln(os.Stderr, "                              example: --turn-server turn:username:password@turn.example.com:3478?transport=udp")
+	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")

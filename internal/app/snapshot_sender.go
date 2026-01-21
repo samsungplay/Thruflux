@@ -62,6 +62,7 @@ type SnapshotSenderConfig struct {
 	QuicMaxIncomingStreams int
 	StunServers            []string
 	TurnServers            []string
+	TurnOnly               bool
 }
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
@@ -104,6 +105,7 @@ type SnapshotSender struct {
 	quicMaxIncomingStreams int
 	stunServers            []string
 	turnServers            []string
+	turnOnly               bool
 	transportSummary       string
 	transportLines         []string
 	transportLogged        bool
@@ -207,6 +209,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		quicMaxIncomingStreams: cfg.QuicMaxIncomingStreams,
 		stunServers:            cfg.StunServers,
 		turnServers:            cfg.TurnServers,
+		turnOnly:               cfg.TurnOnly,
 		conn:                   conn,
 		receivers:              make(map[string]*ReceiverState),
 		active:                 make(map[string]*transferSlot),
@@ -475,7 +478,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	// Initialize Prober
 	proberCfg := ice.ProberConfig{
 		StunServers: s.stunServers,
-		PreferLAN:   true,
+		TurnServers: s.turnServers,
+		TurnOnly:    s.turnOnly,
 	}
 	prober, err := ice.NewProber(proberCfg, s.logger)
 	if err != nil {
@@ -542,6 +546,11 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	case cands := <-remoteCandsCh:
 		remoteCands = cands
 		s.setSenderStage(peerID, fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
+		for _, cand := range remoteCands {
+			if ice.IsTurnCandidate(cand) {
+				s.setSenderProbeStatus(peerID, cand, ice.ProbeStateReadyFallback)
+			}
+		}
 	case <-time.After(10 * time.Second):
 		return fmt.Errorf("timeout waiting for remote candidates")
 	}
