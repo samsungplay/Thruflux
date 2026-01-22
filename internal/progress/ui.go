@@ -565,10 +565,17 @@ func renderProbes(w io.Writer, peerID string, probes map[string]string, isTTY bo
 			color = colorGreen
 		}
 		statusText := status
+		if status == "won" {
+			statusText = "succeeded"
+		}
 		if color != "" {
 			statusText = colorize(status, color, isTTY)
 		}
-		fmt.Fprintf(w, "    [%s] probe %-8s  %s\n", peerID, statusText, addr)
+		displayAddr := addr
+		if strings.HasPrefix(addr, "turn:") {
+			displayAddr = "TURN relay via " + strings.TrimPrefix(addr, "turn:")
+		}
+		fmt.Fprintf(w, "    [%s] probe %-9s %s\n", peerID, statusText, displayAddr)
 		lines++
 	}
 	return lines
