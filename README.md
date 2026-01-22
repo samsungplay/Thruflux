@@ -1,5 +1,9 @@
 # Thruflux
 
+
+https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
+
+
 Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) handles discovery and ICE negotiation, while the unified `thru` CLI lets you host or join in seconds. Data flows directly over QUIC between peers for fast, resilient transfers.
 
 ## Why Thruflux ✨
