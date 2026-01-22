@@ -569,7 +569,7 @@ func renderProbes(w io.Writer, peerID string, probes map[string]string, isTTY bo
 			statusText = "succeeded"
 		}
 		if color != "" {
-			statusText = colorize(status, color, isTTY)
+			statusText = colorize(statusText, color, isTTY)
 		}
 		displayAddr := addr
 		if strings.HasPrefix(addr, "turn:") {
