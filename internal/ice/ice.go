@@ -39,7 +39,7 @@ type Prober struct {
 	transport     *quic.Transport
 	publicAddrs   []net.Addr
 	turnClient    *turn.Client
-	turnConn      *net.UDPConn
+	turnConn      net.PacketConn
 	turnRelayConn net.PacketConn
 	turnTransport *quic.Transport
 	mu            sync.Mutex
@@ -521,10 +521,14 @@ func (p *Prober) resolvePublicAddr() error {
 }
 
 type turnServerConfig struct {
-	addr     string
-	username string
-	password string
-	realm    string
+	addr       string
+	username   string
+	password   string
+	realm      string
+	useTCP     bool
+	useTLS     bool
+	serverName string
+	insecureTLS bool
 }
 
 func (p *Prober) initTurnRelay() error {
@@ -539,10 +543,30 @@ func (p *Prober) initTurnRelay() error {
 			continue
 		}
 
-		baseConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-		if err != nil {
-			p.logger.Warn("failed to create TURN UDP socket", "server", cfg.addr, "error", err)
-			continue
+		var baseConn net.PacketConn
+		if cfg.useTCP {
+			dialer := net.Dialer{Timeout: 5 * time.Second}
+			var conn net.Conn
+			if cfg.useTLS {
+				tlsCfg := &tls.Config{
+					ServerName:         cfg.serverName,
+					InsecureSkipVerify: cfg.insecureTLS,
+				}
+				conn, err = tls.DialWithDialer(&dialer, "tcp", cfg.addr, tlsCfg)
+			} else {
+				conn, err = dialer.Dial("tcp", cfg.addr)
+			}
+			if err != nil {
+				p.logger.Warn("failed to dial TURN server", "server", cfg.addr, "error", err)
+				continue
+			}
+			baseConn = turn.NewSTUNConn(conn)
+		} else {
+			baseConn, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+			if err != nil {
+				p.logger.Warn("failed to create TURN UDP socket", "server", cfg.addr, "error", err)
+				continue
+			}
 		}
 
 		client, err := turn.NewClient(&turn.ClientConfig{
@@ -592,9 +616,9 @@ func parseTurnServer(raw string) (turnServerConfig, error) {
 
 	switch {
 	case strings.HasPrefix(raw, "turns://"):
-		return turnServerConfig{}, fmt.Errorf("turns scheme not supported for UDP relay")
+		// already has scheme
 	case strings.HasPrefix(raw, "turns:"):
-		return turnServerConfig{}, fmt.Errorf("turns scheme not supported for UDP relay")
+		raw = "turns://" + strings.TrimPrefix(raw, "turns:")
 	case strings.HasPrefix(raw, "turn://"):
 		// already has scheme
 	case strings.HasPrefix(raw, "turn:"):
@@ -608,7 +632,9 @@ func parseTurnServer(raw string) (turnServerConfig, error) {
 		return turnServerConfig{}, err
 	}
 	if u.Scheme != "turn" {
-		return turnServerConfig{}, fmt.Errorf("unsupported TURN scheme %q", u.Scheme)
+		if u.Scheme != "turns" {
+			return turnServerConfig{}, fmt.Errorf("unsupported TURN scheme %q", u.Scheme)
+		}
 	}
 
 	host := u.Host
@@ -632,15 +658,49 @@ func parseTurnServer(raw string) (turnServerConfig, error) {
 	}
 
 	transport := u.Query().Get("transport")
-	if transport != "" && transport != "udp" {
+	useTCP := false
+	useTLS := false
+	if transport != "" && transport != "udp" && transport != "tcp" {
 		return turnServerConfig{}, fmt.Errorf("unsupported TURN transport %q", transport)
+	}
+	if transport == "tcp" {
+		useTCP = true
+	}
+	if u.Scheme == "turns" {
+		useTCP = true
+		useTLS = true
+		if transport == "udp" {
+			return turnServerConfig{}, fmt.Errorf("turns requires tcp transport")
+		}
+	}
+
+	serverName := ""
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		serverName = h
+	}
+	if sn := u.Query().Get("servername"); sn != "" {
+		serverName = sn
+	}
+	if sn := u.Query().Get("sni"); sn != "" {
+		serverName = sn
+	}
+	insecureTLS := false
+	switch u.Query().Get("insecure") {
+	case "", "0", "false":
+		insecureTLS = false
+	default:
+		insecureTLS = true
 	}
 
 	return turnServerConfig{
-		addr:     host,
-		username: username,
-		password: password,
-		realm:    u.Query().Get("realm"),
+		addr:       host,
+		username:   username,
+		password:   password,
+		realm:      u.Query().Get("realm"),
+		useTCP:     useTCP,
+		useTLS:     useTLS,
+		serverName: serverName,
+		insecureTLS: insecureTLS,
 	}, nil
 }
 
