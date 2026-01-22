@@ -12,11 +12,13 @@ If you need full control or higher limits, self‑host in minutes.
 
 ## Key features ✅
 
-- **Direct QUIC transfers** for high throughput and low latency.
+- **Aggressive UDP hole‑punching** to maximize direct connections across tough NATs.
+- **Direct QUIC transfers** for high throughput, low latency, and strong encryption.
 - **Multi‑receiver sessions** so one host can share with many peers at once.
 - **Resumable transfers** with last‑chunk verification for safety.
 - **Unified CLI**: `thru host` and `thru join` live in one binary.
 - **Flexible networking**: bring your own STUN/TURN, tune QUIC, and set concurrency.
+- **TURN fallback + TURNS**: relay when direct fails, with optional TLS for TURN control.
 - **Operational guardrails**: server rate‑limits and idle timeouts baked in.
 
 ## Quickstart 🚀
@@ -103,8 +105,9 @@ thru host <paths...> [flags]
 | `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
 | `--max-receivers` | Max concurrent receivers to invite (default `4`). |
 | `--stun-server` | Comma‑separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
-| `--turn-server` | Comma‑separated TURN URLs (default none). |
-| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `1GiB` / `32MiB`). |
+| `--turn-server` | Comma‑separated TURN URLs (default none). Supports `turn:` and `turns:` schemes. |
+| `--test-turn` | Only use TURN relay candidates (no direct probing). |
+| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`). |
 | `--quic-max-incoming-streams` | Max QUIC incoming streams (default `100`). |
 | `--chunk-size` | Chunk size in bytes (default auto). |
 | `--parallel-files` | Concurrent file transfers (1..8). |
@@ -123,6 +126,7 @@ thru join <join-code> [flags]
 | `--out` | Output directory (default `.`). |
 | `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
 | `--stun-server` / `--turn-server` | ICE servers just like `thru host`. |
+| `--test-turn` | Only use TURN relay candidates (no direct probing). |
 | `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs. |
 | `--benchmark` | Print throughput stats. |
 | `--version`, `-v` | Print the Thruflux CLI version. |
@@ -193,3 +197,28 @@ thru join <join-code> [flags]
 Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
 
 May TURN never be needed!
+
+## TURN / TURNS usage
+
+Thruflux performs manual hole‑punching first and only falls back to TURN relay when needed.
+
+Examples:
+```bash
+# TURN over UDP (most common)
+thru host ./data --turn-server "turn://user:pass@turn.example.com:3478"
+thru join ABCDEFGH --turn-server "turn://user:pass@turn.example.com:3478"
+
+# TURN over TLS (TURNS). Useful on restrictive networks.
+thru host ./data --turn-server "turns://user:pass@turn.example.com:5349"
+thru join ABCDEFGH --turn-server "turns://user:pass@turn.example.com:5349"
+
+# Override TLS SNI / cert name if needed
+thru host ./data --turn-server "turns://user:pass@turn.example.com:5349?servername=turn.example.com"
+
+# Debug only: skip TLS verification
+thru host ./data --turn-server "turns://user:pass@turn.example.com:5349?insecure=1"
+```
+
+Notes:
+- `turn:` and `turn://` are equivalent; `turns:` / `turns://` enables TLS for the TURN control channel.
+- If you use `turns://`, the hostname in the URL must match the TURN server TLS certificate (unless `insecure=1` is set).
