@@ -3,6 +3,7 @@ package ice
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -231,6 +232,7 @@ type ProbeState int
 const (
 	ProbeStateProbing ProbeState = iota
 	ProbeStateReadyFallback
+	ProbeStateCanceled
 	ProbeStateFailed
 	ProbeStateWon
 )
@@ -241,6 +243,8 @@ func (s ProbeState) String() string {
 		return "probing"
 	case ProbeStateReadyFallback:
 		return "ready as fallback"
+	case ProbeStateCanceled:
+		return "canceled"
 	case ProbeStateFailed:
 		return "failed"
 	case ProbeStateWon:
@@ -336,7 +340,11 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 			if err != nil {
 				p.logger.Debug("probe failed", "addr", addrStr, "error", err)
 				if onUpdate != nil {
-					onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateFailed, Err: err})
+					state := ProbeStateFailed
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+						state = ProbeStateCanceled
+					}
+					onUpdate(ProbeUpdate{Addr: addrStr, State: state, Err: err})
 				}
 				return
 			}

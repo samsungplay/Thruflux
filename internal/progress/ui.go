@@ -557,6 +557,8 @@ func renderProbes(w io.Writer, peerID string, probes map[string]string, isTTY bo
 			color = ""
 		case "ready as fallback":
 			color = colorCyan
+		case "canceled":
+			color = colorCyan
 		case "failed":
 			color = colorRed
 		case "won":

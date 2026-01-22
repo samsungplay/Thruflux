@@ -424,20 +424,25 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}()
 
 	acceptResCh := make(chan transfer.Conn, 1)
-	acceptOnce := func(t *transferquic.QUICTransport) {
+	acceptOnce := func(t *transferquic.QUICTransport, turn bool) {
 		conn, err := t.Accept(probeCtx)
 		if err == nil {
 			select {
 			case acceptResCh <- conn:
 				r.logger.Info("incoming accept won the race", "addr", conn.RemoteAddr())
+				if turn {
+					progressState.SetProbeStatus("turn:"+conn.RemoteAddr().String(), ice.ProbeStateWon)
+				} else {
+					progressState.SetProbeStatus(conn.RemoteAddr().String(), ice.ProbeStateWon)
+				}
 			default:
 				conn.Close()
 			}
 		}
 	}
-	go acceptOnce(quicTransport)
+	go acceptOnce(quicTransport, false)
 	if turnTransport != nil {
-		go acceptOnce(turnTransport)
+		go acceptOnce(turnTransport, true)
 	}
 
 	var transferConn transfer.Conn
@@ -450,8 +455,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	case tc := <-acceptResCh:
 		transferConn = tc
 		iceLog("connect_ok (accept)")
-		// Mark the remote address as "won" so it shows as green in the UI
-		progressState.SetProbeStatus(transferConn.RemoteAddr().String(), ice.ProbeStateWon)
 	}
 	probeCancel() // Stop other attempts
 
