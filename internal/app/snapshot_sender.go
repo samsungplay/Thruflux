@@ -19,7 +19,6 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
-	"github.com/sheerbytes/sheerbytes/internal/perf"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
@@ -94,7 +93,7 @@ type SnapshotSender struct {
 	tuneLine               string
 	tuneTTY                bool
 	paramsMu               sync.RWMutex
-	params                 perf.Params
+	params                 perfParams
 	benchmark              bool
 	benchSummaryLogged     bool
 	benchAggregate         bench.AggregateSnapshot
@@ -113,6 +112,11 @@ type SnapshotSender struct {
 	onChange               func()
 	exitFn                 func(int)
 	closeConn              func()
+}
+
+type perfParams struct {
+	ChunkSize     int
+	ParallelFiles int
 }
 
 type transferSlot struct {
@@ -901,7 +905,7 @@ func (s *SnapshotSender) initParams() {
 		ParallelFiles: s.transferOpts.ParallelFiles,
 	}, s.transferOpts)
 	s.paramsMu.Lock()
-	s.params = perf.Params{
+	s.params = perfParams{
 		ChunkSize:     int(runtime.ChunkSize),
 		ParallelFiles: runtime.ParallelFiles,
 	}
@@ -942,13 +946,13 @@ func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {
 	}
 }
 
-func (s *SnapshotSender) setParams(params perf.Params) {
+func (s *SnapshotSender) setParams(params perfParams) {
 	s.paramsMu.Lock()
 	s.params = params
 	s.paramsMu.Unlock()
 }
 
-func (s *SnapshotSender) getParams() perf.Params {
+func (s *SnapshotSender) getParams() perfParams {
 	s.paramsMu.RLock()
 	params := s.params
 	s.paramsMu.RUnlock()
@@ -1250,7 +1254,7 @@ func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 
 // Auto-tuning removed; parameters are heuristic-driven.
 
-func formatTuneParams(p perf.Params) string {
+func formatTuneParams(p perfParams) string {
 	return fmt.Sprintf("Performance: chunk_size=%s parallel_files=%d",
 		formatMiB(p.ChunkSize),
 		p.ParallelFiles,
