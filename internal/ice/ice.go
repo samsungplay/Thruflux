@@ -232,9 +232,6 @@ func (p *Prober) GetProbingAddresses() []string {
 	// 3. TURN relay (if allocated)
 	if p.turnRelayConn != nil {
 		turnCand := turnCandidatePrefix + p.turnRelayConn.LocalAddr().String()
-		if p.config.TurnOnly {
-			return []string{turnCand}
-		}
 		candidates = append(candidates, turnCand)
 	} else if p.config.TurnOnly {
 		p.logger.Warn("turn-only enabled but no relay allocation")
