@@ -283,7 +283,6 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 			Conn: p.udpConn,
 		}
 	}
-	turnTransport := p.turnTransport
 	p.mu.Unlock()
 
 	// Helper to parse address
@@ -393,8 +392,9 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		directErr = err
 	}
 
-	if turnTransport != nil && len(turnCandidates) > 0 {
-		conn, err := probeWithTransport(turnCandidates, turnTransport)
+	if len(turnCandidates) > 0 {
+		// Dial TURN relay candidates directly from the base transport to avoid relay-to-relay hairpinning.
+		conn, err := probeWithTransport(turnCandidates, p.transport)
 		if err == nil {
 			return conn, nil
 		}
