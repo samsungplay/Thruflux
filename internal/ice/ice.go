@@ -152,6 +152,27 @@ func (p *Prober) TurnTransport() *quic.Transport {
 	return p.turnTransport
 }
 
+// PrimeTurnPermissions sends a tiny datagram to each candidate to create TURN permissions.
+// This is required so the TURN server accepts incoming packets from that peer IP.
+func (p *Prober) PrimeTurnPermissions(candidates []string) {
+	p.mu.Lock()
+	conn := p.turnRelayConn
+	p.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	for _, cand := range candidates {
+		if IsTurnCandidate(cand) {
+			continue
+		}
+		addr, err := net.ResolveUDPAddr("udp", cand)
+		if err != nil {
+			continue
+		}
+		_, _ = conn.WriteTo([]byte{0}, addr)
+	}
+}
+
 // GetProbingAddresses returns a list of local and public addresses to share with peers.
 func (p *Prober) GetProbingAddresses() []string {
 	var candidates []string

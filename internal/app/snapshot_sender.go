@@ -546,6 +546,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	case cands := <-remoteCandsCh:
 		remoteCands = cands
 		s.setSenderStage(peerID, fmt.Sprintf("remote_candidates_received count=%d", len(cands)))
+		prober.PrimeTurnPermissions(remoteCands)
 		for _, cand := range remoteCands {
 			if ice.IsTurnCandidate(cand) {
 				s.setSenderProbeStatus(peerID, cand, ice.ProbeStateReadyFallback)

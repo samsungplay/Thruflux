@@ -387,6 +387,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 						continue
 					}
 					r.logger.Info("received sender candidates", "count", len(cands.Candidates))
+					prober.PrimeTurnPermissions(cands.Candidates)
 					for _, cand := range cands.Candidates {
 						if ice.IsTurnCandidate(cand) {
 							progressState.SetProbeStatus(cand, ice.ProbeStateReadyFallback)
