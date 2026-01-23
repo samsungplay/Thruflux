@@ -44,6 +44,7 @@ func main() {
 
 	// Create session store with configured TTL
 	store := session.NewStore(cfg.SessionTimeout)
+	expiry := newSessionExpiryManager()
 
 	// Create peer hub
 	hub := peers.NewHub()
@@ -96,7 +97,7 @@ func main() {
 		if !sess.ExpiresAt.IsZero() {
 			ttl := time.Until(sess.ExpiresAt)
 			if ttl > 0 {
-				time.AfterFunc(ttl, func() {
+				expiry.schedule(sess.ID, ttl, func() {
 					hub.CloseSession(sess.ID)
 					store.Delete(sess.ID)
 					fmt.Printf("session expired session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
@@ -123,7 +124,7 @@ func main() {
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocket(w, r, store, hub, logger, limits)
+		handleWebSocket(w, r, store, hub, expiry, logger, limits)
 	})
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -170,6 +171,44 @@ func (b *tokenBucket) Allow() bool {
 	}
 	b.tokens -= 1
 	return true
+}
+
+type sessionExpiryManager struct {
+	mu     sync.Mutex
+	timers map[string]*time.Timer
+}
+
+func newSessionExpiryManager() *sessionExpiryManager {
+	return &sessionExpiryManager{
+		timers: make(map[string]*time.Timer),
+	}
+}
+
+func (m *sessionExpiryManager) schedule(sessionID string, ttl time.Duration, fn func()) {
+	if ttl <= 0 {
+		return
+	}
+	m.mu.Lock()
+	if existing := m.timers[sessionID]; existing != nil {
+		existing.Stop()
+	}
+	timer := time.AfterFunc(ttl, func() {
+		fn()
+		m.mu.Lock()
+		delete(m.timers, sessionID)
+		m.mu.Unlock()
+	})
+	m.timers[sessionID] = timer
+	m.mu.Unlock()
+}
+
+func (m *sessionExpiryManager) cancel(sessionID string) {
+	m.mu.Lock()
+	if timer := m.timers[sessionID]; timer != nil {
+		timer.Stop()
+		delete(m.timers, sessionID)
+	}
+	m.mu.Unlock()
 }
 
 type serverLimits struct {
@@ -258,7 +297,7 @@ var wsIPLimiter = newIPLimiter(0, 1)
 var sessionIPLimiter = newIPLimiter(0, 1)
 var wsConnLimiter = newConnLimiter(0)
 
-func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Store, hub *peers.Hub, logger *slog.Logger, limits serverLimits) {
+func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Store, hub *peers.Hub, expiry *sessionExpiryManager, logger *slog.Logger, limits serverLimits) {
 	// Parse query parameters
 	joinCode := r.URL.Query().Get("join_code")
 	peerID := r.URL.Query().Get("peer_id")
@@ -450,6 +489,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 		fmt.Printf("peer disconnected session_id=%s peer_id=%s\n", sess.ID, peerID)
 		if role == "sender" {
 			fmt.Printf("session deleted session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
+			expiry.cancel(sess.ID)
 			store.Delete(sess.ID)
 		}
 	}()
