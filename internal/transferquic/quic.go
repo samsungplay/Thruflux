@@ -211,6 +211,18 @@ func (c *QUICConn) Close() error {
 	return nil
 }
 
+// ExportKeyingMaterial derives per-connection keying material from the TLS session.
+func (c *QUICConn) ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return nil, fmt.Errorf("quic connection not available")
+	}
+	state := conn.ConnectionState()
+	return state.TLS.ExportKeyingMaterial(label, context, length)
+}
+
 // QUICStream wraps a quic.Stream and implements transfer.Stream.
 type QUICStream struct {
 	mu          sync.Mutex

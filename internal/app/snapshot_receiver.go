@@ -91,6 +91,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		logger:                 logger,
 		conn:                   conn,
 		peerID:                 peerID,
+		joinCode:               cfg.JoinCode,
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
@@ -127,6 +128,7 @@ type snapshotReceiver struct {
 	logger                 *slog.Logger
 	conn                   *wsclient.Conn
 	peerID                 string
+	joinCode               string
 	outDir                 string
 	benchmark              bool
 	udpReadBufferBytes     int
@@ -466,6 +468,17 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	defer transferConn.Close()
 	fmt.Fprintf(os.Stderr, "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
+
+	authCtx, authCancel := context.WithTimeout(baseCtx, 10*time.Second)
+	if err := authenticateTransport(authCtx, transferConn, r.joinCode, authRoleReceive); err != nil {
+		authCancel()
+		stopUIFn()
+		fmt.Fprintf(os.Stderr, "transport auth failed: %v\n", err)
+		fmt.Fprintf(os.Stdout, "transport auth failed: %v\n", err)
+		r.logger.Error("transport auth failed", "error", err)
+		exitWith(1)
+	}
+	authCancel()
 
 	opts := transfer.Options{
 		Resume:    true,

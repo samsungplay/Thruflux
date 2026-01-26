@@ -620,6 +620,13 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferConn.Close()
 	fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
 
+	authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
+	if err := authenticateTransport(authCtx, transferConn, s.joinCode, authRoleSender); err != nil {
+		authCancel()
+		return fmt.Errorf("transport auth failed: %w", err)
+	}
+	authCancel()
+
 	opts := s.transferOptions()
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {

@@ -7,6 +7,7 @@ https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 ## Why Thruflux ✨
 
 The vision is simple: make high‑performance, mass file sharing easy and accessible to everyone — at no cost. Thruflux ships with free defaults out of the box:
+
 - **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use).
 - **STUN defaults** so most users can connect immediately without extra setup.
 
@@ -16,6 +17,7 @@ If you need full control or higher limits, self‑host in minutes.
 
 - **Aggressive UDP hole‑punching** to maximize direct connections across tough NATs.
 - **Direct QUIC transfers** for high throughput, low latency, and strong encryption.
+- **Transport-bound authentication** tied to the join code and QUIC session to resist Man-in-the-Middle attack.
 - **Multi‑receiver sessions** so one host can share with many peers at once.
 - **Resumable transfers** with last‑chunk verification for safety.
 - **Unified CLI**: `thru host` and `thru join` live in one binary.
@@ -28,18 +30,21 @@ If you need full control or higher limits, self‑host in minutes.
 **Install**
 
 **macOS / Linux (Homebrew)**
+
 ```bash
 brew tap samsungplay/thruflux
 brew install thru
 ```
 
 **Windows (Scoop)**
+
 ```bash
 scoop bucket add thruflux https://github.com/samsungplay/scoop-thruflux
 scoop install thru
 ```
 
 **Use**
+
 ```bash
 # host files (defaults to https://bytepipe.app + bundled STUN list)
 thru host ./photos ./videos
@@ -53,18 +58,18 @@ Multiple receivers can join the same code concurrently (subject to `--max-receiv
 ## Building the CLIs locally 🛠️
 
 1. **Prerequisites** – install Go (1.22+ recommended) for your platform and ensure `GOPATH/bin` is on your `PATH`.
-3. **Clone and bootstrap**
+2. **Clone and bootstrap**
    ```bash
    git clone <repo>
    cd thruflux
    go mod download
    ```
-4. **Build the binaries**
+3. **Build the binaries**
    ```bash
    go build ./cmd/thru ./cmd/thruserv
    ```
    On Windows the outputs will be `thru.exe` and `thruserv.exe`; on Unix-like systems they are `thru` and `thruserv`.
-5. **(Optional) Install globally**
+4. **(Optional) Install globally**
    ```bash
    mkdir -p "$HOME/bin"
    mv thru thruserv "$HOME/bin/"
@@ -81,20 +86,20 @@ If you change dependencies, rerun `go mod tidy` before rebuilding to keep the mo
 thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D] [--session-timeout D]
 ```
 
-| Flag | Description |
-|---|---|
-| `--port` | TCP port to listen on (default `8080`). |
-| `--max-sessions` | Max concurrent signaling sessions (default `1000`, `0` disables). |
-| `--max-receivers-per-sender` | Limits how many receivers a sender may invite (default `10`). |
-| `--max-message-bytes` | Max WebSocket payload size (default `65536`). |
-| `--ws-connects-per-min` / `--ws-connects-burst` | Per‑IP connect rate cap (default `30`/`10`). |
-| `--ws-msgs-per-sec` / `--ws-msgs-burst` | Per‑connection message throttle (default `50`/`100`). |
-| `--session-creates-per-min` / `--session-creates-burst` | Per‑IP session creation throttle (default `10`/`5`). |
-| `--max-ws-connections` | Total WebSocket cap (default `2000`, `0` disables). |
-| `--ws-idle-timeout` | Idle connection timeout (default `10m`, `0` disables). |
-| `--session-timeout` | Max session lifetime (default `24h`, `0` disables). |
-| `--version`, `-v` | Print the Thruflux server version. |
-| `--help`, `-h` | Show usage and flag descriptions. |
+| Flag                                                    | Description                                                       |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `--port`                                                | TCP port to listen on (default `8080`).                           |
+| `--max-sessions`                                        | Max concurrent signaling sessions (default `1000`, `0` disables). |
+| `--max-receivers-per-sender`                            | Limits how many receivers a sender may invite (default `10`).     |
+| `--max-message-bytes`                                   | Max WebSocket payload size (default `65536`).                     |
+| `--ws-connects-per-min` / `--ws-connects-burst`         | Per‑IP connect rate cap (default `30`/`10`).                      |
+| `--ws-msgs-per-sec` / `--ws-msgs-burst`                 | Per‑connection message throttle (default `50`/`100`).             |
+| `--session-creates-per-min` / `--session-creates-burst` | Per‑IP session creation throttle (default `10`/`5`).              |
+| `--max-ws-connections`                                  | Total WebSocket cap (default `2000`, `0` disables).               |
+| `--ws-idle-timeout`                                     | Idle connection timeout (default `10m`, `0` disables).            |
+| `--session-timeout`                                     | Max session lifetime (default `24h`, `0` disables).               |
+| `--version`, `-v`                                       | Print the Thruflux server version.                                |
+| `--help`, `-h`                                          | Show usage and flag descriptions.                                 |
 
 ### `thru host` (sender)
 
@@ -102,20 +107,20 @@ thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* fl
 thru host <paths...> [flags]
 ```
 
-| Flag | Description |
-|---|---|
-| `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
-| `--max-receivers` | Max concurrent receivers to invite (default `4`). |
-| `--stun-server` | Comma‑separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
-| `--turn-server` | Comma‑separated TURN URLs (default none). Supports `turn:` and `turns:` schemes. |
-| `--test-turn` | Only use TURN relay candidates (no direct probing). |
-| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`). |
-| `--quic-max-incoming-streams` | Max QUIC incoming streams (default `100`). |
-| `--chunk-size` | Chunk size in bytes (default auto). |
-| `--parallel-files` | Concurrent file transfers (1..8). |
-| `--benchmark` | Print throughput stats. |
-| `--version`, `-v` | Print the Thruflux CLI version. |
-| `--help`, `-h` | Show usage and flag descriptions. |
+| Flag                                                      | Description                                                                                                                   |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `--server-url`                                            | Signaling server URL (default `https://bytepipe.app`).                                                                        |
+| `--max-receivers`                                         | Max concurrent receivers to invite (default `4`).                                                                             |
+| `--stun-server`                                           | Comma‑separated STUN URLs (default `stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478,stun:stun.bytepipe.app:3478`). |
+| `--turn-server`                                           | Comma‑separated TURN URLs (default none). Supports `turn:` and `turns:` schemes.                                              |
+| `--test-turn`                                             | Only use TURN relay candidates (no direct probing).                                                                           |
+| `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`).                                                                        |
+| `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `100`).                                                                                    |
+| `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
+| `--parallel-files`                                        | Concurrent file transfers (1..8).                                                                                             |
+| `--benchmark`                                             | Print throughput stats.                                                                                                       |
+| `--version`, `-v`                                         | Print the Thruflux CLI version.                                                                                               |
+| `--help`, `-h`                                            | Show usage and flag descriptions.                                                                                             |
 
 ### `thru join` (receiver)
 
@@ -123,20 +128,21 @@ thru host <paths...> [flags]
 thru join <join-code> [flags]
 ```
 
-| Flag | Description |
-|---|---|
-| `--out` | Output directory (default `.`). |
-| `--server-url` | Signaling server URL (default `https://bytepipe.app`). |
-| `--stun-server` / `--turn-server` | ICE servers just like `thru host`. |
-| `--test-turn` | Only use TURN relay candidates (no direct probing). |
-| `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs. |
-| `--benchmark` | Print throughput stats. |
-| `--version`, `-v` | Print the Thruflux CLI version. |
-| `--help`, `-h` | Show usage and flag descriptions. |
+| Flag                                                                                    | Description                                            |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `--out`                                                                                 | Output directory (default `.`).                        |
+| `--server-url`                                                                          | Signaling server URL (default `https://bytepipe.app`). |
+| `--stun-server` / `--turn-server`                                                       | ICE servers just like `thru host`.                     |
+| `--test-turn`                                                                           | Only use TURN relay candidates (no direct probing).    |
+| `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs.                                     |
+| `--benchmark`                                                                           | Print throughput stats.                                |
+| `--version`, `-v`                                                                       | Print the Thruflux CLI version.                        |
+| `--help`, `-h`                                                                          | Show usage and flag descriptions.                      |
 
 ## Self‑hosting guide (Ubuntu) 🐧
 
 1. **Prepare the machine**
+
    ```bash
    sudo apt update && sudo apt upgrade -y
    sudo apt install -y build-essential curl git
@@ -144,6 +150,7 @@ thru join <join-code> [flags]
    ```
 
 2. **Build the binaries (Alternatively, you can download from releases)**
+
    ```bash
    git clone <repo>
    cd thruflux
@@ -171,6 +178,7 @@ thru join <join-code> [flags]
    - Reload: `sudo systemctl reload caddy`.
 
 4. **Run `thruserv` as a systemd service**
+
    ```
    [Unit]
    Description=Thruflux signaling server
@@ -185,12 +193,13 @@ thru join <join-code> [flags]
    [Install]
    WantedBy=multi-user.target
    ```
+
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable --now thruserv
    ```
 
-6. **Point clients to your server**
+5. **Point clients to your server**
    - Host: `thru host … --server-url https://your.domain`
    - Join: `thru join ABCDEFGH --server-url https://your.domain`
 
@@ -205,6 +214,7 @@ May TURN never be needed!
 Thruflux performs manual hole‑punching first and only falls back to TURN relay when needed.
 
 Examples:
+
 ```bash
 # TURN over UDP (most common)
 thru host ./data --turn-server "turn://user:pass@turn.example.com:3478"
@@ -222,5 +232,6 @@ thru host ./data --turn-server "turns://user:pass@turn.example.com:5349?insecure
 ```
 
 Notes:
+
 - `turn:` and `turn://` are equivalent; `turns:` / `turns://` enables TLS for the TURN control channel.
 - If you use `turns://`, the hostname in the URL must match the TURN server TLS certificate (unless `insecure=1` is set).
