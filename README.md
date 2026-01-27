@@ -12,6 +12,7 @@ The vision is simple: make high‑performance, mass file sharing easy and access
 - **STUN defaults** so most users can connect immediately without extra setup.
 
 If you need full control or higher limits, self‑host in minutes.
+
 **Heads-up**: Thruflux does not yet include a built-in TURN relay. If you’re on a restrictive network, you may need to bring your own TURN server.
 The [coturn repository](https://github.com/coturn/coturn) 
  explains how to host one, and the last section of this README shows how to wire it up with Thruflux.
