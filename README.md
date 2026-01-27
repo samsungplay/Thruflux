@@ -156,8 +156,8 @@ thru join <join-code> [flags]
 2. **Build the thruserv binary**
 
    ```bash
-   git clone <repo>
-   cd thruflux
+   git clone https://github.com/samsungplay/Thruflux.git
+   cd Thruflux
    go build ./cmd/thruserv
    sudo mv thruserv /usr/local/bin/
    ```
