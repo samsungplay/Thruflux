@@ -29,6 +29,7 @@ type ProberConfig struct {
 var DefaultStunServers = []string{
 	"stun.l.google.com:19302",
 	"stun.cloudflare.com:3478",
+	"stun.bytepipe.app:3478",
 }
 
 // Prober manages network discovery and probing.

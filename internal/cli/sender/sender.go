@@ -212,7 +212,7 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "usage: thru host <paths...> [--max-receivers N] [--server-url URL] [--benchmark]")
 	fmt.Fprintln(os.Stderr, "  --max-receivers N           max concurrent receivers (default 4)")
 	fmt.Fprintln(os.Stderr, "  --server-url URL            signaling server URL (default https://bytepipe.app)")
-	fmt.Fprintf(os.Stderr, "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(ice.DefaultStunServers, ","))
+	fmt.Fprintf(os.Stderr, "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(senderDefaultStunServers, ","))
 	fmt.Fprintln(os.Stderr, "                              example: --stun-server stun:stun.l.google.com:19302")
 	fmt.Fprintln(os.Stderr, "  --turn-server URLS          TURN server URLs (comma-separated, default none)")
 	fmt.Fprintln(os.Stderr, "                              example: --turn-server turn:username:password@turn.example.com:3478")
