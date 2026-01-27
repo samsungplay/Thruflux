@@ -13,7 +13,6 @@ import (
 
 	"github.com/sheerbytes/sheerbytes/internal/app"
 	"github.com/sheerbytes/sheerbytes/internal/appstate"
-	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/logging"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"

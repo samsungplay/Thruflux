@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/sheerbytes/sheerbytes/internal/app"
-	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/logging"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
