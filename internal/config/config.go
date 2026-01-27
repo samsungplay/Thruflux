@@ -24,6 +24,9 @@ type ServerConfig struct {
 	MaxWSConnections      int
 	WSIdleTimeout         time.Duration
 	SessionTimeout        time.Duration
+	TurnServers           []string
+	TurnStaticAuthSecret  string
+	TurnCredentialTTL     time.Duration
 }
 
 // ClientConfig holds configuration for client binaries (sender/receiver).
@@ -75,6 +78,7 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 		MaxWSConnections:      2000,
 		WSIdleTimeout:         10 * time.Minute,
 		SessionTimeout:        24 * time.Hour,
+		TurnCredentialTTL:     1 * time.Hour,
 	}
 
 	// Flags override defaults
@@ -91,10 +95,20 @@ func parseServerConfigWithFlagSet(fs *flag.FlagSet, args []string) ServerConfig 
 	fs.IntVar(&cfg.MaxWSConnections, "max-ws-connections", cfg.MaxWSConnections, "max concurrent websocket connections (0 disables limit)")
 	fs.DurationVar(&cfg.WSIdleTimeout, "ws-idle-timeout", cfg.WSIdleTimeout, "websocket idle timeout (0 disables)")
 	fs.DurationVar(&cfg.SessionTimeout, "session-timeout", cfg.SessionTimeout, "max session lifetime before expiry (0 disables)")
+	fs.StringVar(&cfg.TurnStaticAuthSecret, "turn-static-auth-secret", cfg.TurnStaticAuthSecret, "TURN static auth secret for REST credentials")
+	fs.DurationVar(&cfg.TurnCredentialTTL, "turn-cred-ttl", cfg.TurnCredentialTTL, "TURN credential TTL (e.g. 1h)")
+	var turnServers []string
+	fs.Var((*stringSlice)(&turnServers), "turn-server", "TURN server URL (repeatable, comma-separated)")
 	fs.Parse(args)
 
+	if len(turnServers) > 0 {
+		cfg.TurnServers = splitCommaList(turnServers)
+	}
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		cfg.Port = 8080
+	}
+	if cfg.TurnCredentialTTL <= 0 {
+		cfg.TurnCredentialTTL = 1 * time.Hour
 	}
 	return cfg
 }
@@ -238,3 +252,17 @@ func (s *stringSlice) IsBoolFlag() bool {
 
 var _ flag.Value = (*stringSlice)(nil)
 var _ flag.Getter = (*stringSlice)(nil)
+
+func splitCommaList(values []string) []string {
+	out := make([]string, 0)
+	for _, v := range values {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			out = append(out, part)
+		}
+	}
+	return out
+}

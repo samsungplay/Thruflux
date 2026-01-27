@@ -11,12 +11,11 @@ The vision is simple: make high‑performance, mass file sharing easy and access
 
 - **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use).
 - **STUN defaults** so most users can connect immediately without extra setup.
+- **Default TURN relays** for tougher networks (shared ~900 Mbps right now, expandable as usage grows).
 
 If you need full control or higher limits, self‑host in minutes.
 
-**Heads-up**: Thruflux does not yet include a built-in TURN relay. If you’re on a restrictive network, you may need to bring your own TURN server.
-The [coturn repository](https://github.com/coturn/coturn) 
- explains how to host one, and the last section of this README shows how to wire it up with Thruflux.
+**Heads-up**: The hosted TURN pool is shared and rate‑limited. If you need guaranteed capacity, self‑host TURN (coturn works great) — the last section shows how to wire it up.
 
 ## Key features ✅
 
@@ -88,7 +87,7 @@ If you change dependencies, rerun `go mod tidy` before rebuilding to keep the mo
 ### `thruserv` (signaling server)
 
 ```
-thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D] [--session-timeout D]
+thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* flags] [--ws-idle-timeout D] [--session-timeout D] [--turn-* flags]
 ```
 
 | Flag                                                    | Description                                                       |
@@ -103,6 +102,9 @@ thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N] [--ws-* fl
 | `--max-ws-connections`                                  | Total WebSocket cap (default `2000`, `0` disables).               |
 | `--ws-idle-timeout`                                     | Idle connection timeout (default `10m`, `0` disables).            |
 | `--session-timeout`                                     | Max session lifetime (default `24h`, `0` disables).               |
+| `--turn-server`                                         | TURN server URL(s) for issuing ephemeral credentials.             |
+| `--turn-static-auth-secret`                             | TURN REST static auth secret (coturn `use-auth-secret`).          |
+| `--turn-cred-ttl`                                       | TURN credential TTL (default `1h`).                               |
 | `--version`, `-v`                                       | Print the Thruflux server version.                                |
 | `--help`, `-h`                                          | Show usage and flag descriptions.                                 |
 
@@ -206,6 +208,18 @@ thru join <join-code> [flags]
 5. **Point clients to your server**
    - Host: `thru host … --server-url https://your.domain`
    - Join: `thru join ABCDEFGH --server-url https://your.domain`
+
+6. **(Optional) Enable default TURN relay via coturn REST credentials**
+   - Ensure coturn is configured with `use-auth-secret` and the same `static-auth-secret` you will pass to `thruserv`.
+   - Start `thruserv` with TURN flags so it can mint time‑limited creds and send them to clients automatically:
+     ```
+     /usr/local/bin/thruserv \
+       --port 8080 \
+       --turn-server turn:stun.bytepipe.app:3478 \
+       --turn-static-auth-secret <your-static-auth-secret> \
+       --turn-cred-ttl 1h
+     ```
+   - Clients don’t need `--turn-server` unless you want to override the server‑provided TURN.
 
 ## Contributing 🤝
 

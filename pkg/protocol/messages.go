@@ -78,6 +78,12 @@ type IceCandidates struct {
 	Candidates []string `json:"candidates"`
 }
 
+// TurnCredentials contains TURN server URLs with embedded ephemeral credentials.
+type TurnCredentials struct {
+	Servers   []string `json:"servers"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
+}
+
 // ManifestSummary contains summary information about a file manifest.
 type ManifestSummary struct {
 	ManifestID  string `json:"manifest_id"`

@@ -167,6 +167,28 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "TurnCredentials",
+			msgType: TypeTurnCredentials,
+			payload: TurnCredentials{
+				Servers:   []string{"turn://user:pass@turn.example.com:3478"},
+				ExpiresAt: "2030-01-01T00:00:00Z",
+			},
+			decodeTo: func() any { return &TurnCredentials{} },
+			verify: func(t *testing.T, decoded, original any) {
+				d := decoded.(*TurnCredentials)
+				o := original.(TurnCredentials)
+				if len(d.Servers) != len(o.Servers) {
+					t.Fatalf("Servers len = %d, want %d", len(d.Servers), len(o.Servers))
+				}
+				if len(d.Servers) > 0 && d.Servers[0] != o.Servers[0] {
+					t.Errorf("Servers[0] = %s, want %s", d.Servers[0], o.Servers[0])
+				}
+				if d.ExpiresAt != o.ExpiresAt {
+					t.Errorf("ExpiresAt = %s, want %s", d.ExpiresAt, o.ExpiresAt)
+				}
+			},
+		},
 		// Manifest
 		{
 			name:    "ManifestOffer",

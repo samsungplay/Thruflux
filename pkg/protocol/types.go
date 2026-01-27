@@ -15,6 +15,7 @@ const (
 	TypeIceCandidate          = "ice_candidate"
 	TypeIceCredentials        = "ice_credentials"
 	TypeIceCandidates         = "ice_candidates"
+	TypeTurnCredentials       = "turn_credentials"
 	TypeManifestOffer         = "manifest_offer"
 	TypeManifestAccept        = "manifest_accept"
 	TypeTransferStart         = "transfer_start"

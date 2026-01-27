@@ -1,13 +1,18 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +57,7 @@ func main() {
 	if limits.sessionCreateRatePerSec > 0 {
 		sessionIPLimiter.SetLimits(limits.sessionCreateRatePerSec, limits.sessionCreateBurst)
 	}
+	turnIssuer := newTurnIssuer(cfg, logger)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -124,7 +130,7 @@ func main() {
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocket(w, r, store, hub, expiry, logger, limits)
+		handleWebSocket(w, r, store, hub, expiry, logger, limits, turnIssuer)
 	})
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
@@ -297,7 +303,7 @@ var wsIPLimiter = newIPLimiter(0, 1)
 var sessionIPLimiter = newIPLimiter(0, 1)
 var wsConnLimiter = newConnLimiter(0)
 
-func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Store, hub *peers.Hub, expiry *sessionExpiryManager, logger *slog.Logger, limits serverLimits) {
+func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Store, hub *peers.Hub, expiry *sessionExpiryManager, logger *slog.Logger, limits serverLimits, turnIssuer *turnIssuer) {
 	// Parse query parameters
 	joinCode := r.URL.Query().Get("join_code")
 	peerID := r.URL.Query().Get("peer_id")
@@ -457,6 +463,25 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 		return
 	}
 
+	if turnIssuer != nil {
+		turnCreds, err := turnIssuer.Issue(peerID)
+		if err != nil {
+			logger.Error("failed to issue turn credentials", "error", err, "peer_id", peerID)
+		} else if len(turnCreds.Servers) > 0 {
+			turnEnv, err := protocol.NewEnvelope(protocol.TypeTurnCredentials, protocol.NewMsgID(), turnCreds)
+			if err != nil {
+				logger.Error("failed to create turn credentials envelope", "error", err)
+			} else {
+				turnEnv.SessionID = sess.ID
+				turnEnv.From = "server"
+				turnEnv.To = peerID
+				if err := sendFunc(turnEnv); err != nil {
+					logger.Error("failed to send turn credentials", "error", err)
+				}
+			}
+		}
+	}
+
 	// Broadcast PeerJoined to all peers in session
 	peerJoined := protocol.PeerJoined{
 		Peer: protocol.PeerInfo{
@@ -601,6 +626,10 @@ func printServerUsage() {
 	fmt.Fprintln(os.Stderr, "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
 	fmt.Fprintln(os.Stderr, "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
 	fmt.Fprintln(os.Stderr, "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
+	fmt.Fprintln(os.Stderr, "  --turn-server URLS           TURN server URLs (repeatable, comma-separated)")
+	fmt.Fprintln(os.Stderr, "                              example: --turn-server turns:stun.bytepipe.app:5349?servername=stun.bytepipe.app")
+	fmt.Fprintln(os.Stderr, "  --turn-static-auth-secret S  TURN REST static auth secret (coturn use-auth-secret)")
+	fmt.Fprintln(os.Stderr, "  --turn-cred-ttl DURATION      TURN credential TTL (default 1h)")
 }
 
 func hasHelpFlag(args []string) bool {
@@ -661,4 +690,93 @@ func (l *connLimiter) Release() {
 		l.inUse--
 	}
 	l.mu.Unlock()
+}
+
+type turnIssuer struct {
+	servers []string
+	secret  []byte
+	ttl     time.Duration
+}
+
+func newTurnIssuer(cfg config.ServerConfig, logger *slog.Logger) *turnIssuer {
+	if len(cfg.TurnServers) == 0 || cfg.TurnStaticAuthSecret == "" {
+		if len(cfg.TurnServers) == 0 && cfg.TurnStaticAuthSecret != "" {
+			logger.Warn("TURN static auth secret set but no TURN servers configured")
+		}
+		if len(cfg.TurnServers) > 0 && cfg.TurnStaticAuthSecret == "" {
+			logger.Warn("TURN servers configured but no static auth secret set")
+		}
+		return nil
+	}
+	ttl := cfg.TurnCredentialTTL
+	if ttl <= 0 {
+		ttl = 1 * time.Hour
+	}
+	issuer := &turnIssuer{
+		servers: cfg.TurnServers,
+		secret:  []byte(cfg.TurnStaticAuthSecret),
+		ttl:     ttl,
+	}
+	logger.Info("TURN credential issuer enabled", "servers", len(cfg.TurnServers), "ttl", ttl)
+	return issuer
+}
+
+func (t *turnIssuer) Issue(peerID string) (protocol.TurnCredentials, error) {
+	if t == nil || len(t.servers) == 0 || len(t.secret) == 0 {
+		return protocol.TurnCredentials{}, fmt.Errorf("turn issuer not configured")
+	}
+	expiry := time.Now().Add(t.ttl).UTC()
+	username := fmt.Sprintf("%d:%s", expiry.Unix(), peerID)
+	password := buildTurnPassword(t.secret, username)
+	servers := make([]string, 0, len(t.servers))
+	for _, raw := range t.servers {
+		credURL, err := injectTurnCredentials(raw, username, password)
+		if err != nil {
+			return protocol.TurnCredentials{}, err
+		}
+		servers = append(servers, credURL)
+	}
+	return protocol.TurnCredentials{
+		Servers:   servers,
+		ExpiresAt: expiry.Format(time.RFC3339),
+	}, nil
+}
+
+func buildTurnPassword(secret []byte, username string) string {
+	mac := hmac.New(sha1.New, secret)
+	_, _ = mac.Write([]byte(username))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func injectTurnCredentials(raw, username, password string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("empty TURN server")
+	}
+	switch {
+	case strings.HasPrefix(raw, "turns://"):
+	case strings.HasPrefix(raw, "turns:"):
+		raw = "turns://" + strings.TrimPrefix(raw, "turns:")
+	case strings.HasPrefix(raw, "turn://"):
+	case strings.HasPrefix(raw, "turn:"):
+		raw = "turn://" + strings.TrimPrefix(raw, "turn:")
+	default:
+		raw = "turn://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse TURN server: %w", err)
+	}
+	if u.Scheme != "turn" && u.Scheme != "turns" {
+		return "", fmt.Errorf("unsupported TURN scheme %q", u.Scheme)
+	}
+	if u.Host == "" && u.Path != "" {
+		u.Host = u.Path
+		u.Path = ""
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("missing TURN host")
+	}
+	u.User = url.UserPassword(username, password)
+	return u.String(), nil
 }

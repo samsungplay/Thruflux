@@ -105,6 +105,7 @@ type SnapshotSender struct {
 	stunServers            []string
 	turnServers            []string
 	turnOnly               bool
+	turnMu                 sync.RWMutex
 	transportSummary       string
 	transportLines         []string
 	transportLogged        bool
@@ -257,6 +258,16 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 	}
 
 	switch env.Type {
+	case protocol.TypeTurnCredentials:
+		var creds protocol.TurnCredentials
+		if err := env.DecodePayload(&creds); err != nil {
+			s.logger.Error("failed to decode turn_credentials", "error", err)
+			return
+		}
+		if s.setTurnServersIfEmpty(creds.Servers) && len(creds.ExpiresAt) > 0 {
+			s.logger.Info("received TURN credentials", "expires_at", creds.ExpiresAt, "servers", len(creds.Servers))
+		}
+
 	case protocol.TypePeerJoined:
 		var peerJoined protocol.PeerJoined
 		if err := env.DecodePayload(&peerJoined); err != nil {
@@ -365,6 +376,25 @@ func (s *SnapshotSender) handlePeerLeft(peerID string) {
 	s.emitChange()
 	s.sendQueuedUpdates(queuedMsgs)
 	s.maybeStartTransfers(context.Background())
+}
+
+func (s *SnapshotSender) setTurnServersIfEmpty(servers []string) bool {
+	if len(servers) == 0 {
+		return false
+	}
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if len(s.turnServers) > 0 {
+		return false
+	}
+	s.turnServers = append([]string{}, servers...)
+	return true
+}
+
+func (s *SnapshotSender) currentTurnServers() []string {
+	s.turnMu.RLock()
+	defer s.turnMu.RUnlock()
+	return append([]string{}, s.turnServers...)
 }
 
 func (s *SnapshotSender) enqueueLocked(peerID string) {
@@ -482,7 +512,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	// Initialize Prober
 	proberCfg := ice.ProberConfig{
 		StunServers: s.stunServers,
-		TurnServers: s.turnServers,
+		TurnServers: s.currentTurnServers(),
 		TurnOnly:    s.turnOnly,
 	}
 	prober, err := ice.NewProber(proberCfg, s.logger)

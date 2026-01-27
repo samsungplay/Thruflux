@@ -139,6 +139,7 @@ type snapshotReceiver struct {
 	stunServers            []string
 	turnServers            []string
 	turnOnly               bool
+	turnMu                 sync.RWMutex
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -161,6 +162,15 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 	}
 
 	switch env.Type {
+	case protocol.TypeTurnCredentials:
+		var creds protocol.TurnCredentials
+		if err := env.DecodePayload(&creds); err != nil {
+			r.logger.Error("failed to decode turn_credentials", "error", err)
+			return
+		}
+		if r.setTurnServersIfEmpty(creds.Servers) && len(creds.ExpiresAt) > 0 {
+			r.logger.Info("received TURN credentials", "expires_at", creds.ExpiresAt, "servers", len(creds.Servers))
+		}
 	case protocol.TypeManifestOffer:
 		var offer protocol.ManifestOffer
 		if err := env.DecodePayload(&offer); err != nil {
@@ -219,6 +229,25 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		default:
 		}
 	}
+}
+
+func (r *snapshotReceiver) setTurnServersIfEmpty(servers []string) bool {
+	if len(servers) == 0 {
+		return false
+	}
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
+	if len(r.turnServers) > 0 {
+		return false
+	}
+	r.turnServers = append([]string{}, servers...)
+	return true
+}
+
+func (r *snapshotReceiver) currentTurnServers() []string {
+	r.turnMu.RLock()
+	defer r.turnMu.RUnlock()
+	return append([]string{}, r.turnServers...)
 }
 
 func (r *snapshotReceiver) sendAccept(manifestID string) {
@@ -295,7 +324,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	// Initialize Prober
 	proberCfg := ice.ProberConfig{
 		StunServers: r.stunServers,
-		TurnServers: r.turnServers,
+		TurnServers: r.currentTurnServers(),
 		TurnOnly:    r.turnOnly,
 	}
 	prober, err = ice.NewProber(proberCfg, r.logger)
