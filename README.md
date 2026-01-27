@@ -149,14 +149,13 @@ thru join <join-code> [flags]
    sudo snap install --classic go
    ```
 
-2. **Build the binaries (Alternatively, you can download from releases)**
+2. **Build the thruserv binary**
 
    ```bash
    git clone <repo>
    cd thruflux
-   go build ./cmd/thru ./cmd/thruserv
+   go build ./cmd/thruserv
    sudo mv thruserv /usr/local/bin/
-   sudo mv thru /usr/local/bin/
    ```
 
 3. **Optional TLS + WSS (recommended)**
