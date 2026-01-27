@@ -35,6 +35,7 @@ const (
 	DefaultChunkSize    = 4 * 1024 * 1024 // 4 MiB default chunk size
 	DefaultSendQueueMax = 16              // Bounded sender read-ahead queue depth
 	eofMagic            = "EOF1"          // EOF magic bytes
+	streamIOTimeout     = 10 * time.Minute
 )
 
 type readJob struct {
@@ -124,7 +125,30 @@ func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte
 	}
 }
 
+type streamDeadlineSetter interface {
+	SetReadDeadline(time.Time) error
+	SetWriteDeadline(time.Time) error
+	SetDeadline(time.Time) error
+}
+
 func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
+	if ds, ok := s.(streamDeadlineSetter); ok {
+		deadline := time.Now().Add(streamIOTimeout)
+		if dl, has := ctx.Deadline(); has && dl.Before(deadline) {
+			deadline = dl
+		}
+		_ = ds.SetReadDeadline(deadline)
+		n, err := io.ReadFull(s, buf)
+		_ = ds.SetReadDeadline(time.Time{})
+		if err != nil {
+			return err
+		}
+		if n != len(buf) {
+			return fmt.Errorf("short read: got %d want %d", n, len(buf))
+		}
+		return nil
+	}
+
 	type readResult struct {
 		n   int
 		err error
@@ -143,16 +167,43 @@ func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath stri
 			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
 		}
 		return nil
-	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(os.Stderr, "receiver read timeout after 10m: file=%s phase=%s\n", relPath, phase)
+	case <-time.After(streamIOTimeout):
+		fmt.Fprintf(os.Stderr, "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
-		return fmt.Errorf("receiver read timeout after 10m")
+		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
 func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
+	if ds, ok := s.(streamDeadlineSetter); ok {
+		deadline := time.Now().Add(streamIOTimeout)
+		if dl, has := ctx.Deadline(); has && dl.Before(deadline) {
+			deadline = dl
+		}
+		_ = ds.SetWriteDeadline(deadline)
+		written := 0
+		for written < len(buf) {
+			n, err := s.Write(buf[written:])
+			if n > 0 {
+				written += n
+			}
+			if err != nil {
+				_ = ds.SetWriteDeadline(time.Time{})
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				_ = ds.SetWriteDeadline(time.Time{})
+				return ctx.Err()
+			default:
+			}
+		}
+		_ = ds.SetWriteDeadline(time.Time{})
+		return nil
+	}
+
 	type writeResult struct {
 		n   int
 		err error
@@ -171,10 +222,10 @@ func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath str
 			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
 		}
 		return nil
-	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(os.Stderr, "sender write timeout after 10m: file=%s phase=%s\n", relPath, phase)
+	case <-time.After(streamIOTimeout):
+		fmt.Fprintf(os.Stderr, "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
-		return fmt.Errorf("sender write timeout after 10m")
+		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -466,22 +517,13 @@ sendLoop:
 			chunkCRC := chunk.crc
 			fileCRC.Write(chunk.buf[:chunk.n])
 
-			// Write chunk_index (uint32, big endian)
-			if err := writeUint32WithTimeout(ctx, s, nextToSend, relPath, "chunk-index"); err != nil {
+			var header [12]byte
+			binary.BigEndian.PutUint32(header[0:4], nextToSend)
+			binary.BigEndian.PutUint32(header[4:8], uint32(chunk.n))
+			binary.BigEndian.PutUint32(header[8:12], chunkCRC)
+			if err := writeFullWithTimeout(ctx, s, header[:], relPath, "chunk-header"); err != nil {
 				bufPool.Put(chunk.buf)
-				return 0, fmt.Errorf("failed to write chunk index: %w", err)
-			}
-
-			// Write chunk_len (uint32, big endian)
-			if err := writeUint32WithTimeout(ctx, s, uint32(chunk.n), relPath, "chunk-length"); err != nil {
-				bufPool.Put(chunk.buf)
-				return 0, fmt.Errorf("failed to write chunk length: %w", err)
-			}
-
-			// Write chunk_crc32 (uint32, big endian)
-			if err := writeUint32WithTimeout(ctx, s, chunkCRC, relPath, "chunk-crc32"); err != nil {
-				bufPool.Put(chunk.buf)
-				return 0, fmt.Errorf("failed to write chunk crc32: %w", err)
+				return 0, fmt.Errorf("failed to write chunk header: %w", err)
 			}
 
 			// Write chunk bytes
@@ -570,8 +612,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	go func() {
 		defer close(chunkChan)
 		header := make([]byte, 4)
-		lenBuf := make([]byte, 4)
-		crcBuf := make([]byte, 4)
+		metaBuf := make([]byte, 8)
 		for {
 			select {
 			case <-readerCtx.Done():
@@ -590,20 +631,16 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				sendReadErr(fmt.Errorf("chunk index %d out of range", chunkIndex))
 				return
 			}
-			if err := readFullWithTimeout(readerCtx, s, lenBuf, relPath, "length"); err != nil {
-				sendReadErr(fmt.Errorf("failed to read chunk length: %w", err))
+			if err := readFullWithTimeout(readerCtx, s, metaBuf, relPath, "chunk-meta"); err != nil {
+				sendReadErr(fmt.Errorf("failed to read chunk meta: %w", err))
 				return
 			}
-			chunkLen := binary.BigEndian.Uint32(lenBuf)
+			chunkLen := binary.BigEndian.Uint32(metaBuf[0:4])
 			if chunkLen > chunkSize {
 				sendReadErr(fmt.Errorf("chunk length %d exceeds chunk size %d", chunkLen, chunkSize))
 				return
 			}
-			if err := readFullWithTimeout(readerCtx, s, crcBuf, relPath, "crc32"); err != nil {
-				sendReadErr(fmt.Errorf("failed to read chunk crc32: %w", err))
-				return
-			}
-			chunkCRC := binary.BigEndian.Uint32(crcBuf)
+			chunkCRC := binary.BigEndian.Uint32(metaBuf[4:8])
 			buf := bufPool.Get()
 			if int(chunkLen) > len(buf) {
 				bufPool.Put(buf)

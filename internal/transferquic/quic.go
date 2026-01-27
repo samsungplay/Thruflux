@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
@@ -301,4 +302,37 @@ func (s *QUICStream) Close() error {
 	}
 
 	return nil
+}
+
+// SetReadDeadline sets the read deadline on the underlying QUIC stream.
+func (s *QUICStream) SetReadDeadline(t time.Time) error {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
+		return fmt.Errorf("quic stream not available")
+	}
+	return stream.SetReadDeadline(t)
+}
+
+// SetWriteDeadline sets the write deadline on the underlying QUIC stream.
+func (s *QUICStream) SetWriteDeadline(t time.Time) error {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
+		return fmt.Errorf("quic stream not available")
+	}
+	return stream.SetWriteDeadline(t)
+}
+
+// SetDeadline sets both read and write deadlines on the underlying QUIC stream.
+func (s *QUICStream) SetDeadline(t time.Time) error {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
+		return fmt.Errorf("quic stream not available")
+	}
+	return stream.SetDeadline(t)
 }
