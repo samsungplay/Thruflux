@@ -509,14 +509,22 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	authCancel()
 
+	var lastProgress int64
+	var lastStats int64
 	opts := transfer.Options{
 		Resume:    true,
 		NoRootDir: true,
 		HashAlg:   "crc32c",
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
+			if !shouldUpdateProgress(&lastProgress) {
+				return
+			}
 			progressState.Update(relpath, bytesReceived, total)
 		},
 		TransferStatsFn: func(activeFiles, completedFiles int, remainingBytes int64) {
+			if !shouldUpdateProgress(&lastStats) {
+				return
+			}
 			progressState.UpdateStats(activeFiles, completedFiles)
 		},
 		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {

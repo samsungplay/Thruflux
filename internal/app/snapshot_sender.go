@@ -126,6 +126,48 @@ type transferSlot struct {
 	closeFn func()
 }
 
+func startScanStatus() func(error) {
+	if !progress.IsTTY(os.Stdout) && !progress.IsTTY(os.Stderr) {
+		fmt.Fprintln(os.Stderr, "Scanning files...")
+		return func(err error) {
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Scan failed.")
+				return
+			}
+			fmt.Fprintln(os.Stderr, "Scan complete.")
+		}
+	}
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		spinner := []rune{'|', '/', '-', '\\'}
+		idx := 0
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(start).Truncate(100 * time.Millisecond)
+				fmt.Fprintf(os.Stderr, "\rScanning files... %c %s", spinner[idx%len(spinner)], elapsed)
+				idx++
+			}
+		}
+	}()
+
+	return func(err error) {
+		close(done)
+		elapsed := time.Since(start).Truncate(100 * time.Millisecond)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\rScan failed after %s.\n", elapsed)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "\rScan complete in %s.\n", elapsed)
+	}
+}
+
 // RunSnapshotSender runs the snapshot sender flow.
 func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSenderConfig) error {
 	if logger == nil {
@@ -156,7 +198,9 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.QuicMaxIncomingStreams = 100
 	}
 
+	stopScan := startScanStatus()
 	m, err := manifest.ScanPaths(cfg.Paths)
+	stopScan(err)
 	if err != nil {
 		return fmt.Errorf("failed to scan paths: %w", err)
 	}
@@ -658,6 +702,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	authCancel()
 
 	opts := s.transferOptions()
+	var lastProgress int64
+	var lastStats int64
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {
 			return
@@ -670,9 +716,15 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		s.addSenderSkipped(progressState, relpath, skippedBytes, verifyBytes)
 	}
 	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
+		if !shouldUpdateProgress(&lastProgress) {
+			return
+		}
 		s.updateSenderProgress(progressState, relpath, bytesSent)
 	}
 	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
+		if !shouldUpdateProgress(&lastStats) {
+			return
+		}
 		s.updateSenderStats(progressState, completedFiles)
 	}
 	opts.FileDoneFn = func(relpath string, ok bool) {

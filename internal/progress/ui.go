@@ -50,10 +50,10 @@ type SenderView struct {
 }
 
 const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorGreen  = "\033[32m"
-	colorCyan   = "\033[36m"
+	colorReset = "\033[0m"
+	colorRed   = "\033[31m"
+	colorGreen = "\033[32m"
+	colorCyan  = "\033[36m"
 )
 
 func colorize(s string, color string, enabled bool) string {
@@ -76,7 +76,7 @@ func IsTTY(w io.Writer) bool {
 }
 
 func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) func() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
 	lastLines := 0
