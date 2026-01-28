@@ -53,6 +53,35 @@ type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verif
 // FileDoneFn reports file completion (ok=false on failure).
 type FileDoneFn func(relpath string, ok bool)
 
+const resumeHashUnknown = ^uint64(0)
+
+const defaultResumeHashTimeout = 2 * time.Second
+
+type resumeHashResult struct {
+	hash uint64
+	err  error
+}
+
+func hashFileChunkWithTimeout(filePath string, chunkIndex uint32, chunkSize uint32, fileSize int64, alg byte, timeout time.Duration) (uint64, bool, error) {
+	if alg == HashAlgNone {
+		return 0, false, nil
+	}
+	if timeout <= 0 {
+		timeout = defaultResumeHashTimeout
+	}
+	resultCh := make(chan resumeHashResult, 1)
+	go func() {
+		hash, err := hashFileChunk(filePath, chunkIndex, chunkSize, fileSize, alg)
+		resultCh <- resumeHashResult{hash: hash, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.hash, true, result.err
+	case <-time.After(timeout):
+		return resumeHashUnknown, false, nil
+	}
+}
+
 func sidecarIdentifier(item manifest.FileItem) string {
 	if item.ID != "" {
 		return item.ID
@@ -892,7 +921,8 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				if verifyMode == "all" {
 					verifyMode = "last"
 				}
-				verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone
+				hashUnknown := info.LastVerifiedHash == resumeHashUnknown
+				verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone && !hashUnknown
 
 				allComplete := totalChunks > 0 && completedChunks >= totalChunks
 				if !allComplete {
@@ -908,6 +938,19 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 
 				if forceSendFrom > totalChunks {
 					forceSendFrom = totalChunks
+				}
+				if hashUnknown && totalChunks > 0 {
+					tail := resumeVerifyTail
+					if tail == 0 {
+						tail = 1
+					}
+					minForce := uint32(0)
+					if totalChunks > tail {
+						minForce = totalChunks - tail
+					}
+					if forceSendFrom > minForce {
+						forceSendFrom = minForce
+					}
 				}
 
 				plan = &resumePlan{
@@ -1470,13 +1513,17 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		if highest, ok := sidecar.HighestComplete(); ok {
 			info.LastVerifiedChunk = uint32(highest)
 			if begin.HashAlg != HashAlgNone {
-				hashValue, err := hashFileChunk(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg)
+				hashValue, ok, err := hashFileChunkWithTimeout(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg, defaultResumeHashTimeout)
 				if err != nil {
 					return nil, nil, err
 				}
-				info.LastVerifiedHash = hashValue
-				state.verifiedChunk = info.LastVerifiedChunk
-				state.hasVerified = true
+				if ok {
+					info.LastVerifiedHash = hashValue
+					state.verifiedChunk = info.LastVerifiedChunk
+					state.hasVerified = true
+				} else {
+					info.LastVerifiedHash = resumeHashUnknown
+				}
 			}
 		} else {
 			info.LastVerifiedChunk = totalChunks
@@ -2119,11 +2166,15 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if highest, ok := state.sidecar.HighestComplete(); ok {
 			info.LastVerifiedChunk = uint32(highest)
 			if state.hashAlg != HashAlgNone {
-				hashValue, err := hashFileChunk(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg)
+				hashValue, ok, err := hashFileChunkWithTimeout(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg, defaultResumeHashTimeout)
 				if err != nil {
 					return nil, err
 				}
-				info.LastVerifiedHash = hashValue
+				if ok {
+					info.LastVerifiedHash = hashValue
+				} else {
+					info.LastVerifiedHash = resumeHashUnknown
+				}
 			}
 		} else {
 			info.LastVerifiedChunk = state.totalChunks
