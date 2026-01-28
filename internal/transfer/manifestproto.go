@@ -684,7 +684,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 
 	// Async write pipeline
-	const maxConcurrentWrites = 64
+	const maxConcurrentWrites = 1
 	writeSem := make(chan struct{}, maxConcurrentWrites)
 	writeErrChan := make(chan error, 1)
 	var writeWg sync.WaitGroup
