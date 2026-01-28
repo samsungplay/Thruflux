@@ -11,7 +11,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 )
 
-const dumbCopyBufferSize = 1024 * 1024
+const dumbCopyBufferSize = 8 * 1024 * 1024
 
 func sendDumbFile(ctx context.Context, conn transfer.Conn, filePath string) error {
 	file, err := os.Open(filePath)
