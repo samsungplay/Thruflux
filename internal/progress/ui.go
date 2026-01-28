@@ -28,6 +28,7 @@ type ReceiverView struct {
 	FileTotalBytes int64
 	Route          string
 	Probes         map[string]string
+	ResumeLine     string
 }
 
 type SenderRow struct {
@@ -124,6 +125,10 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
 			lines++
+			if v.ResumeLine != "" {
+				fmt.Fprintf(w, "%s\n", colorize(v.ResumeLine, colorCyan, isTTY))
+				lines++
+			}
 			if v.Benchmark {
 				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
 				lines++

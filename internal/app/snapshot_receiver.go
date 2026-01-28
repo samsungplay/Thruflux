@@ -686,7 +686,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.UpdateStats(activeFiles, completedFiles)
 		},
 		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
-			progressState.RecordResume(relpath, skippedChunks, totalChunks, totalBytes, chunkSize)
+			progressState.RecordResume(relpath, skippedChunks, totalChunks, verifiedChunk, totalBytes, chunkSize)
 		},
 		FileDoneFn: func(relpath string, ok bool) {
 			progressState.MarkVerified(relpath, ok)
@@ -890,6 +890,7 @@ type receiverProgress struct {
 	route            string
 	iceStage         string
 	transportLines   []string
+	resumeLine       string
 	benchmark        bool
 	bench            *bench.Bench
 	benchSnap        bench.Snapshot
@@ -1033,12 +1034,13 @@ func (p *receiverProgress) FreezeBench(now time.Time) {
 	p.mu.Unlock()
 }
 
-func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChunks uint32, totalBytes int64, chunkSize uint32) {
+func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 	if relpath == "" {
 		return
 	}
 	p.mu.Lock()
 	p.currentFile = relpath
+	p.resumeLine = fmt.Sprintf("resume: file=%s skipped=%d/%d verify=%d", relpath, skippedChunks, totalChunks, verifiedChunk)
 	if p.appliedSkip[relpath] {
 		p.mu.Unlock()
 		return
@@ -1160,6 +1162,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	snapshotID := p.snapshotID
 	outDir := p.outDir
 	resumedFiles := p.resumedFiles
+	resumeLine := p.resumeLine
 	probes := make(map[string]string)
 	for k, v := range p.probes {
 		probes[k] = v.String()
@@ -1179,6 +1182,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		FileTotal:      total,
 		Route:          route,
 		Probes:         probes,
+		ResumeLine:     resumeLine,
 	}
 }
 
