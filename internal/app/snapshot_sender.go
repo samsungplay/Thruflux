@@ -8,10 +8,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +42,31 @@ const (
 	ReceiverStatusDone         = "DONE"
 	ReceiverStatusFailed       = "FAILED"
 )
+
+func copyJoinCodeToClipboard(joinCode string) bool {
+	switch runtime.GOOS {
+	case "darwin":
+		return runClipboardCmd(joinCode, "pbcopy")
+	case "windows":
+		return runClipboardCmd(joinCode, "cmd", "/c", "clip")
+	default:
+		if runClipboardCmd(joinCode, "wl-copy") {
+			return true
+		}
+		if runClipboardCmd(joinCode, "xclip", "-selection", "clipboard") {
+			return true
+		}
+		return runClipboardCmd(joinCode, "xsel", "--clipboard", "--input")
+	}
+}
+
+func runClipboardCmd(payload string, name string, args ...string) bool {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(payload)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
 
 // ReceiverState tracks the state of a receiver peer.
 type ReceiverState struct {
@@ -282,7 +310,11 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 
-	fmt.Printf("\n=== Join Code: %s ===\n\n", joinCode)
+	fmt.Printf("\n=== Join Code: %s ===\n", joinCode)
+	if copyJoinCodeToClipboard(joinCode) {
+		fmt.Fprintln(os.Stdout, "Join code copied to clipboard.")
+	}
+	fmt.Printf("Receivers should run: thru join %s --out <dir>\n\n", joinCode)
 	if len(cfg.Paths) > 0 {
 		fmt.Fprintln(os.Stdout, "Sharing the following paths:")
 		for _, path := range cfg.Paths {
@@ -386,9 +418,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 			s.logger.Error("failed to decode turn_credentials", "error", err)
 			return
 		}
-		if s.setTurnServersIfEmpty(creds.Servers) && len(creds.ExpiresAt) > 0 {
-			s.logger.Info("received TURN credentials", "expires_at", creds.ExpiresAt, "servers", len(creds.Servers))
-		}
+		_ = s.setTurnServersIfEmpty(creds.Servers)
 
 	case protocol.TypePeerJoined:
 		var peerJoined protocol.PeerJoined

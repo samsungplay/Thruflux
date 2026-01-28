@@ -169,7 +169,6 @@ func printShareSummary(paths []string) {
 		}
 		fmt.Printf("  - %s\n", path)
 	}
-	fmt.Println("Receivers should run: thru join <join-code> --out <dir>")
 }
 
 func printBanner() {

@@ -508,7 +508,6 @@ func (p *Prober) resolvePublicAddr() error {
 				if _, ok := seen[key]; !ok {
 					seen[key] = struct{}{}
 					p.publicAddrs = append(p.publicAddrs, mapped)
-					p.logger.Info("public address resolved", "addr", mapped)
 					resolved = true
 				}
 			}
@@ -522,13 +521,13 @@ func (p *Prober) resolvePublicAddr() error {
 }
 
 type turnServerConfig struct {
-	addr       string
-	username   string
-	password   string
-	realm      string
-	useTCP     bool
-	useTLS     bool
-	serverName string
+	addr        string
+	username    string
+	password    string
+	realm       string
+	useTCP      bool
+	useTLS      bool
+	serverName  string
 	insecureTLS bool
 }
 
@@ -694,13 +693,13 @@ func parseTurnServer(raw string) (turnServerConfig, error) {
 	}
 
 	return turnServerConfig{
-		addr:       host,
-		username:   username,
-		password:   password,
-		realm:      u.Query().Get("realm"),
-		useTCP:     useTCP,
-		useTLS:     useTLS,
-		serverName: serverName,
+		addr:        host,
+		username:    username,
+		password:    password,
+		realm:       u.Query().Get("realm"),
+		useTCP:      useTCP,
+		useTLS:      useTLS,
+		serverName:  serverName,
 		insecureTLS: insecureTLS,
 	}, nil
 }

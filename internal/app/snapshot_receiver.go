@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -117,6 +119,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		stunServers:            cfg.StunServers,
 		turnServers:            cfg.TurnServers,
 		turnOnly:               cfg.TurnOnly,
+		resumeEnabled:          true,
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
@@ -163,6 +166,8 @@ type snapshotReceiver struct {
 	turnOnly               bool
 	turnMu                 sync.RWMutex
 	verbose                bool
+	resumeEnabled          bool
+	manifestPrompted       bool
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -191,9 +196,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			r.logger.Error("failed to decode turn_credentials", "error", err)
 			return
 		}
-		if r.setTurnServersIfEmpty(creds.Servers) && len(creds.ExpiresAt) > 0 {
-			r.logger.Info("received TURN credentials", "expires_at", creds.ExpiresAt, "servers", len(creds.Servers))
-		}
+		_ = r.setTurnServersIfEmpty(creds.Servers)
 	case protocol.TypeManifestOffer:
 		var offer protocol.ManifestOffer
 		if err := env.DecodePayload(&offer); err != nil {
@@ -204,6 +207,33 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		r.totalBytes = offer.Summary.TotalBytes
 		r.fileTotal = offer.Summary.FileCount
 		r.senderID = env.From
+		if !r.manifestPrompted {
+			r.manifestPrompted = true
+			printIncomingSummary(offer.Summary)
+			reader := bufio.NewReader(os.Stdin)
+			accepted, err := promptAccept(reader)
+			if err != nil {
+				r.logger.Error("failed to read acceptance", "error", err)
+				os.Exit(1)
+			}
+			if !accepted {
+				fmt.Fprintln(os.Stderr, "Transfer declined.")
+				os.Exit(1)
+			}
+			if hasResumeData(r.outDir, offer.Summary.RootName) {
+				resume, err := promptResumeOrOverwrite(reader)
+				if err != nil {
+					r.logger.Error("failed to read resume choice", "error", err)
+					os.Exit(1)
+				}
+				if !resume {
+					r.resumeEnabled = false
+					if err := clearResumeData(r.outDir, offer.Summary.RootName); err != nil && r.verbose {
+						fmt.Fprintf(os.Stderr, "Failed to clear resume data: %v\n", err)
+					}
+				}
+			}
+		}
 		r.sendAccept(offer.Summary.ManifestID)
 	case protocol.TypePeerLeft:
 		var peerLeft protocol.PeerLeft
@@ -689,7 +719,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer progressStop()
 
 	opts := transfer.Options{
-		Resume:        true,
+		Resume:        r.resumeEnabled,
 		NoRootDir:     true,
 		HashAlg:       "crc32c",
 		ParallelFiles: totalStreams,
@@ -750,6 +780,93 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	progressState.ForceComplete()
 	exitWith(0)
+}
+
+func printIncomingSummary(summary protocol.ManifestSummary) {
+	root := summary.RootName
+	if strings.TrimSpace(root) == "" {
+		root = "(root)"
+	}
+	fmt.Printf("Incoming transfer: %s (%d files, %d folders, %s)\n", root, summary.FileCount, summary.FolderCount, formatBytes(summary.TotalBytes))
+}
+
+func promptAccept(reader *bufio.Reader) (bool, error) {
+	for {
+		fmt.Print("Accept transfer? [y/N]: ")
+		line, err := readLine(reader)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(line) {
+		case "":
+			return false, nil
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+	}
+}
+
+func promptResumeOrOverwrite(reader *bufio.Reader) (bool, error) {
+	for {
+		fmt.Print("Resume existing data? [Y]es / [O]verwrite: ")
+		line, err := readLine(reader)
+		if err != nil {
+			return true, err
+		}
+		switch strings.ToLower(line) {
+		case "", "y", "yes", "r", "resume":
+			return true, nil
+		case "n", "no", "o", "overwrite":
+			return false, nil
+		}
+	}
+}
+
+func readLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func hasResumeData(outDir, root string) bool {
+	sidecarDir := filepath.Dir(transfer.SidecarPath(outDir, root, "probe"))
+	entries, err := os.ReadDir(sidecarDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".sbxmap") {
+			return true
+		}
+	}
+	return false
+}
+
+func clearResumeData(outDir, root string) error {
+	sidecarDir := filepath.Dir(transfer.SidecarPath(outDir, root, "probe"))
+	return os.RemoveAll(sidecarDir)
+}
+
+func formatBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	value := float64(n)
+	exp := 0
+	for value >= unit && exp < 5 {
+		value /= unit
+		exp++
+	}
+	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
+	return fmt.Sprintf("%.2f %s", value, suffixes[exp-1])
 }
 
 func (r *snapshotReceiver) runDumbTCPTransfer(ctx context.Context, progressState *receiverProgress, lastProgress *int64) error {
