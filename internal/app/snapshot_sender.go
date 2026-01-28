@@ -3,8 +3,8 @@ package app
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,10 +42,12 @@ const (
 
 // ReceiverState tracks the state of a receiver peer.
 type ReceiverState struct {
-	PeerID   string
-	JoinedAt time.Time
-	LastSeen time.Time
-	Status   string
+	PeerID              string
+	JoinedAt            time.Time
+	LastSeen            time.Time
+	Status              string
+	ParallelConnections int
+	ParallelStreams     int
 }
 
 // SnapshotSenderConfig configures the snapshot sender.
@@ -61,6 +63,7 @@ type SnapshotSenderConfig struct {
 	DumbName               string
 	DumbTCP                bool
 	DumbConnections        int
+	ParallelConnections    int
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -73,19 +76,20 @@ type SnapshotSenderConfig struct {
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
 type SnapshotSender struct {
-	logger       *slog.Logger
-	serverURL    string
-	paths        []string
-	maxRecv      int
-	receiverTTL  time.Duration
-	transferOpts transfer.Options
-	transferFn   func(context.Context, string) error
+	logger        *slog.Logger
+	serverURL     string
+	paths         []string
+	maxRecv       int
+	receiverTTL   time.Duration
+	transferOpts  transfer.Options
+	transferFn    func(context.Context, string) error
 	dumb          bool
 	dumbPath      string
 	dumbSizeBytes int64
 	dumbName      string
 	dumbTCP       bool
 	dumbConns     int
+	parallelConns int
 
 	peerID     string
 	sessionID  string
@@ -129,8 +133,9 @@ type SnapshotSender struct {
 }
 
 type perfParams struct {
-	ChunkSize     int
-	ParallelFiles int
+	ChunkSize           int
+	ParallelStreams     int
+	ParallelConnections int
 }
 
 type transferSlot struct {
@@ -197,6 +202,9 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 	if cfg.DumbConnections < 1 {
 		cfg.DumbConnections = 1
+	}
+	if cfg.ParallelConnections < 1 {
+		cfg.ParallelConnections = 4
 	}
 	if cfg.UDPReadBufferBytes <= 0 {
 		cfg.UDPReadBufferBytes = 8 * 1024 * 1024
@@ -284,19 +292,25 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 
 	s := &SnapshotSender{
-		logger:                 logger,
-		serverURL:              cfg.ServerURL,
-		paths:                  cfg.Paths,
-		maxRecv:                cfg.MaxReceivers,
-		receiverTTL:            cfg.ReceiverTTL,
-		transferOpts:           cfg.TransferOpts,
-		benchmark:              cfg.Benchmark,
-		dumb:                   cfg.Dumb,
-		dumbPath:               func() string { if len(cfg.Paths) > 0 { return cfg.Paths[0] }; return "" }(),
+		logger:       logger,
+		serverURL:    cfg.ServerURL,
+		paths:        cfg.Paths,
+		maxRecv:      cfg.MaxReceivers,
+		receiverTTL:  cfg.ReceiverTTL,
+		transferOpts: cfg.TransferOpts,
+		benchmark:    cfg.Benchmark,
+		dumb:         cfg.Dumb,
+		dumbPath: func() string {
+			if len(cfg.Paths) > 0 {
+				return cfg.Paths[0]
+			}
+			return ""
+		}(),
 		dumbSizeBytes:          cfg.DumbSizeBytes,
 		dumbName:               cfg.DumbName,
 		dumbTCP:                cfg.DumbTCP,
 		dumbConns:              cfg.DumbConnections,
+		parallelConns:          cfg.ParallelConnections,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -384,7 +398,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 			s.logger.Error("failed to decode manifest_accept", "error", err)
 			return
 		}
-		s.handleManifestAccept(env.From)
+		s.handleManifestAccept(env.From, accept)
 		s.maybeStartTransfers(ctx)
 
 	case protocol.TypePeerLeft:
@@ -418,7 +432,7 @@ func (s *SnapshotSender) handlePeerJoined(peerID string) {
 	s.emitChange()
 }
 
-func (s *SnapshotSender) handleManifestAccept(peerID string) {
+func (s *SnapshotSender) handleManifestAccept(peerID string, accept protocol.ManifestAccept) {
 	now := s.now()
 	var queuedMsgs []queuedUpdate
 	s.mu.Lock()
@@ -431,6 +445,12 @@ func (s *SnapshotSender) handleManifestAccept(peerID string) {
 		s.receivers[peerID] = state
 	}
 	state.LastSeen = now
+	if accept.ParallelConnections > 0 {
+		state.ParallelConnections = accept.ParallelConnections
+	}
+	if accept.ParallelStreams > 0 {
+		state.ParallelStreams = accept.ParallelStreams
+	}
 	if state.Status == ReceiverStatusTransferring {
 		s.mu.Unlock()
 		return
@@ -474,6 +494,33 @@ func (s *SnapshotSender) handlePeerLeft(peerID string) {
 	s.emitChange()
 	s.sendQueuedUpdates(queuedMsgs)
 	s.maybeStartTransfers(context.Background())
+}
+
+func (s *SnapshotSender) receiverParallelCaps(peerID string) (int, int) {
+	if peerID == "" {
+		return 0, 0
+	}
+	s.mu.Lock()
+	state := s.receivers[peerID]
+	s.mu.Unlock()
+	if state == nil {
+		return 0, 0
+	}
+	return state.ParallelConnections, state.ParallelStreams
+}
+
+func (s *SnapshotSender) effectiveParallelConnections(peerID string) int {
+	conns := s.parallelConns
+	if conns < 1 {
+		conns = 1
+	}
+	if recvConns, _ := s.receiverParallelCaps(peerID); recvConns > 0 && recvConns < conns {
+		conns = recvConns
+	}
+	if conns < 1 {
+		conns = 1
+	}
+	return conns
 }
 
 func (s *SnapshotSender) setTurnServersIfEmpty(servers []string) bool {
@@ -781,7 +828,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		if err != nil {
 			return err
 		}
-		extra, err := s.dialExtraDumbConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
+		extra, err := s.dialExtraConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
 		if err != nil {
 			return err
 		}
@@ -799,9 +846,59 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return nil
 	}
 
-	opts := s.transferOptions()
+	targetConns := s.effectiveParallelConnections(peerID)
+	conns := []transfer.Conn{transferConn}
+	var extra []dumbExtraConn
+	if targetConns > 1 {
+		remoteAddr, err := resolveUDPAddr(quicConn.RemoteAddr())
+		if err != nil {
+			return err
+		}
+		dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
+		extra, err = s.dialExtraConns(dialCtx, peerID, remoteAddr, tlsConf, quicCfg, targetConns-1)
+		dialCancel()
+		if err != nil {
+			s.logger.Warn("failed to establish extra connections", "error", err)
+		}
+		for _, c := range extra {
+			conns = append(conns, c.conn)
+		}
+	}
+	if len(conns) == 0 {
+		return fmt.Errorf("no transfer connections available")
+	}
+	defer func() {
+		for _, c := range extra {
+			c.close()
+		}
+	}()
+
+	requestedStreams := s.transferOpts.ParallelFiles
+	if _, recvStreams := s.receiverParallelCaps(peerID); recvStreams > 0 && (requestedStreams == 0 || recvStreams < requestedStreams) {
+		requestedStreams = recvStreams
+	}
+	totalStreams, _ := computeParallelBudget(s.manifest.FileCount, requestedStreams, len(conns), len(conns) > 1)
+	s.setParams(perfParams{
+		ChunkSize:           int(s.transferOpts.ChunkSize),
+		ParallelStreams:     totalStreams,
+		ParallelConnections: len(conns),
+	})
+	s.setTuneLine(fmt.Sprintf("Params: %s", formatTuneParams(s.getParams())))
+
 	var lastProgress int64
 	var lastStats int64
+	transferCtx, transferCancel := context.WithCancel(ctx)
+	defer transferCancel()
+
+	opts := s.transferOptions()
+	opts.ParallelFiles = totalStreams
+	opts.StripeMax = len(conns)
+	opts.ParamSource = func() transfer.RuntimeParams {
+		return transfer.RuntimeParams{
+			ChunkSize:     s.transferOpts.ChunkSize,
+			ParallelFiles: totalStreams,
+		}
+	}
 	opts.ResumeStatsFn = func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 		if skippedChunks == 0 || totalChunks == 0 {
 			return
@@ -828,10 +925,20 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	opts.FileDoneFn = func(relpath string, ok bool) {
 		s.markSenderVerified(progressState, relpath, ok)
 	}
-	if err := transfer.SendManifestMultiStream(ctx, transferConn, ".", s.manifest, opts); err != nil {
-		return err
+
+	var multiTransferConn transfer.Conn = conns[0]
+	if len(conns) > 1 {
+		multi, err := transfer.NewMultiConn(conns)
+		if err != nil {
+			return err
+		}
+		defer multi.Close()
+		multiTransferConn = multi
 	}
 
+	if err := transfer.SendManifestMultiStream(transferCtx, multiTransferConn, ".", s.manifest, opts); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -895,7 +1002,7 @@ func listenUDPForRemote(remote *net.UDPAddr) (*net.UDPConn, error) {
 	return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0, Zone: remote.Zone})
 }
 
-func (s *SnapshotSender) dialExtraDumbConns(ctx context.Context, peerID string, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
+func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
 	if extra <= 0 {
 		return nil, nil
 	}
@@ -904,23 +1011,27 @@ func (s *SnapshotSender) dialExtraDumbConns(ctx context.Context, peerID string, 
 	}
 
 	conns := make([]dumbExtraConn, 0, extra)
+	var lastErr error
 	for i := 0; i < extra; i++ {
 		udpConn, err := listenUDPForRemote(remote)
 		if err != nil {
-			return conns, err
+			lastErr = err
+			continue
 		}
 		_ = transport.ApplyUDPBeyondBestEffort(udpConn, s.udpReadBufferBytes, s.udpWriteBufferBytes)
 		tr := &quic.Transport{Conn: udpConn}
 		quicConn, err := tr.Dial(ctx, remote, tlsConf, quicCfg)
 		if err != nil {
 			udpConn.Close()
-			return conns, err
+			lastErr = err
+			continue
 		}
 		tconn, err := transferquic.NewDialer(quicConn, s.logger).Dial(ctx, peerID)
 		if err != nil {
 			quicConn.CloseWithError(0, "dial_failed")
 			udpConn.Close()
-			return conns, err
+			lastErr = err
+			continue
 		}
 		authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
 		if err := authenticateTransport(authCtx, tconn, s.joinCode, authRoleSender); err != nil {
@@ -928,7 +1039,8 @@ func (s *SnapshotSender) dialExtraDumbConns(ctx context.Context, peerID string, 
 			tconn.Close()
 			quicConn.CloseWithError(0, "auth_failed")
 			udpConn.Close()
-			return conns, err
+			lastErr = err
+			continue
 		}
 		authCancel()
 		conn := tconn
@@ -943,7 +1055,10 @@ func (s *SnapshotSender) dialExtraDumbConns(ctx context.Context, peerID string, 
 			},
 		})
 	}
-	return conns, nil
+	if len(conns) == 0 && lastErr != nil {
+		return conns, lastErr
+	}
+	return conns, lastErr
 }
 
 func (s *SnapshotSender) runDumbTCPTransfer(ctx context.Context, peerID string) error {
@@ -1014,10 +1129,11 @@ func (s *SnapshotSender) sendTransferStart(peerID string) {
 		return
 	}
 	start := protocol.TransferStart{
-		ManifestID:     s.manifestID,
-		SenderPeerID:   s.peerID,
-		ReceiverPeerID: peerID,
-		TransferID:     randomTransferID(),
+		ManifestID:          s.manifestID,
+		SenderPeerID:        s.peerID,
+		ReceiverPeerID:      peerID,
+		TransferID:          randomTransferID(),
+		ParallelConnections: s.effectiveParallelConnections(peerID),
 	}
 	env, err := protocol.NewEnvelope(protocol.TypeTransferStart, protocol.NewMsgID(), start)
 	if err != nil {
@@ -1249,8 +1365,9 @@ func (s *SnapshotSender) initParams() {
 	}, s.transferOpts)
 	s.paramsMu.Lock()
 	s.params = perfParams{
-		ChunkSize:     int(runtime.ChunkSize),
-		ParallelFiles: runtime.ParallelFiles,
+		ChunkSize:           int(runtime.ChunkSize),
+		ParallelStreams:     runtime.ParallelFiles,
+		ParallelConnections: s.parallelConns,
 	}
 	s.paramsMu.Unlock()
 	s.setTuneLine(fmt.Sprintf("Params: %s", formatTuneParams(s.getParams())))
@@ -1285,7 +1402,7 @@ func (s *SnapshotSender) runtimeParams() transfer.RuntimeParams {
 	s.paramsMu.RUnlock()
 	return transfer.RuntimeParams{
 		ChunkSize:     uint32(params.ChunkSize),
-		ParallelFiles: params.ParallelFiles,
+		ParallelFiles: params.ParallelStreams,
 	}
 }
 
@@ -1598,9 +1715,10 @@ func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 // Auto-tuning removed; parameters are heuristic-driven.
 
 func formatTuneParams(p perfParams) string {
-	return fmt.Sprintf("Performance: chunk_size=%s parallel_files=%d",
+	return fmt.Sprintf("Performance: chunk_size=%s parallel_streams=%d parallel_connections=%d",
 		formatMiB(p.ChunkSize),
-		p.ParallelFiles,
+		p.ParallelStreams,
+		p.ParallelConnections,
 	)
 }
 

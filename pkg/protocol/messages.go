@@ -100,17 +100,20 @@ type ManifestOffer struct {
 
 // ManifestAccept accepts a manifest offer.
 type ManifestAccept struct {
-	ManifestID    string   `json:"manifest_id"`
-	Mode          string   `json:"mode"`
-	SelectedPaths []string `json:"selected_paths,omitempty"`
+	ManifestID          string   `json:"manifest_id"`
+	Mode                string   `json:"mode"`
+	SelectedPaths       []string `json:"selected_paths,omitempty"`
+	ParallelConnections int      `json:"parallel_connections,omitempty"`
+	ParallelStreams     int      `json:"parallel_streams,omitempty"`
 }
 
 // TransferStart signals a receiver to begin ICE/QUIC for a snapshot transfer.
 type TransferStart struct {
-	ManifestID     string `json:"manifest_id"`
-	SenderPeerID   string `json:"sender_peer_id"`
-	ReceiverPeerID string `json:"receiver_peer_id"`
-	TransferID     string `json:"transfer_id"`
+	ManifestID          string `json:"manifest_id"`
+	SenderPeerID        string `json:"sender_peer_id"`
+	ReceiverPeerID      string `json:"receiver_peer_id"`
+	TransferID          string `json:"transfer_id"`
+	ParallelConnections int    `json:"parallel_connections,omitempty"`
 }
 
 // TransferQueued indicates a receiver is queued for a transfer slot.

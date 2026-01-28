@@ -365,7 +365,7 @@ type resumeState struct {
 
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
-func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, resume *resumePlan) (uint32, error) {
+func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, resume *resumePlan, startChunk uint32, chunkCount uint32) (uint32, error) {
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -382,6 +382,18 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	if resume != nil {
 		resume.totalChunks = totalChunks
 	}
+	if totalChunks > 0 && startChunk >= totalChunks {
+		return 0, fmt.Errorf("stripe start chunk %d out of range", startChunk)
+	}
+	endChunk := totalChunks
+	if chunkCount > 0 {
+		end := startChunk + chunkCount
+		if end > totalChunks {
+			end = totalChunks
+		}
+		endChunk = end
+	}
+	fullFile := startChunk == 0 && endChunk == totalChunks
 
 	fileCRC := crc32.New(crc32cTable)
 
@@ -414,10 +426,14 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		defer close(chunkChan)
 		defer readAheadCancel()
 
-		var nextToRead uint32
-		fileOffset := int64(0)
+		nextToRead := startChunk
+		fileOffset := int64(startChunk) * int64(chunkSize)
+		endOffset := int64(endChunk) * int64(chunkSize)
+		if endOffset > fileSize {
+			endOffset = fileSize
+		}
 
-		for fileOffset < fileSize {
+		for nextToRead < endChunk && fileOffset < endOffset {
 			// Check context cancellation
 			select {
 			case <-readAheadCtx.Done():
@@ -464,13 +480,13 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	}()
 
 	// Windowed pipeline state
-	var nextToSend uint32
+	nextToSend := startChunk
 
 	bytesProcessed := int64(0)
 
 	// Send chunks in windowed pipeline
 sendLoop:
-	for nextToSend < totalChunks {
+	for nextToSend < endChunk {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
@@ -515,7 +531,9 @@ sendLoop:
 		if sendChunk {
 			// CRC is already calculated in read-ahead
 			chunkCRC := chunk.crc
-			fileCRC.Write(chunk.buf[:chunk.n])
+			if fullFile {
+				fileCRC.Write(chunk.buf[:chunk.n])
+			}
 
 			var header [12]byte
 			binary.BigEndian.PutUint32(header[0:4], nextToSend)
@@ -553,12 +571,15 @@ sendLoop:
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}
 
+	if !fullFile {
+		return 0, nil
+	}
 	return fileCRC.Sum32(), nil
 }
 
 // receiveFileChunksWindowed receives file chunks, writes to disk,
 // and returns the computed CRC32.
-func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, resume *resumeState) (uint32, error) {
+func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, resume *resumeState, startChunk uint32, chunkCount uint32) (uint32, error) {
 	outFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open output file %s: %w", filePath, err)
@@ -570,6 +591,21 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 
 	if chunkSize == 0 {
 		return 0, fmt.Errorf("invalid chunk size %d", chunkSize)
+	}
+	totalChunks := uint32(0)
+	if fileSize > 0 {
+		totalChunks = uint32((int64(fileSize) + int64(chunkSize) - 1) / int64(chunkSize))
+	}
+	if totalChunks > 0 && startChunk >= totalChunks {
+		return 0, fmt.Errorf("stripe start chunk %d out of range", startChunk)
+	}
+	endChunk := totalChunks
+	if chunkCount > 0 {
+		end := startChunk + chunkCount
+		if end > totalChunks {
+			end = totalChunks
+		}
+		endChunk = end
 	}
 	bufPool := chunkPoolFor(chunkSize)
 	if bufPool == nil {
@@ -629,6 +665,12 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 			if resume != nil && resume.totalChunks > 0 && chunkIndex >= resume.totalChunks {
 				sendReadErr(fmt.Errorf("chunk index %d out of range", chunkIndex))
 				return
+			}
+			if totalChunks > 0 {
+				if chunkIndex < startChunk || chunkIndex >= endChunk {
+					sendReadErr(fmt.Errorf("chunk index %d outside stripe [%d,%d)", chunkIndex, startChunk, endChunk))
+					return
+				}
 			}
 			if err := readFullWithTimeout(readerCtx, s, metaBuf, relPath, "chunk-meta"); err != nil {
 				sendReadErr(fmt.Errorf("failed to read chunk meta: %w", err))
@@ -833,7 +875,7 @@ func sendFileRecordChunked(ctx context.Context, s Stream, relPath string, filePa
 		return fmt.Errorf("failed to write chunk size: %w", err)
 	}
 
-	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil); err != nil {
+	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil, 0, 0); err != nil {
 		return err
 	}
 
@@ -960,7 +1002,7 @@ func RecvManifest(ctx context.Context, s Stream, outDir string, progressFn Progr
 				return m, fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 
-			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil); err != nil {
+			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil, 0, 0); err != nil {
 				return m, err
 			}
 

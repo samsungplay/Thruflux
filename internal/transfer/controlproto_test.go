@@ -18,11 +18,15 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	stream := &memStream{buf: &buf}
 
 	begin := FileBegin{
-		RelPath:   "a/b.txt",
-		FileSize:  1234,
-		ChunkSize: 4096,
-		StreamID:  42,
-		HashAlg:   HashAlgCRC32C,
+		RelPath:      "a/b.txt",
+		FileSize:     1234,
+		ChunkSize:    4096,
+		StreamID:     42,
+		HashAlg:      HashAlgCRC32C,
+		StripeIndex:  1,
+		StripeCount:  4,
+		StripeStart:  10,
+		StripeChunks: 5,
 	}
 	credit := Credit{
 		StreamID: 42,

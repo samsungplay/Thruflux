@@ -249,9 +249,11 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 			name:    "ManifestAccept_with_paths",
 			msgType: TypeManifestAccept,
 			payload: ManifestAccept{
-				ManifestID:    "manifest123",
-				Mode:          "selective",
-				SelectedPaths: []string{"/path/to/file1.txt", "/path/to/file2.txt"},
+				ManifestID:          "manifest123",
+				Mode:                "selective",
+				SelectedPaths:       []string{"/path/to/file1.txt", "/path/to/file2.txt"},
+				ParallelConnections: 2,
+				ParallelStreams:     4,
 			},
 			decodeTo: func() any { return &ManifestAccept{} },
 			verify: func(t *testing.T, decoded, original any) {
@@ -271,16 +273,23 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 						t.Errorf("SelectedPaths[%d] = %s, want %s", i, path, o.SelectedPaths[i])
 					}
 				}
+				if d.ParallelConnections != o.ParallelConnections {
+					t.Errorf("ParallelConnections = %d, want %d", d.ParallelConnections, o.ParallelConnections)
+				}
+				if d.ParallelStreams != o.ParallelStreams {
+					t.Errorf("ParallelStreams = %d, want %d", d.ParallelStreams, o.ParallelStreams)
+				}
 			},
 		},
 		{
 			name:    "TransferStart",
 			msgType: TypeTransferStart,
 			payload: TransferStart{
-				ManifestID:     "manifest123",
-				SenderPeerID:   "sender1",
-				ReceiverPeerID: "receiver1",
-				TransferID:     "transfer-abc",
+				ManifestID:          "manifest123",
+				SenderPeerID:        "sender1",
+				ReceiverPeerID:      "receiver1",
+				TransferID:          "transfer-abc",
+				ParallelConnections: 3,
 			},
 			decodeTo: func() any { return &TransferStart{} },
 			verify: func(t *testing.T, decoded, original any) {
@@ -297,6 +306,9 @@ func TestMessageTypes_JSONRoundTrip(t *testing.T) {
 				}
 				if d.TransferID != o.TransferID {
 					t.Errorf("TransferID = %s, want %s", d.TransferID, o.TransferID)
+				}
+				if d.ParallelConnections != o.ParallelConnections {
+					t.Errorf("ParallelConnections = %d, want %d", d.ParallelConnections, o.ParallelConnections)
 				}
 			},
 		},

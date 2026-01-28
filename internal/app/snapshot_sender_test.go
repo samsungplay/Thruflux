@@ -54,7 +54,7 @@ func TestSnapshotQueueRespected(t *testing.T) {
 	}
 
 	s.handlePeerJoined("a")
-	s.handleManifestAccept("a")
+	s.handleManifestAccept("a", protocol.ManifestAccept{})
 	s.maybeStartTransfers(context.Background())
 
 	select {
@@ -67,7 +67,7 @@ func TestSnapshotQueueRespected(t *testing.T) {
 	}
 
 	s.handlePeerJoined("b")
-	s.handleManifestAccept("b")
+	s.handleManifestAccept("b", protocol.ManifestAccept{})
 	if len(s.queue) != 1 || s.queue[0] != "b" {
 		t.Fatalf("expected b queued, got %v", s.queue)
 	}
@@ -96,7 +96,7 @@ func TestSnapshotConcurrencyRespected(t *testing.T) {
 
 	for _, peer := range []string{"a", "b", "c"} {
 		s.handlePeerJoined(peer)
-		s.handleManifestAccept(peer)
+		s.handleManifestAccept(peer, protocol.ManifestAccept{})
 	}
 	s.maybeStartTransfers(context.Background())
 
@@ -129,7 +129,7 @@ func TestSnapshotLateJoin(t *testing.T) {
 	}
 
 	s.handlePeerJoined("late")
-	s.handleManifestAccept("late")
+	s.handleManifestAccept("late", protocol.ManifestAccept{})
 	s.maybeStartTransfers(context.Background())
 
 	select {

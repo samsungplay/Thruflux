@@ -23,11 +23,15 @@ const (
 )
 
 type FileBegin struct {
-	RelPath   string
-	FileSize  uint64
-	ChunkSize uint32
-	StreamID  uint64
-	HashAlg   byte
+	RelPath      string
+	FileSize     uint64
+	ChunkSize    uint32
+	StreamID     uint64
+	HashAlg      byte
+	StripeIndex  uint16
+	StripeCount  uint16
+	StripeStart  uint32
+	StripeChunks uint32
 }
 
 type Credit struct {
@@ -142,6 +146,18 @@ func writeFileBegin(s Stream, msg FileBegin) error {
 	if err := writeFullControl(s, []byte{msg.HashAlg}, "hash alg"); err != nil {
 		return fmt.Errorf("failed to write hash alg: %w", err)
 	}
+	if err := binary.Write(s, binary.BigEndian, msg.StripeIndex); err != nil {
+		return fmt.Errorf("failed to write stripe index: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.StripeCount); err != nil {
+		return fmt.Errorf("failed to write stripe count: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.StripeStart); err != nil {
+		return fmt.Errorf("failed to write stripe start: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.StripeChunks); err != nil {
+		return fmt.Errorf("failed to write stripe chunks: %w", err)
+	}
 
 	return nil
 }
@@ -175,6 +191,18 @@ func readFileBegin(s Stream) (FileBegin, error) {
 		return msg, fmt.Errorf("failed to read hash alg: %w", err)
 	}
 	msg.HashAlg = hashBuf[0]
+	if err := binary.Read(s, binary.BigEndian, &msg.StripeIndex); err != nil {
+		return msg, fmt.Errorf("failed to read stripe index: %w", err)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.StripeCount); err != nil {
+		return msg, fmt.Errorf("failed to read stripe count: %w", err)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.StripeStart); err != nil {
+		return msg, fmt.Errorf("failed to read stripe start: %w", err)
+	}
+	if err := binary.Read(s, binary.BigEndian, &msg.StripeChunks); err != nil {
+		return msg, fmt.Errorf("failed to read stripe chunks: %w", err)
+	}
 
 	return msg, nil
 }

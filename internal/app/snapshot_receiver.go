@@ -32,6 +32,8 @@ type SnapshotReceiverConfig struct {
 	Benchmark              bool
 	Dumb                   bool
 	DumbTCP                bool
+	ParallelConnections    int
+	ParallelStreams        int
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -68,6 +70,9 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	if cfg.QuicMaxIncomingStreams <= 0 {
 		cfg.QuicMaxIncomingStreams = 100
 	}
+	if cfg.ParallelConnections < 1 {
+		cfg.ParallelConnections = 4
+	}
 	absOut, err := filepath.Abs(cfg.OutDir)
 	if err != nil {
 		return fmt.Errorf("failed to resolve output dir: %w", err)
@@ -100,6 +105,8 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		benchmark:              cfg.Benchmark,
 		dumb:                   cfg.Dumb,
 		dumbTCP:                cfg.DumbTCP,
+		parallelConnections:    cfg.ParallelConnections,
+		parallelStreams:        cfg.ParallelStreams,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
 		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
@@ -142,6 +149,8 @@ type snapshotReceiver struct {
 	dumbTCP                bool
 	dumbQuicMu             sync.Mutex
 	dumbQuicConnections    int
+	parallelConnections    int
+	parallelStreams        int
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -298,9 +307,11 @@ func (r *snapshotReceiver) currentTurnServers() []string {
 
 func (r *snapshotReceiver) sendAccept(manifestID string) {
 	accept := protocol.ManifestAccept{
-		ManifestID:    manifestID,
-		Mode:          "all",
-		SelectedPaths: nil,
+		ManifestID:          manifestID,
+		Mode:                "all",
+		SelectedPaths:       nil,
+		ParallelConnections: r.parallelConnections,
+		ParallelStreams:     r.parallelStreams,
 	}
 	env, err := protocol.NewEnvelope(protocol.TypeManifestAccept, protocol.NewMsgID(), accept)
 	if err != nil {
@@ -590,7 +601,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		var dumbConns []transfer.Conn
 		dumbConns = append(dumbConns, transferConn)
 		if expectedConns > 1 {
-			extraConns, err := r.acceptExtraDumbConns(baseCtx, quicTransport, expectedConns-1)
+			extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, expectedConns-1)
 			if err != nil {
 				stopUIFn()
 				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
@@ -616,11 +627,46 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(0)
 	}
 
+	effectiveConnections := r.parallelConnections
+	if effectiveConnections < 1 {
+		effectiveConnections = 1
+	}
+	if start.ParallelConnections > 0 && start.ParallelConnections < effectiveConnections {
+		effectiveConnections = start.ParallelConnections
+	}
+
+	conns := []transfer.Conn{transferConn}
+	var extra []transfer.Conn
+	if effectiveConnections > 1 {
+		extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, effectiveConnections-1)
+		if err != nil {
+			r.logger.Warn("failed to accept extra connections", "error", err)
+		}
+		extra = extraConns
+		conns = append(conns, extraConns...)
+	}
+	if len(conns) == 0 {
+		stopUIFn()
+		fmt.Fprintf(os.Stderr, "transfer failed: no connections available\n")
+		exitWith(1)
+	}
+	defer func() {
+		for _, c := range extra {
+			c.Close()
+		}
+	}()
+
+	totalStreams, _ := computeParallelBudget(r.fileTotal, r.parallelStreams, len(conns), len(conns) > 1)
+
 	var lastStats int64
+	recvCtx, recvCancel := context.WithCancel(baseCtx)
+	defer recvCancel()
+
 	opts := transfer.Options{
-		Resume:    true,
-		NoRootDir: true,
-		HashAlg:   "crc32c",
+		Resume:        true,
+		NoRootDir:     true,
+		HashAlg:       "crc32c",
+		ParallelFiles: totalStreams,
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			if !shouldUpdateProgress(&lastProgress) {
 				return
@@ -640,8 +686,22 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.MarkVerified(relpath, ok)
 		},
 	}
-	_, err = transfer.RecvManifestMultiStream(baseCtx, transferConn, r.outDir, opts)
-	if err != nil {
+
+	var recvConn transfer.Conn = conns[0]
+	if len(conns) > 1 {
+		multi, err := transfer.NewMultiConn(conns)
+		if err != nil {
+			stopUIFn()
+			fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
+			fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
+			r.logger.Error("transfer failed", "error", err)
+			exitWith(1)
+		}
+		defer multi.Close()
+		recvConn = multi
+	}
+
+	if _, err := transfer.RecvManifestMultiStream(recvCtx, recvConn, r.outDir, opts); err != nil {
 		stopUIFn()
 		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
 		fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
@@ -726,7 +786,7 @@ func (r *snapshotReceiver) waitForDumbQuicConnections(ctx context.Context, signa
 	}
 }
 
-func (r *snapshotReceiver) acceptExtraDumbConns(ctx context.Context, transport *transferquic.QUICTransport, extra int) ([]transfer.Conn, error) {
+func (r *snapshotReceiver) acceptExtraConns(ctx context.Context, transport *transferquic.QUICTransport, extra int) ([]transfer.Conn, error) {
 	if extra <= 0 {
 		return nil, nil
 	}
@@ -738,21 +798,27 @@ func (r *snapshotReceiver) acceptExtraDumbConns(ctx context.Context, transport *
 	defer cancel()
 
 	conns := make([]transfer.Conn, 0, extra)
+	var lastErr error
 	for i := 0; i < extra; i++ {
 		conn, err := transport.Accept(acceptCtx)
 		if err != nil {
-			return conns, err
+			lastErr = err
+			break
 		}
 		authCtx, authCancel := context.WithTimeout(acceptCtx, 10*time.Second)
 		if err := authenticateTransport(authCtx, conn, r.joinCode, authRoleReceive); err != nil {
 			authCancel()
 			conn.Close()
-			return conns, err
+			lastErr = err
+			break
 		}
 		authCancel()
 		conns = append(conns, conn)
 	}
-	return conns, nil
+	if len(conns) == 0 && lastErr != nil {
+		return conns, lastErr
+	}
+	return conns, lastErr
 }
 
 func recvDumbDiscardMulti(ctx context.Context, conns []transfer.Conn, progressFn func(string, int64, int64)) error {
