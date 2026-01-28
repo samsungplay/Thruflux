@@ -56,6 +56,7 @@ type FileDoneFn func(relpath string, ok bool)
 const resumeHashUnknown = ^uint64(0)
 
 const defaultResumeHashTimeout = 2 * time.Second
+const resumeGracePeriod = 300 * time.Millisecond
 
 type resumeHashResult struct {
 	hash uint64
@@ -864,143 +865,175 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			if resumeCancel != nil {
 				defer resumeCancel()
 			}
-			info, resumeErr := resumeRegistry.wait(resumeCtx, state.key)
-			if resumeErr != nil {
-				if !errors.Is(resumeErr, context.DeadlineExceeded) && !errors.Is(resumeErr, context.Canceled) {
-					state.setReady(resumeErr)
-					setErr(resumeErr)
-				} else {
-					state.setReady(nil)
-				}
-				signalWake()
-				return
-			}
-
-			if info.FileID != "" && info.FileID != state.item.ID {
-				err := fmt.Errorf("resume info file id mismatch for %s", state.item.RelPath)
-				state.setReady(err)
-				setErr(err)
-				signalWake()
-				return
-			}
-
-			totalChunks := info.TotalChunks
-			if totalChunks == 0 {
-				totalChunks = state.totalChunks
-			}
-			if state.totalChunks != 0 && totalChunks != state.totalChunks {
-				err := fmt.Errorf("resume info total chunks mismatch for %s", state.item.RelPath)
-				state.setReady(err)
-				setErr(err)
-				signalWake()
-				return
-			}
-
-			var plan *resumePlan
-			if totalChunks > 0 && len(info.Bitmap) > 0 {
-				bitmap, err := BitmapFromBytes(info.Bitmap, int(totalChunks))
-				if err != nil {
-					state.setReady(err)
-					setErr(err)
-					signalWake()
+			infoCh := make(chan FileResumeInfo, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				info, resumeErr := resumeRegistry.wait(resumeCtx, state.key)
+				if resumeErr != nil {
+					errCh <- resumeErr
 					return
 				}
-				completedChunks := uint32(bitmap.CountSet())
-				forceSendFrom := uint32(0)
-				verifiedChunk := info.LastVerifiedChunk
-				if verifiedChunk < totalChunks {
-					forceSendFrom = verifiedChunk + 1
-				} else {
-					forceSendFrom = totalChunks
+				infoCh <- info
+			}()
+
+			applyResumeInfo := func(info FileResumeInfo) error {
+				if info.FileID != "" && info.FileID != state.item.ID {
+					return fmt.Errorf("resume info file id mismatch for %s", state.item.RelPath)
 				}
 
-				verifyMode := resumeVerify
-				if verifyMode == "" {
-					verifyMode = "last"
+				totalChunks := info.TotalChunks
+				if totalChunks == 0 {
+					totalChunks = state.totalChunks
 				}
-				if verifyMode == "all" {
-					verifyMode = "last"
-				}
-				hashUnknown := info.LastVerifiedHash == resumeHashUnknown
-				verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone && !hashUnknown
-
-				allComplete := totalChunks > 0 && completedChunks >= totalChunks
-				if !allComplete {
-					tail := resumeVerifyTail
-					if tail > 0 && forceSendFrom > 0 {
-						if tail >= forceSendFrom {
-							forceSendFrom = 0
-						} else {
-							forceSendFrom -= tail
-						}
-					}
+				if state.totalChunks != 0 && totalChunks != state.totalChunks {
+					return fmt.Errorf("resume info total chunks mismatch for %s", state.item.RelPath)
 				}
 
-				if forceSendFrom > totalChunks {
-					forceSendFrom = totalChunks
-				}
-				if hashUnknown && totalChunks > 0 {
-					tail := resumeVerifyTail
-					if tail == 0 {
-						tail = 1
+				var plan *resumePlan
+				if totalChunks > 0 && len(info.Bitmap) > 0 {
+					bitmap, err := BitmapFromBytes(info.Bitmap, int(totalChunks))
+					if err != nil {
+						return err
 					}
-					minForce := uint32(0)
-					if totalChunks > tail {
-						minForce = totalChunks - tail
+					completedChunks := uint32(bitmap.CountSet())
+					forceSendFrom := uint32(0)
+					verifiedChunk := info.LastVerifiedChunk
+					if verifiedChunk < totalChunks {
+						forceSendFrom = verifiedChunk + 1
+					} else {
+						forceSendFrom = totalChunks
 					}
-					if forceSendFrom > minForce {
-						forceSendFrom = minForce
-					}
-				}
 
-				plan = &resumePlan{
-					bitmap:        bitmap,
-					forceSendFrom: forceSendFrom,
-					totalChunks:   totalChunks,
-					verifiedChunk: verifiedChunk,
-				}
-				if verifyNeeded {
-					state.mu.Lock()
-					state.verifyPending = true
-					state.mu.Unlock()
-					go func(vChunk uint32, vHash uint64) {
-						senderHash, err := hashFileChunk(state.filePath, vChunk, chunkSize, state.item.Size, hashAlg)
-						state.mu.Lock()
-						if err != nil {
-							state.readyErr = err
-							state.verifyPending = false
-							state.mu.Unlock()
-							setErr(err)
-							signalWake()
-							return
-						}
-						if senderHash != vHash {
-							state.resendChunk = vChunk
-							state.resendPending = true
-						}
-						state.verifyPending = false
-						state.mu.Unlock()
-						signalWake()
-					}(verifiedChunk, info.LastVerifiedHash)
-				}
-				if opts.ResumeStatsFn != nil {
-					plannedSkipped := uint32(0)
-					if forceSendFrom > 0 {
-						for i := uint32(0); i < forceSendFrom; i++ {
-							if bitmap.Get(int(i)) {
-								plannedSkipped++
+					verifyMode := resumeVerify
+					if verifyMode == "" {
+						verifyMode = "last"
+					}
+					if verifyMode == "all" {
+						verifyMode = "last"
+					}
+					hashUnknown := info.LastVerifiedHash == resumeHashUnknown
+					verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone && !hashUnknown
+
+					allComplete := totalChunks > 0 && completedChunks >= totalChunks
+					if !allComplete {
+						tail := resumeVerifyTail
+						if tail > 0 && forceSendFrom > 0 {
+							if tail >= forceSendFrom {
+								forceSendFrom = 0
+							} else {
+								forceSendFrom -= tail
 							}
 						}
 					}
-					opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
+
+					if forceSendFrom > totalChunks {
+						forceSendFrom = totalChunks
+					}
+					if hashUnknown && totalChunks > 0 {
+						tail := resumeVerifyTail
+						if tail == 0 {
+							tail = 1
+						}
+						minForce := uint32(0)
+						if totalChunks > tail {
+							minForce = totalChunks - tail
+						}
+						if forceSendFrom > minForce {
+							forceSendFrom = minForce
+						}
+					}
+
+					plan = &resumePlan{
+						bitmap:        bitmap,
+						forceSendFrom: forceSendFrom,
+						totalChunks:   totalChunks,
+						verifiedChunk: verifiedChunk,
+					}
+					if verifyNeeded {
+						state.mu.Lock()
+						state.verifyPending = true
+						state.mu.Unlock()
+						go func(vChunk uint32, vHash uint64) {
+							senderHash, err := hashFileChunk(state.filePath, vChunk, chunkSize, state.item.Size, hashAlg)
+							state.mu.Lock()
+							if err != nil {
+								state.readyErr = err
+								state.verifyPending = false
+								state.mu.Unlock()
+								setErr(err)
+								signalWake()
+								return
+							}
+							if senderHash != vHash {
+								state.resendChunk = vChunk
+								state.resendPending = true
+							}
+							state.verifyPending = false
+							state.mu.Unlock()
+							signalWake()
+						}(verifiedChunk, info.LastVerifiedHash)
+					}
+					if opts.ResumeStatsFn != nil {
+						plannedSkipped := uint32(0)
+						if forceSendFrom > 0 {
+							for i := uint32(0); i < forceSendFrom; i++ {
+								if bitmap.Get(int(i)) {
+									plannedSkipped++
+								}
+							}
+						}
+						opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
+					}
 				}
+
+				state.mu.Lock()
+				state.plan = plan
+				state.mu.Unlock()
+				return nil
 			}
 
-			state.mu.Lock()
-			state.plan = plan
-			state.mu.Unlock()
-			state.setReady(nil)
-			signalWake()
+			readySet := false
+			grace := time.NewTimer(resumeGracePeriod)
+			defer grace.Stop()
+			for {
+				select {
+				case <-transferCtx.Done():
+					if !readySet {
+						state.setReady(nil)
+						signalWake()
+					}
+					return
+				case <-grace.C:
+					if !readySet {
+						state.setReady(nil)
+						readySet = true
+						signalWake()
+					}
+				case info := <-infoCh:
+					if err := applyResumeInfo(info); err != nil {
+						state.setReady(err)
+						setErr(err)
+						signalWake()
+						return
+					}
+					if !readySet {
+						state.setReady(nil)
+						readySet = true
+						signalWake()
+					}
+					return
+				case resumeErr := <-errCh:
+					if !errors.Is(resumeErr, context.DeadlineExceeded) && !errors.Is(resumeErr, context.Canceled) {
+						state.setReady(resumeErr)
+						setErr(resumeErr)
+					} else if !readySet {
+						state.setReady(nil)
+						readySet = true
+					}
+					signalWake()
+					return
+				}
+			}
 		}()
 	}
 
