@@ -41,6 +41,7 @@ func Run(args []string) {
 	maxReceivers := 4
 	benchmark := false
 	dumb := false
+	dumbTCP := false
 	var dumbSizeBytes int64
 	dumbName := ""
 	udpReadBufferBytes := 8 * 1024 * 1024
@@ -72,6 +73,11 @@ func Run(args []string) {
 		}
 		if arg == "--dumb" {
 			dumb = true
+			continue
+		}
+		if arg == "--dumb-tcp" {
+			dumb = true
+			dumbTCP = true
 			continue
 		}
 		if arg == "--server-url" && i+1 < len(args) {
@@ -204,6 +210,7 @@ func Run(args []string) {
 		ReceiverTTL:            10 * time.Minute,
 		Benchmark:              benchmark,
 		Dumb:                   dumb,
+		DumbTCP:                dumbTCP,
 		DumbSizeBytes:          dumbSizeBytes,
 		DumbName:               dumbName,
 		UDPReadBufferBytes:     udpReadBufferBytes,
@@ -238,6 +245,7 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
+	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")

@@ -31,6 +31,7 @@ type SnapshotReceiverConfig struct {
 	OutDir                 string
 	Benchmark              bool
 	Dumb                   bool
+	DumbTCP                bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -98,6 +99,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
 		dumb:                   cfg.Dumb,
+		dumbTCP:                cfg.DumbTCP,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
 		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
@@ -136,6 +138,7 @@ type snapshotReceiver struct {
 	outDir                 string
 	benchmark              bool
 	dumb                   bool
+	dumbTCP                bool
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -228,6 +231,11 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		} else {
 			fmt.Printf("Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
 		}
+	case protocol.TypeDumbTCPListen:
+		select {
+		case r.signalCh <- env:
+		default:
+		}
 	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		select {
 		case r.signalCh <- env:
@@ -319,6 +327,18 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		env.From = r.peerID
 		env.To = r.senderID
 		return r.conn.Send(env)
+	}
+
+	var lastProgress int64
+	if r.dumbTCP {
+		if err := r.runDumbTCPTransfer(baseCtx, progressState, &lastProgress); err != nil {
+			stopUIFn()
+			fmt.Fprintf(os.Stderr, "dumb tcp transfer failed: %v\n", err)
+			r.logger.Error("dumb tcp transfer failed", "error", err)
+			exitWith(1)
+		}
+		progressState.ForceComplete()
+		exitWith(0)
 	}
 
 	var (
@@ -514,7 +534,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	authCancel()
 
-	var lastProgress int64
 	if r.dumb {
 		if _, err := recvDumbDiscard(baseCtx, transferConn, func(relpath string, bytesReceived int64, total int64) {
 			if !shouldUpdateProgress(&lastProgress) {
@@ -571,6 +590,49 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	progressState.ForceComplete()
 	exitWith(0)
+}
+
+func (r *snapshotReceiver) runDumbTCPTransfer(ctx context.Context, progressState *receiverProgress, lastProgress *int64) error {
+	var addrs []string
+	timeout := time.NewTimer(15 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return fmt.Errorf("timeout waiting for dumb tcp listen")
+		case env := <-r.signalCh:
+			if env.Type != protocol.TypeDumbTCPListen {
+				continue
+			}
+			var msg protocol.DumbTCPListen
+			if err := env.DecodePayload(&msg); err != nil {
+				return err
+			}
+			addrs = msg.Addrs
+			goto dial
+		}
+	}
+
+dial:
+	if len(addrs) == 0 {
+		return fmt.Errorf("no tcp addresses received")
+	}
+	conn, err := dialAddrs(ctx, addrs)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	_, err = recvDumbDiscardReader(conn, func(relpath string, bytesReceived int64, total int64) {
+		if !shouldUpdateProgress(lastProgress) {
+			return
+		}
+		progressState.Update(relpath, bytesReceived, total)
+	})
+	return err
 }
 
 type receiverProgress struct {

@@ -38,19 +38,23 @@ func sendDumbData(ctx context.Context, conn transfer.Conn, name string, size int
 	}
 	defer stream.Close()
 
-	if err := binary.Write(stream, binary.BigEndian, uint16(len(nameBytes))); err != nil {
+	return sendDumbDataWriter(stream, nameBytes, size)
+}
+
+func sendDumbDataWriter(w io.Writer, nameBytes []byte, size int64) error {
+	if err := binary.Write(w, binary.BigEndian, uint16(len(nameBytes))); err != nil {
 		return fmt.Errorf("failed to write name length: %w", err)
 	}
-	if _, err := stream.Write(nameBytes); err != nil {
+	if _, err := w.Write(nameBytes); err != nil {
 		return fmt.Errorf("failed to write name: %w", err)
 	}
-	if err := binary.Write(stream, binary.BigEndian, uint64(size)); err != nil {
+	if err := binary.Write(w, binary.BigEndian, uint64(size)); err != nil {
 		return fmt.Errorf("failed to write size: %w", err)
 	}
 
 	reader := io.LimitReader(zeroReader{}, size)
 	buf := make([]byte, dumbCopyBufferSize)
-	if _, err := io.CopyBuffer(stream, reader, buf); err != nil {
+	if _, err := io.CopyBuffer(w, reader, buf); err != nil {
 		return fmt.Errorf("failed to send data: %w", err)
 	}
 	return nil
@@ -63,21 +67,25 @@ func recvDumbDiscard(ctx context.Context, conn transfer.Conn, progressFn func(st
 	}
 	defer stream.Close()
 
+	return recvDumbDiscardReader(stream, progressFn)
+}
+
+func recvDumbDiscardReader(r io.Reader, progressFn func(string, int64, int64)) (string, error) {
 	var nameLen uint16
-	if err := binary.Read(stream, binary.BigEndian, &nameLen); err != nil {
+	if err := binary.Read(r, binary.BigEndian, &nameLen); err != nil {
 		return "", fmt.Errorf("failed to read name length: %w", err)
 	}
 	nameBuf := make([]byte, nameLen)
-	if _, err := io.ReadFull(stream, nameBuf); err != nil {
+	if _, err := io.ReadFull(r, nameBuf); err != nil {
 		return "", fmt.Errorf("failed to read name: %w", err)
 	}
 	var size uint64
-	if err := binary.Read(stream, binary.BigEndian, &size); err != nil {
+	if err := binary.Read(r, binary.BigEndian, &size); err != nil {
 		return "", fmt.Errorf("failed to read size: %w", err)
 	}
 
 	total := int64(size)
-	reader := io.LimitReader(stream, total)
+	reader := io.LimitReader(r, total)
 	buf := make([]byte, dumbCopyBufferSize)
 	var received int64
 	var lastProgress int64

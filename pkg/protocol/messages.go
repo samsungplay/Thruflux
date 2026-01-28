@@ -121,3 +121,8 @@ type TransferQueued struct {
 	Active         int    `json:"active"`
 	Max            int    `json:"max"`
 }
+
+// DumbTCPListen provides TCP listen addresses for dumb mode.
+type DumbTCPListen struct {
+	Addrs []string `json:"addrs"`
+}

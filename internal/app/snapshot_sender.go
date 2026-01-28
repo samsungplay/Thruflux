@@ -57,6 +57,7 @@ type SnapshotSenderConfig struct {
 	Dumb                   bool
 	DumbSizeBytes          int64
 	DumbName               string
+	DumbTCP                bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -80,6 +81,7 @@ type SnapshotSender struct {
 	dumbPath      string
 	dumbSizeBytes int64
 	dumbName      string
+	dumbTCP       bool
 
 	peerID     string
 	sessionID  string
@@ -286,6 +288,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		dumbPath:               func() string { if len(cfg.Paths) > 0 { return cfg.Paths[0] }; return "" }(),
 		dumbSizeBytes:          cfg.DumbSizeBytes,
 		dumbName:               cfg.DumbName,
+		dumbTCP:                cfg.DumbTCP,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -575,6 +578,9 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 }
 
 func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) error {
+	if s.dumbTCP {
+		return s.runDumbTCPTransfer(ctx, peerID)
+	}
 	signalCh := s.getSignalCh(peerID)
 	if signalCh == nil {
 		return fmt.Errorf("no signal channel for %s", peerID)
@@ -794,6 +800,51 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 
 	return nil
+}
+
+func (s *SnapshotSender) runDumbTCPTransfer(ctx context.Context, peerID string) error {
+	sendSignal := func(msgType string, payload any) error {
+		env, err := protocol.NewEnvelope(msgType, protocol.NewMsgID(), payload)
+		if err != nil {
+			return err
+		}
+		env.SessionID = s.sessionID
+		env.From = s.peerID
+		env.To = peerID
+		return s.conn.Send(env)
+	}
+
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return fmt.Errorf("failed to listen tcp: %w", err)
+	}
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	addrs := dumbTCPListenAddrs(port)
+	if err := sendSignal(protocol.TypeDumbTCPListen, protocol.DumbTCPListen{Addrs: addrs}); err != nil {
+		return fmt.Errorf("failed to send tcp listen addrs: %w", err)
+	}
+
+	conn, err := acceptWithContext(ctx, listener)
+	if err != nil {
+		return fmt.Errorf("failed to accept tcp: %w", err)
+	}
+	defer conn.Close()
+
+	name := s.dumbName
+	if name == "" {
+		name = filepath.Base(s.dumbPath)
+	}
+	size := s.dumbSizeBytes
+	if size == 0 {
+		info, err := os.Stat(s.dumbPath)
+		if err != nil {
+			return fmt.Errorf("failed to stat path: %w", err)
+		}
+		size = info.Size()
+	}
+	return sendDumbDataWriter(conn, []byte(name), size)
 }
 
 func (s *SnapshotSender) sendManifestOffer(peerID string) {
