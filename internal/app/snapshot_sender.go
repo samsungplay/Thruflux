@@ -819,6 +819,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 			size = info.Size()
 		}
 		if s.dumbConns <= 1 {
+			s.setSenderConnCount(peerID, 1)
 			return sendDumbData(ctx, transferConn, name, size)
 		}
 		if err := sendSignal(protocol.TypeDumbQUICMulti, protocol.DumbQUICMulti{Connections: s.dumbConns}); err != nil {
@@ -837,6 +838,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		for _, c := range extra {
 			conns = append(conns, c.conn)
 		}
+		s.setSenderConnCount(peerID, len(conns))
 		if err := sendDumbDataMulti(ctx, conns, name, size); err != nil {
 			return err
 		}
@@ -867,6 +869,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	if len(conns) == 0 {
 		return fmt.Errorf("no transfer connections available")
 	}
+	s.setSenderConnCount(peerID, len(conns))
 	defer func() {
 		for _, c := range extra {
 			c.close()
@@ -1530,6 +1533,7 @@ type senderProgress struct {
 	sentBytes     int64
 	fileDone      int
 	fileTotal     int
+	connCount     int
 	bench         *bench.Bench
 	benchSnap     bench.Snapshot
 	benchFrozen   bool
@@ -1565,6 +1569,7 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	state.sentBytes = 0
 	state.fileDone = 0
 	state.fileTotal = s.manifest.FileCount
+	state.connCount = 0
 	if s.benchmark {
 		state.bench = bench.NewBench()
 		state.benchSnap = bench.Snapshot{}
@@ -1719,6 +1724,18 @@ func (s *SnapshotSender) setSenderStage(peerID string, stage string) {
 	state.mu.Unlock()
 }
 
+func (s *SnapshotSender) setSenderConnCount(peerID string, count int) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.connCount = count
+	state.mu.Unlock()
+}
+
 func (s *SnapshotSender) setSenderProbeStatus(peerID string, addr string, state ice.ProbeState) {
 	s.progressMu.Lock()
 	progressState := s.progress[peerID]
@@ -1794,6 +1811,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		var fileDone int
 		var fileTotal int
 		var resumedFiles int
+		var connCount int
 		status := statuses[peerID]
 		s.progressMu.Lock()
 		state := s.progress[peerID]
@@ -1813,6 +1831,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			fileDone = state.fileDone
 			fileTotal = state.fileTotal
 			resumedFiles = state.resumedFiles
+			connCount = state.connCount
 			state.mu.Unlock()
 		} else {
 			stats = progress.Stats{Total: s.manifest.TotalBytes}
@@ -1828,6 +1847,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			FileTotal: fileTotal,
 			Resumed:   resumedFiles,
 			Probes:    probes,
+			ConnCount: connCount,
 		})
 	}
 	s.mu.Lock()

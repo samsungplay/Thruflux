@@ -610,6 +610,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			}
 			dumbConns = append(dumbConns, extraConns...)
 		}
+		progressState.SetConnCount(len(dumbConns))
 
 		dumbCollector := newProgressCollector()
 		dumbStop := startProgressTicker(baseCtx, dumbCollector, func(relpath string, bytesReceived int64, total int64) {
@@ -653,6 +654,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		fmt.Fprintf(os.Stderr, "transfer failed: no connections available\n")
 		exitWith(1)
 	}
+	progressState.SetConnCount(len(conns))
 	defer func() {
 		for _, c := range extra {
 			c.Close()
@@ -890,7 +892,6 @@ type receiverProgress struct {
 	route            string
 	iceStage         string
 	transportLines   []string
-	resumeLine       string
 	benchmark        bool
 	bench            *bench.Bench
 	benchSnap        bench.Snapshot
@@ -900,9 +901,7 @@ type receiverProgress struct {
 	pendingVerify    map[string]int64
 	verifyingActive  bool
 	resumedFiles     int
-	resumeInfo       map[string]resumeInfo
-	resumeAt         map[string]time.Time
-	lastDataAt       map[string]time.Time
+	connCount        int
 	totalBytes       int64
 	snapshotID       string
 	outDir           string
@@ -914,12 +913,6 @@ type resumeSkip struct {
 	skippedChunks uint32
 	totalChunks   uint32
 	chunkSize     uint32
-}
-
-type resumeInfo struct {
-	skippedChunks uint32
-	totalChunks   uint32
-	verifiedChunk uint32
 }
 
 func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string, benchmark bool) *receiverProgress {
@@ -939,9 +932,6 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		pendingVerify:    make(map[string]int64),
 		verifyingActive:  false,
 		resumedFiles:     0,
-		resumeInfo:       make(map[string]resumeInfo),
-		resumeAt:         make(map[string]time.Time),
-		lastDataAt:       make(map[string]time.Time),
 		fileTotal:        fileTotal,
 		totalBytes:       totalBytes,
 		snapshotID:       snapshotID,
@@ -960,7 +950,6 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 		return
 	}
 	p.mu.Lock()
-	p.lastDataAt[relpath] = time.Now()
 	offset := p.skipOffset[relpath]
 	effective := bytes + offset
 	if total > 0 {
@@ -1020,6 +1009,12 @@ func (p *receiverProgress) SetTransportLines(lines []string) {
 	p.mu.Unlock()
 }
 
+func (p *receiverProgress) SetConnCount(count int) {
+	p.mu.Lock()
+	p.connCount = count
+	p.mu.Unlock()
+}
+
 func (p *receiverProgress) SetProbeStatus(addr string, state ice.ProbeState) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1053,10 +1048,6 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 	}
 	p.mu.Lock()
 	p.currentFile = relpath
-	p.resumeInfo[relpath] = resumeInfo{skippedChunks: skippedChunks, totalChunks: totalChunks, verifiedChunk: verifiedChunk}
-	if _, ok := p.resumeAt[relpath]; !ok {
-		p.resumeAt[relpath] = time.Now()
-	}
 	if p.appliedSkip[relpath] {
 		p.mu.Unlock()
 		return
@@ -1178,28 +1169,12 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	snapshotID := p.snapshotID
 	outDir := p.outDir
 	resumedFiles := p.resumedFiles
-	resumeInfo := p.resumeInfo
-	resumeAt := p.resumeAt
-	lastDataAt := p.lastDataAt
+	connCount := p.connCount
 	probes := make(map[string]string)
 	for k, v := range p.probes {
 		probes[k] = v.String()
 	}
 	p.mu.Unlock()
-	resumeLine := ""
-	if info, ok := resumeInfo[current]; ok {
-		now := time.Now()
-		wait := "-"
-		if t, ok := resumeAt[current]; ok {
-			wait = fmt.Sprintf("%.1fs", now.Sub(t).Seconds())
-		}
-		data := "never"
-		if t, ok := lastDataAt[current]; ok && !t.IsZero() {
-			data = fmt.Sprintf("%.1fs", now.Sub(t).Seconds())
-		}
-		resumeLine = fmt.Sprintf("resume: skipped=%d/%d verify=%d wait=%s since_data=%s",
-			info.skippedChunks, info.totalChunks, info.verifiedChunk, wait, data)
-	}
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
 		OutDir:         outDir,
@@ -1214,7 +1189,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		FileTotal:      total,
 		Route:          route,
 		Probes:         probes,
-		ResumeLine:     resumeLine,
+		ConnCount:      connCount,
 	}
 }
 

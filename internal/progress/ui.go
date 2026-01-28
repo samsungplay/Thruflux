@@ -28,7 +28,7 @@ type ReceiverView struct {
 	FileTotalBytes int64
 	Route          string
 	Probes         map[string]string
-	ResumeLine     string
+	ConnCount      int
 }
 
 type SenderRow struct {
@@ -42,6 +42,7 @@ type SenderRow struct {
 	FileTotal int
 	Resumed   int
 	Probes    map[string]string
+	ConnCount int
 }
 
 type SenderView struct {
@@ -116,7 +117,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 					lines++
 				}
 			}
-			lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, isTTY)
+			lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
 			fmt.Fprintf(w, "%s\n", colorize(formatReceiverLine(v), colorGreen, isTTY))
 			lines++
 			currentFile := v.CurrentFile
@@ -125,10 +126,6 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 			}
 			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
 			lines++
-			if v.ResumeLine != "" {
-				fmt.Fprintf(w, "%s\n", colorize(v.ResumeLine, colorCyan, isTTY))
-				lines++
-			}
 			if v.Benchmark {
 				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
 				lines++
@@ -228,7 +225,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				}
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
-					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, isTTY)
+					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
 				}
 			} else {
 				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
@@ -247,7 +244,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 				}
 				lines += renderTable(w, headers, rows, widths)
 				for _, row := range v.Rows {
-					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, isTTY)
+					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
 				}
 			}
 			lastLines = lines
@@ -344,7 +341,7 @@ func renderBar(percent float64, width int) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
-func renderConnSection(w io.Writer, peerLabel string, stage string, route string, probes map[string]string, isTTY bool) int {
+func renderConnSection(w io.Writer, peerLabel string, stage string, route string, probes map[string]string, connCount int, isTTY bool) int {
 	lines := 0
 	if stage != "" && stage != "connect_ok" {
 		stageColor := colorCyan
@@ -356,6 +353,10 @@ func renderConnSection(w io.Writer, peerLabel string, stage string, route string
 	}
 	if route != "" {
 		fmt.Fprintf(w, "  [%s] %s\n", peerLabel, colorize(route, colorCyan, isTTY))
+		lines++
+	}
+	if connCount > 0 {
+		fmt.Fprintf(w, "  [%s] quic_conns=%d\n", peerLabel, connCount)
 		lines++
 	}
 	lines += renderProbes(w, peerLabel, probes, isTTY)
