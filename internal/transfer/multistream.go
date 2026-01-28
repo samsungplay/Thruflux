@@ -849,12 +849,18 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					signalWake()
 					return
 				}
+				completedChunks := uint32(bitmap.CountSet())
+				allComplete := totalChunks > 0 && completedChunks >= totalChunks
 				forceSendFrom := uint32(0)
 				verifiedChunk := info.LastVerifiedChunk
 				if verifiedChunk < totalChunks {
 					forceSendFrom = verifiedChunk + 1
 				} else {
 					forceSendFrom = totalChunks
+				}
+				if allComplete {
+					forceSendFrom = totalChunks
+					verifiedChunk = totalChunks
 				}
 
 				verifyMode := resumeVerify
@@ -864,7 +870,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				if verifyMode == "all" {
 					verifyMode = "last"
 				}
-				if verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone {
+				if !allComplete && verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone {
 					senderHash, err := hashFileChunk(state.filePath, verifiedChunk, chunkSize, state.item.Size, hashAlg)
 					if err != nil {
 						state.setReady(err)
@@ -879,12 +885,14 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					}
 				}
 
-				tail := resumeVerifyTail
-				if tail > 0 && forceSendFrom > 0 {
-					if tail >= forceSendFrom {
-						forceSendFrom = 0
-					} else {
-						forceSendFrom -= tail
+				if !allComplete {
+					tail := resumeVerifyTail
+					if tail > 0 && forceSendFrom > 0 {
+						if tail >= forceSendFrom {
+							forceSendFrom = 0
+						} else {
+							forceSendFrom -= tail
+						}
 					}
 				}
 
@@ -2180,6 +2188,17 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		remaining := remainingBytes
 		statsMu.Unlock()
 		updateStats(active, completed, remaining)
+		if opts.Resume {
+			info, err := buildResumeInfo(state)
+			if err != nil {
+				return err
+			}
+			select {
+			case controlWriteCh <- controlMsg{resume: info}:
+			case <-recvCtx.Done():
+				return recvCtx.Err()
+			}
+		}
 		return nil
 	}
 
