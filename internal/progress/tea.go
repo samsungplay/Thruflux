@@ -76,7 +76,7 @@ func (m senderTeaModel) View() string {
 
 func renderReceiverTea(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool) func() {
 	model := receiverTeaModel{viewFn: view, verbose: verbose, view: view()}
-	program := tea.NewProgram(model, tea.WithOutput(w))
+	program := tea.NewProgram(model, tea.WithOutput(w), tea.WithAltScreen())
 	go func() {
 		_, _ = program.Run()
 	}()
@@ -106,7 +106,7 @@ func renderReceiverTea(ctx context.Context, w io.Writer, view func() ReceiverVie
 
 func renderSenderTea(ctx context.Context, w io.Writer, view func() SenderView, verbose bool) func() {
 	model := senderTeaModel{viewFn: view, verbose: verbose, view: view()}
-	program := tea.NewProgram(model, tea.WithOutput(w))
+	program := tea.NewProgram(model, tea.WithOutput(w), tea.WithAltScreen())
 	go func() {
 		_, _ = program.Run()
 	}()

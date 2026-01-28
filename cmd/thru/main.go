@@ -81,7 +81,6 @@ func main() {
 	case "host":
 		if shouldPrintStartupMessage(args[1:]) {
 			printStartupMessage()
-			printShareSummary(args[1:])
 		}
 		sender.Run(args[1:])
 		return
