@@ -64,8 +64,8 @@ func defaultReadWorkers() int {
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > 4 {
-		workers = 4
+	if workers > 16 {
+		workers = 16
 	}
 	return workers
 }
