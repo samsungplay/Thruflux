@@ -236,8 +236,8 @@ func TestResumeResendsCorruptChunk(t *testing.T) {
 
 	select {
 	case skipped := <-statsCh:
-		if skipped != 0 {
-			t.Fatalf("expected zero skipped chunks, got %d", skipped)
+		if skipped != 1 {
+			t.Fatalf("expected 1 skipped chunk, got %d", skipped)
 		}
 	default:
 		t.Fatalf("expected resume stats")

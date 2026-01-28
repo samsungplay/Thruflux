@@ -297,14 +297,17 @@ type sendFileState struct {
 	readyOnce   sync.Once
 	bytesSent   int64
 
-	mu           sync.Mutex
-	nextChunk    uint32
-	inFlight     int
-	scheduleDone bool
-	endSent      bool
-	readyErr     error
-	plan         *resumePlan
-	file         *os.File
+	mu            sync.Mutex
+	nextChunk     uint32
+	inFlight      int
+	scheduleDone  bool
+	endSent       bool
+	verifyPending bool
+	resendPending bool
+	resendChunk   uint32
+	readyErr      error
+	plan          *resumePlan
+	file          *os.File
 }
 
 func (s *sendFileState) setReady(err error) {
@@ -334,7 +337,19 @@ func (s *sendFileState) nextChunkToSend() (uint32, uint32, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.scheduleDone {
+		if s.resendPending {
+			idx := s.resendChunk
+			s.resendPending = false
+			s.inFlight++
+			return idx, chunkSizeForIndex(s.item.Size, s.chunkSize, idx), true
+		}
 		return 0, 0, false
+	}
+	if s.resendPending {
+		idx := s.resendChunk
+		s.resendPending = false
+		s.inFlight++
+		return idx, chunkSizeForIndex(s.item.Size, s.chunkSize, idx), true
 	}
 	for s.nextChunk < s.totalChunks {
 		idx := s.nextChunk
@@ -359,6 +374,9 @@ func (s *sendFileState) markChunkDone() bool {
 	if s.inFlight > 0 {
 		s.inFlight--
 	}
+	if s.verifyPending {
+		return false
+	}
 	if s.scheduleDone && s.inFlight == 0 && !s.endSent {
 		s.endSent = true
 		return true
@@ -369,6 +387,9 @@ func (s *sendFileState) markChunkDone() bool {
 func (s *sendFileState) trySendEnd() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.verifyPending {
+		return false
+	}
 	if s.scheduleDone && s.inFlight == 0 && !s.endSent {
 		s.endSent = true
 		return true
@@ -748,7 +769,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}
 	}
 
-	scheduleWake := make(chan struct{}, 1)
+	scheduleWake := make(chan struct{}, parallelStreams*4+4)
 	signalWake := func() {
 		select {
 		case scheduleWake <- struct{}{}:
@@ -850,17 +871,12 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					return
 				}
 				completedChunks := uint32(bitmap.CountSet())
-				allComplete := totalChunks > 0 && completedChunks >= totalChunks
 				forceSendFrom := uint32(0)
 				verifiedChunk := info.LastVerifiedChunk
 				if verifiedChunk < totalChunks {
 					forceSendFrom = verifiedChunk + 1
 				} else {
 					forceSendFrom = totalChunks
-				}
-				if allComplete {
-					forceSendFrom = totalChunks
-					verifiedChunk = totalChunks
 				}
 
 				verifyMode := resumeVerify
@@ -870,21 +886,9 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				if verifyMode == "all" {
 					verifyMode = "last"
 				}
-				if !allComplete && verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone {
-					senderHash, err := hashFileChunk(state.filePath, verifiedChunk, chunkSize, state.item.Size, hashAlg)
-					if err != nil {
-						state.setReady(err)
-						setErr(err)
-						signalWake()
-						return
-					}
-					if senderHash != info.LastVerifiedHash {
-						forceSendFrom = verifiedChunk
-					} else if verifiedChunk+1 <= totalChunks {
-						forceSendFrom = verifiedChunk + 1
-					}
-				}
+				verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone
 
+				allComplete := totalChunks > 0 && completedChunks >= totalChunks
 				if !allComplete {
 					tail := resumeVerifyTail
 					if tail > 0 && forceSendFrom > 0 {
@@ -905,6 +909,30 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					forceSendFrom: forceSendFrom,
 					totalChunks:   totalChunks,
 					verifiedChunk: verifiedChunk,
+				}
+				if verifyNeeded {
+					state.mu.Lock()
+					state.verifyPending = true
+					state.mu.Unlock()
+					go func(vChunk uint32, vHash uint64) {
+						senderHash, err := hashFileChunk(state.filePath, vChunk, chunkSize, state.item.Size, hashAlg)
+						state.mu.Lock()
+						if err != nil {
+							state.readyErr = err
+							state.verifyPending = false
+							state.mu.Unlock()
+							setErr(err)
+							signalWake()
+							return
+						}
+						if senderHash != vHash {
+							state.resendChunk = vChunk
+							state.resendPending = true
+						}
+						state.verifyPending = false
+						state.mu.Unlock()
+						signalWake()
+					}(verifiedChunk, info.LastVerifiedHash)
 				}
 				if opts.ResumeStatsFn != nil {
 					plannedSkipped := uint32(0)
@@ -1122,6 +1150,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			case <-doneCh:
 				return nil, 0, 0, false
 			case <-scheduleWake:
+			case <-time.After(200 * time.Millisecond):
 			}
 		}
 	}
