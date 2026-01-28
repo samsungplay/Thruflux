@@ -619,8 +619,8 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	}
 	resumeEnabled := opts.Resume
 	resumeTimeout := opts.ResumeTimeout
-	if resumeTimeout <= 0 {
-		resumeTimeout = 1 * time.Second
+	if resumeTimeout < 0 {
+		resumeTimeout = 0
 	}
 	resumeVerify := opts.ResumeVerify
 	if resumeVerify == "" {
@@ -827,9 +827,15 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				return
 			}
 
-			resumeCtx, resumeCancel := context.WithTimeout(transferCtx, resumeTimeout)
+			resumeCtx := transferCtx
+			var resumeCancel context.CancelFunc
+			if resumeTimeout > 0 {
+				resumeCtx, resumeCancel = context.WithTimeout(transferCtx, resumeTimeout)
+			}
+			if resumeCancel != nil {
+				defer resumeCancel()
+			}
 			info, resumeErr := resumeRegistry.wait(resumeCtx, state.key)
-			resumeCancel()
 			if resumeErr != nil {
 				if !errors.Is(resumeErr, context.DeadlineExceeded) && !errors.Is(resumeErr, context.Canceled) {
 					state.setReady(resumeErr)
