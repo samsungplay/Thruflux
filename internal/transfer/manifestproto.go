@@ -33,7 +33,7 @@ const (
 
 	// Chunked transfer constants
 	DefaultChunkSize    = 4 * 1024 * 1024 // 4 MiB default chunk size
-	DefaultSendQueueMax = 16              // Bounded sender read-ahead queue depth
+	DefaultSendQueueMax = 64              // Bounded sender read-ahead queue depth
 	eofMagic            = "EOF1"          // EOF magic bytes
 	streamIOTimeout     = 10 * time.Minute
 )
@@ -595,7 +595,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 		crc   uint32
 		buf   []byte
 	}
-	const recvQueueDepth = 8
+	const recvQueueDepth = 64
 	readErrChan := make(chan error, 1)
 	chunkChan := make(chan recvChunk, recvQueueDepth)
 	readerCtx, readerCancel := context.WithCancel(ctx)
@@ -685,7 +685,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 
 	// Async write pipeline
-	const maxConcurrentWrites = 32
+	const maxConcurrentWrites = 64
 	writeSem := make(chan struct{}, maxConcurrentWrites)
 	writeErrChan := make(chan error, 1)
 	var writeWg sync.WaitGroup
