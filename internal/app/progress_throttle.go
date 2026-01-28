@@ -72,16 +72,10 @@ func (c *progressCollector) Flush(apply func(relpath string, bytes int64, total 
 	}
 }
 
-func (c *progressCollector) Force(relpath string) (int64, int64, bool) {
+func (c *progressCollector) Total(relpath string) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	total := c.totals[relpath]
-	if total <= 0 {
-		return 0, 0, false
-	}
-	c.latest[relpath] = total
-	c.dirty[relpath] = struct{}{}
-	return total, total, true
+	return c.totals[relpath]
 }
 
 func startProgressTicker(ctx context.Context, collector *progressCollector, apply func(relpath string, bytes int64, total int64)) func() {

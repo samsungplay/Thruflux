@@ -690,7 +690,15 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		},
 		FileDoneFn: func(relpath string, ok bool) {
 			progressState.MarkVerified(relpath, ok)
-			if bytes, total, ok := progressCollector.Force(relpath); ok {
+			if total := progressCollector.Total(relpath); total > 0 {
+				progressState.mu.Lock()
+				offset := progressState.skipOffset[relpath]
+				progressState.mu.Unlock()
+				bytes := total - offset
+				if bytes < 0 {
+					bytes = 0
+				}
+				progressCollector.Update(relpath, bytes, total)
 				progressState.Update(relpath, bytes, total)
 			}
 		},
@@ -941,13 +949,22 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 	p.mu.Lock()
 	offset := p.skipOffset[relpath]
 	effective := bytes + offset
+	if total > 0 {
+		if effective > total {
+			effective = total
+		}
+	}
 	prev := p.perFile[relpath]
 	if effective > prev {
 		delta := effective - prev
 		p.addBytesLocked(delta)
 		p.benchBytes += delta
 	}
-	p.perFile[relpath] = effective
+	if effective > prev {
+		p.perFile[relpath] = effective
+	} else {
+		p.perFile[relpath] = prev
+	}
 	p.currentFile = relpath
 	if total > 0 {
 		p.totals[relpath] = total

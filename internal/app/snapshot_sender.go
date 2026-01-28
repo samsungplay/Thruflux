@@ -890,8 +890,8 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferCancel()
 
 	progressCollector := newProgressCollector()
-	progressStop := startProgressTicker(transferCtx, progressCollector, func(relpath string, bytesSent int64, _ int64) {
-		s.updateSenderProgress(progressState, relpath, bytesSent)
+	progressStop := startProgressTicker(transferCtx, progressCollector, func(relpath string, bytesSent int64, total int64) {
+		s.updateSenderProgress(progressState, relpath, bytesSent, total)
 	})
 	defer progressStop()
 
@@ -926,8 +926,16 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	opts.FileDoneFn = func(relpath string, ok bool) {
 		s.markSenderVerified(progressState, relpath, ok)
-		if bytes, _, ok := progressCollector.Force(relpath); ok {
-			s.updateSenderProgress(progressState, relpath, bytes)
+		if total := progressCollector.Total(relpath); total > 0 {
+			progressState.mu.Lock()
+			offset := progressState.skipOffset[relpath]
+			progressState.mu.Unlock()
+			bytes := total - offset
+			if bytes < 0 {
+				bytes = 0
+			}
+			progressCollector.Update(relpath, bytes, total)
+			s.updateSenderProgress(progressState, relpath, bytes, total)
 		}
 	}
 
@@ -1507,6 +1515,7 @@ func (s *SnapshotSender) transportHeaderLines() []string {
 type senderProgress struct {
 	meter         *progress.Meter
 	perFile       map[string]int64
+	totals        map[string]int64
 	route         string
 	stage         string
 	probes        map[string]ice.ProbeState
@@ -1541,6 +1550,7 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 
 	state.mu.Lock()
 	state.perFile = make(map[string]int64)
+	state.totals = make(map[string]int64)
 	state.route = ""
 	state.stage = ""
 	state.probes = make(map[string]ice.ProbeState)
@@ -1566,20 +1576,30 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	return state
 }
 
-func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath string, bytes int64) {
+func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath string, bytes int64, total int64) {
 	if state == nil || relpath == "" {
 		return
 	}
 	state.mu.Lock()
 	offset := state.skipOffset[relpath]
 	effective := bytes + offset
+	if total > 0 {
+		state.totals[relpath] = total
+		if effective > total {
+			effective = total
+		}
+	}
 	prev := state.perFile[relpath]
 	if effective > prev {
 		delta := effective - prev
 		state.meter.Add(int(delta))
 		state.sentBytes += delta
 	}
-	state.perFile[relpath] = effective
+	if effective > prev {
+		state.perFile[relpath] = effective
+	} else {
+		state.perFile[relpath] = prev
+	}
 	state.mu.Unlock()
 }
 
