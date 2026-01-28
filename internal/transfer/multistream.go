@@ -2378,6 +2378,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return m, err
 		case err := <-dataErrCh:
 			if err != nil {
+				if isGracefulRemoteClose(err) && completedCount >= totalFiles {
+					return m, nil
+				}
 				setRecvErr(err)
 				return m, err
 			}
