@@ -50,7 +50,6 @@ func ClientConfig() *tls.Config {
 func DefaultServerQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                30 * time.Second,
-		DisablePathMTUDiscovery:        true,
 		MaxIncomingStreams:             100,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
@@ -63,7 +62,6 @@ func DefaultServerQUICConfig() *quic.Config {
 func DefaultClientQUICConfig() *quic.Config {
 	return &quic.Config{
 		KeepAlivePeriod:                30 * time.Second,
-		DisablePathMTUDiscovery:        true,
 		InitialConnectionReceiveWindow: 64 * 1024 * 1024,
 		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 		InitialStreamReceiveWindow:     16 * 1024 * 1024,
