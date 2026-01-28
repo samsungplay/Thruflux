@@ -57,7 +57,7 @@ func sendDumbFile(ctx context.Context, conn transfer.Conn, filePath string) erro
 	return nil
 }
 
-func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string) (string, error) {
+func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string, progressFn func(string, int64, int64)) (string, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to accept stream: %w", err)
@@ -84,9 +84,34 @@ func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string) (strin
 	}
 	defer outFile.Close()
 
+	total := int64(size)
+	reader := io.LimitReader(stream, total)
 	buf := make([]byte, dumbCopyBufferSize)
-	if _, err := io.CopyBuffer(outFile, io.LimitReader(stream, int64(size)), buf); err != nil {
-		return "", fmt.Errorf("failed to receive file: %w", err)
+	var received int64
+	var lastProgress int64
+	for received < total {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			if _, werr := outFile.Write(buf[:n]); werr != nil {
+				return "", fmt.Errorf("failed to write output: %w", werr)
+			}
+			received += int64(n)
+			if progressFn != nil && shouldUpdateProgress(&lastProgress) {
+				progressFn(string(nameBuf), received, total)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to receive file: %w", err)
+		}
+	}
+	if received != total {
+		return "", fmt.Errorf("short read: got %d want %d", received, total)
+	}
+	if progressFn != nil {
+		progressFn(string(nameBuf), received, total)
 	}
 	return outPath, nil
 }

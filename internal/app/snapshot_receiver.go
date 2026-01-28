@@ -513,7 +513,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	authCancel()
 
 	if r.dumb {
-		if _, err := recvDumbFile(baseCtx, transferConn, r.outDir); err != nil {
+		if _, err := recvDumbFile(baseCtx, transferConn, r.outDir, func(relpath string, bytesReceived int64, total int64) {
+			if !shouldUpdateProgress(&lastProgress) {
+				return
+			}
+			progressState.Update(relpath, bytesReceived, total)
+		}); err != nil {
 			stopUIFn()
 			fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
 			r.logger.Error("dumb transfer failed", "error", err)
