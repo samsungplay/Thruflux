@@ -611,17 +611,20 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			dumbConns = append(dumbConns, extraConns...)
 		}
 
-		if err := recvDumbDiscardMulti(baseCtx, dumbConns, func(relpath string, bytesReceived int64, total int64) {
-			if !shouldUpdateProgress(&lastProgress) {
-				return
-			}
+		dumbCollector := newProgressCollector()
+		dumbStop := startProgressTicker(baseCtx, dumbCollector, func(relpath string, bytesReceived int64, total int64) {
 			progressState.Update(relpath, bytesReceived, total)
+		})
+		if err := recvDumbDiscardMulti(baseCtx, dumbConns, func(relpath string, bytesReceived int64, total int64) {
+			dumbCollector.Update(relpath, bytesReceived, total)
 		}); err != nil {
+			dumbStop()
 			stopUIFn()
 			fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
 			r.logger.Error("dumb transfer failed", "error", err)
 			exitWith(1)
 		}
+		dumbStop()
 		_ = r.sendDumbQUICDone(len(dumbConns))
 		progressState.ForceComplete()
 		exitWith(0)
@@ -662,16 +665,19 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	recvCtx, recvCancel := context.WithCancel(baseCtx)
 	defer recvCancel()
 
+	progressCollector := newProgressCollector()
+	progressStop := startProgressTicker(recvCtx, progressCollector, func(relpath string, bytesReceived int64, total int64) {
+		progressState.Update(relpath, bytesReceived, total)
+	})
+	defer progressStop()
+
 	opts := transfer.Options{
 		Resume:        true,
 		NoRootDir:     true,
 		HashAlg:       "crc32c",
 		ParallelFiles: totalStreams,
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
-			if !shouldUpdateProgress(&lastProgress) {
-				return
-			}
-			progressState.Update(relpath, bytesReceived, total)
+			progressCollector.Update(relpath, bytesReceived, total)
 		},
 		TransferStatsFn: func(activeFiles, completedFiles int, remainingBytes int64) {
 			if !shouldUpdateProgress(&lastStats) {
@@ -684,6 +690,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		},
 		FileDoneFn: func(relpath string, ok bool) {
 			progressState.MarkVerified(relpath, ok)
+			if bytes, total, ok := progressCollector.Force(relpath); ok {
+				progressState.Update(relpath, bytes, total)
+			}
 		},
 	}
 

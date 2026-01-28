@@ -885,10 +885,15 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	})
 	s.setTuneLine(fmt.Sprintf("Params: %s", formatTuneParams(s.getParams())))
 
-	var lastProgress int64
 	var lastStats int64
 	transferCtx, transferCancel := context.WithCancel(ctx)
 	defer transferCancel()
+
+	progressCollector := newProgressCollector()
+	progressStop := startProgressTicker(transferCtx, progressCollector, func(relpath string, bytesSent int64, _ int64) {
+		s.updateSenderProgress(progressState, relpath, bytesSent)
+	})
+	defer progressStop()
 
 	opts := s.transferOptions()
 	opts.ParallelFiles = totalStreams
@@ -911,10 +916,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		s.addSenderSkipped(progressState, relpath, skippedBytes, verifyBytes)
 	}
 	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
-		if !shouldUpdateProgress(&lastProgress) {
-			return
-		}
-		s.updateSenderProgress(progressState, relpath, bytesSent)
+		progressCollector.Update(relpath, bytesSent, total)
 	}
 	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
 		if !shouldUpdateProgress(&lastStats) {
@@ -924,6 +926,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	opts.FileDoneFn = func(relpath string, ok bool) {
 		s.markSenderVerified(progressState, relpath, ok)
+		if bytes, _, ok := progressCollector.Force(relpath); ok {
+			s.updateSenderProgress(progressState, relpath, bytes)
+		}
 	}
 
 	var multiTransferConn transfer.Conn = conns[0]
