@@ -873,6 +873,7 @@ type receiverProgress struct {
 	pendingSkip      map[string]resumeSkip
 	verifySeen       map[string]bool
 	verified         map[string]bool
+	skipOffset       map[string]int64
 	verifyTotal      int
 	verifyDone       int
 	currentFile      string
@@ -915,6 +916,7 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		verifying:        make(map[string]bool),
 		verifySeen:       make(map[string]bool),
 		verified:         make(map[string]bool),
+		skipOffset:       make(map[string]int64),
 		pendingSkipBytes: make(map[string]int64),
 		pendingVerify:    make(map[string]int64),
 		verifyingActive:  false,
@@ -937,13 +939,15 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 		return
 	}
 	p.mu.Lock()
+	offset := p.skipOffset[relpath]
+	effective := bytes + offset
 	prev := p.perFile[relpath]
-	if bytes > prev {
-		delta := bytes - prev
+	if effective > prev {
+		delta := effective - prev
 		p.addBytesLocked(delta)
 		p.benchBytes += delta
 	}
-	p.perFile[relpath] = bytes
+	p.perFile[relpath] = effective
 	p.currentFile = relpath
 	if total > 0 {
 		p.totals[relpath] = total
@@ -1045,6 +1049,12 @@ func (p *receiverProgress) applySkipLocked(relpath string, totalBytes int64, ski
 	verifyBytes := computeVerifyBytes(totalBytes, skip.totalChunks, skip.chunkSize)
 	if skippedBytes > 0 {
 		p.addSkippedLocked(skippedBytes)
+		if skippedBytes > p.skipOffset[relpath] {
+			p.skipOffset[relpath] = skippedBytes
+		}
+		if p.perFile[relpath] < skippedBytes {
+			p.perFile[relpath] = skippedBytes
+		}
 	}
 	if verifyBytes > 0 {
 		p.pendingVerify[relpath] = verifyBytes

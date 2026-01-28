@@ -1513,6 +1513,7 @@ type senderProgress struct {
 	appliedSkip   map[string]bool
 	verifySeen    map[string]bool
 	verified      map[string]bool
+	skipOffset    map[string]int64
 	verifyTotal   int
 	verifyDone    int
 	pendingVerify map[string]int64
@@ -1546,6 +1547,7 @@ func (s *SnapshotSender) initSenderProgress(peerID string, totalBytes int64) *se
 	state.appliedSkip = make(map[string]bool)
 	state.verifySeen = make(map[string]bool)
 	state.verified = make(map[string]bool)
+	state.skipOffset = make(map[string]int64)
 	state.verifyTotal = 0
 	state.verifyDone = 0
 	state.pendingVerify = make(map[string]int64)
@@ -1569,13 +1571,15 @@ func (s *SnapshotSender) updateSenderProgress(state *senderProgress, relpath str
 		return
 	}
 	state.mu.Lock()
+	offset := state.skipOffset[relpath]
+	effective := bytes + offset
 	prev := state.perFile[relpath]
-	if bytes > prev {
-		delta := bytes - prev
+	if effective > prev {
+		delta := effective - prev
 		state.meter.Add(int(delta))
 		state.sentBytes += delta
 	}
-	state.perFile[relpath] = bytes
+	state.perFile[relpath] = effective
 	state.mu.Unlock()
 }
 
@@ -1601,8 +1605,14 @@ func (s *SnapshotSender) addSenderSkipped(state *senderProgress, relpath string,
 		return
 	}
 	state.appliedSkip[relpath] = true
+	if skippedBytes > state.skipOffset[relpath] {
+		state.skipOffset[relpath] = skippedBytes
+	}
 	state.resumedFiles++
 	state.meter.Advance(int(skippedBytes))
+	if state.perFile[relpath] < skippedBytes {
+		state.perFile[relpath] = skippedBytes
+	}
 	if !state.verifySeen[relpath] {
 		state.verifySeen[relpath] = true
 		state.verifyTotal++
