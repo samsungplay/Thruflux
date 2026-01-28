@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +26,11 @@ func (m receiverTeaModel) Init() tea.Cmd {
 
 func (m receiverTeaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg.(type) {
+	case tea.KeyMsg:
+		key := msg.(tea.KeyMsg)
+		if key.Type == tea.KeyCtrlC {
+			os.Exit(130)
+		}
 	case tickMsg:
 		m.view = m.viewFn()
 		return m, nil
@@ -50,6 +56,11 @@ func (m senderTeaModel) Init() tea.Cmd {
 
 func (m senderTeaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg.(type) {
+	case tea.KeyMsg:
+		key := msg.(tea.KeyMsg)
+		if key.Type == tea.KeyCtrlC {
+			os.Exit(130)
+		}
 	case tickMsg:
 		m.view = m.viewFn()
 		return m, nil
