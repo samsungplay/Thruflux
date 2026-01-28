@@ -19,6 +19,7 @@ const (
 	controlTypeFileResumeInfo = byte(0x14)
 	controlTypeResumeRequest  = byte(0x15)
 	controlTypeCreditBatch    = byte(0x16)
+	controlTypeDataStreams    = byte(0x17)
 	controlTypeEnd            = byte(0xFF)
 )
 
@@ -66,6 +67,10 @@ type FileResumeInfo struct {
 type ResumeRequest struct {
 	FileID   string
 	StreamID uint64
+}
+
+type DataStreams struct {
+	Count uint16
 }
 
 func writeControlHeader(s Stream, m manifest.Manifest) error {
@@ -478,6 +483,24 @@ func readResumeRequest(s Stream) (ResumeRequest, error) {
 	return msg, nil
 }
 
+func writeDataStreams(s Stream, msg DataStreams) error {
+	if err := writeFullControl(s, []byte{controlTypeDataStreams}, "data streams type"); err != nil {
+		return fmt.Errorf("failed to write DataStreams type: %w", err)
+	}
+	if err := binary.Write(s, binary.BigEndian, msg.Count); err != nil {
+		return fmt.Errorf("failed to write data streams count: %w", err)
+	}
+	return nil
+}
+
+func readDataStreams(s Stream) (DataStreams, error) {
+	var msg DataStreams
+	if err := binary.Read(s, binary.BigEndian, &msg.Count); err != nil {
+		return msg, fmt.Errorf("failed to read data streams count: %w", err)
+	}
+	return msg, nil
+}
+
 func writeControlEnd(s Stream) error {
 	if err := writeFullControl(s, []byte{controlTypeEnd}, "control end"); err != nil {
 		return fmt.Errorf("failed to write End type: %w", err)
@@ -513,6 +536,9 @@ func readControlMessage(s Stream) (byte, any, error) {
 	case controlTypeResumeRequest:
 		msg, err := readResumeRequest(s)
 		return controlTypeResumeRequest, msg, err
+	case controlTypeDataStreams:
+		msg, err := readDataStreams(s)
+		return controlTypeDataStreams, msg, err
 	case controlTypeEnd:
 		return controlTypeEnd, nil, nil
 	default:

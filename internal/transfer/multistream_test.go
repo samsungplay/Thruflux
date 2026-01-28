@@ -64,11 +64,11 @@ func TestSendRecvManifestMultiStream_ParallelFiles(t *testing.T) {
 	sendErr := SendManifestMultiStream(ctx, senderConn, srcDir, m, Options{
 		ParallelFiles: 2,
 	})
+	recvErr := <-recvErrCh
 	if sendErr != nil {
 		t.Fatalf("SendManifestMultiStream: %v", sendErr)
 	}
-
-	if recvErr := <-recvErrCh; recvErr != nil {
+	if recvErr != nil {
 		t.Fatalf("RecvManifestMultiStream: %v", recvErr)
 	}
 

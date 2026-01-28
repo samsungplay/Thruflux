@@ -165,6 +165,25 @@ func (s *Sidecar) MarkComplete(i uint32) {
 	s.dirty = true
 }
 
+// MarkCompleteIfUnset marks chunk i as complete if it was not already set.
+// It returns true if the bit changed.
+func (s *Sidecar) MarkCompleteIfUnset(i uint32) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s == nil || s.bitmap == nil {
+		return false
+	}
+	if i >= s.TotalChunks {
+		return false
+	}
+	if s.bitmap.Get(int(i)) {
+		return false
+	}
+	s.bitmap.Set(int(i))
+	s.dirty = true
+	return true
+}
+
 // IsComplete reports if chunk i is marked complete.
 func (s *Sidecar) IsComplete(i uint32) bool {
 	s.mu.Lock()

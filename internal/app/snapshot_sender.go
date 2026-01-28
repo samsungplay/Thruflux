@@ -1715,9 +1715,14 @@ func (s *SnapshotSender) senderSentBytes(peerID string) int64 {
 // Auto-tuning removed; parameters are heuristic-driven.
 
 func formatTuneParams(p perfParams) string {
-	return fmt.Sprintf("Performance: chunk_size=%s parallel_streams=%d parallel_connections=%d",
+	perConn := 0
+	if p.ParallelConnections > 0 {
+		perConn = (p.ParallelStreams + p.ParallelConnections - 1) / p.ParallelConnections
+	}
+	return fmt.Sprintf("Performance: chunk_size=%s total_streams=%d (per_conn=%d) total_connections=%d",
 		formatMiB(p.ChunkSize),
 		p.ParallelStreams,
+		perConn,
 		p.ParallelConnections,
 	)
 }

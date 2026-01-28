@@ -59,6 +59,9 @@ func TestControlProto_RoundTrip(t *testing.T) {
 		LastVerifiedChunk: 9,
 		LastVerifiedHash:  0xDEADBEEF,
 	}
+	dataStreams := DataStreams{
+		Count: 8,
+	}
 
 	if err := writeFileBegin(stream, begin); err != nil {
 		t.Fatalf("write FileBegin: %v", err)
@@ -80,6 +83,9 @@ func TestControlProto_RoundTrip(t *testing.T) {
 	}
 	if err := writeFileResumeInfo(stream, resumeInfo); err != nil {
 		t.Fatalf("write FileResumeInfo: %v", err)
+	}
+	if err := writeDataStreams(stream, dataStreams); err != nil {
+		t.Fatalf("write DataStreams: %v", err)
 	}
 
 	msgType, msg, err := readControlMessage(stream)
@@ -153,5 +159,14 @@ func TestControlProto_RoundTrip(t *testing.T) {
 		decodedInfo.LastVerifiedHash != resumeInfo.LastVerifiedHash ||
 		!bytes.Equal(decodedInfo.Bitmap, resumeInfo.Bitmap) {
 		t.Fatalf("FileResumeInfo mismatch: got %+v want %+v", decodedInfo, resumeInfo)
+	}
+
+	msgType, msg, err = readControlMessage(stream)
+	if err != nil || msgType != controlTypeDataStreams {
+		t.Fatalf("read DataStreams: type=%v err=%v", msgType, err)
+	}
+	decodedStreams := msg.(DataStreams)
+	if decodedStreams != dataStreams {
+		t.Fatalf("DataStreams mismatch: got %+v want %+v", decodedStreams, dataStreams)
 	}
 }

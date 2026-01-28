@@ -13,11 +13,11 @@ func computeParallelBudget(fileCount, requestedStreams, connections int, allowSt
 	if totalStreams < 1 {
 		totalStreams = 1
 	}
+	if connections > 1 && totalStreams < connections {
+		totalStreams = connections
+	}
 	if !allowStriping && fileCount > 0 && totalStreams > fileCount {
 		totalStreams = fileCount
-	}
-	if allowStriping && connections > 1 && totalStreams < connections {
-		totalStreams = connections
 	}
 	if connections > 1 && totalStreams > 1 {
 		maxTotal := connections * 4

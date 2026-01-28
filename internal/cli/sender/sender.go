@@ -45,7 +45,7 @@ func Run(args []string) {
 	var dumbSizeBytes int64
 	dumbName := ""
 	dumbConnections := 1
-	parallelConnections := 4
+	totalConnections := 4
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 512 * 1024 * 1024
@@ -55,7 +55,7 @@ func Run(args []string) {
 	turnServers := make([]string, 0)
 	turnOnly := false
 	var chunkSize uint64
-	parallelStreams := 0
+	totalStreams := 0
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--max-receivers" && i+1 < len(args) {
@@ -93,15 +93,15 @@ func Run(args []string) {
 			dumbConnections = parsed
 			continue
 		}
-		if arg == "--parallel-connections" && i+1 < len(args) {
+		if arg == "--total-connections" && i+1 < len(args) {
 			i++
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 1 || parsed > 16 {
-				fmt.Fprintln(os.Stderr, "invalid --parallel-connections value")
+				fmt.Fprintln(os.Stderr, "invalid --total-connections value")
 				os.Exit(2)
 			}
-			parallelConnections = parsed
+			totalConnections = parsed
 			continue
 		}
 		if arg == "--server-url" && i+1 < len(args) {
@@ -178,7 +178,7 @@ func Run(args []string) {
 			quicMaxIncomingStreams = parsed
 			continue
 		}
-		if (arg == "--chunk-size" || arg == "--parallel-streams" || arg == "--parallel-files") && i+1 < len(args) {
+		if (arg == "--chunk-size" || arg == "--total-streams") && i+1 < len(args) {
 			i++
 			value := args[i]
 			switch arg {
@@ -189,13 +189,13 @@ func Run(args []string) {
 					os.Exit(2)
 				}
 				chunkSize = parsed
-			case "--parallel-streams", "--parallel-files":
+			case "--total-streams":
 				parsed, err := strconv.Atoi(value)
 				if err != nil || parsed < 1 || parsed > 32 {
-					fmt.Fprintln(os.Stderr, "invalid --parallel-streams value")
+					fmt.Fprintln(os.Stderr, "invalid --total-streams value")
 					os.Exit(2)
 				}
-				parallelStreams = parsed
+				totalStreams = parsed
 			}
 			continue
 		}
@@ -246,7 +246,7 @@ func Run(args []string) {
 		DumbSizeBytes:          dumbSizeBytes,
 		DumbName:               dumbName,
 		DumbConnections:        dumbConnections,
-		ParallelConnections:    parallelConnections,
+		ParallelConnections:    totalConnections,
 		UDPReadBufferBytes:     udpReadBufferBytes,
 		UDPWriteBufferBytes:    udpWriteBufferBytes,
 		QuicConnWindowBytes:    quicConnWindowBytes,
@@ -257,7 +257,7 @@ func Run(args []string) {
 		TurnOnly:               turnOnly,
 		TransferOpts: transfer.Options{
 			ChunkSize:     uint32(chunkSize),
-			ParallelFiles: parallelStreams,
+			ParallelFiles: totalStreams,
 		},
 	}); err != nil {
 		logger.Error("snapshot sender failed", "error", err)
@@ -281,14 +281,14 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
 	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
 	fmt.Fprintln(os.Stderr, "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")
-	fmt.Fprintln(os.Stderr, "  --parallel-connections N    parallel QUIC connections (default 4)")
+	fmt.Fprintln(os.Stderr, "  --total-connections N       total QUIC connections (default 4)")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
 	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
 	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
 	fmt.Fprintln(os.Stderr, "  --chunk-size N              chunk size in bytes (default 0=auto)")
-	fmt.Fprintln(os.Stderr, "  --parallel-streams N        max concurrent transfer streams (1..32)")
+	fmt.Fprintln(os.Stderr, "  --total-streams N           total concurrent transfer streams (1..32)")
 }
 
 func hasHelpFlag(args []string) bool {
