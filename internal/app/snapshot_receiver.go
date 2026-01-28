@@ -512,6 +512,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	authCancel()
 
+	var lastProgress int64
 	if r.dumb {
 		if _, err := recvDumbFile(baseCtx, transferConn, r.outDir, func(relpath string, bytesReceived int64, total int64) {
 			if !shouldUpdateProgress(&lastProgress) {
@@ -528,7 +529,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(0)
 	}
 
-	var lastProgress int64
 	var lastStats int64
 	opts := transfer.Options{
 		Resume:    true,
