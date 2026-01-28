@@ -41,7 +41,7 @@ func Run(args []string) {
 	dumb := false
 	dumbTCP := false
 	totalConnections := 4
-	totalStreams := 0
+	totalStreams := 8
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 512 * 1024 * 1024

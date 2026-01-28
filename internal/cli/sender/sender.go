@@ -55,7 +55,7 @@ func Run(args []string) {
 	turnServers := make([]string, 0)
 	turnOnly := false
 	var chunkSize uint64
-	totalStreams := 0
+	totalStreams := 8
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--max-receivers" && i+1 < len(args) {
