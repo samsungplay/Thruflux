@@ -833,25 +833,48 @@ func readLine(reader *bufio.Reader) (string, error) {
 }
 
 func hasResumeData(outDir, root string) bool {
-	sidecarDir := filepath.Dir(transfer.SidecarPath(outDir, root, "probe"))
-	entries, err := os.ReadDir(sidecarDir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
+	for _, sidecarDir := range resumeSidecarDirs(outDir, root) {
+		entries, err := os.ReadDir(sidecarDir)
+		if err != nil {
 			continue
 		}
-		if strings.HasSuffix(entry.Name(), ".sbxmap") {
-			return true
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".sbxmap") {
+				return true
+			}
 		}
 	}
 	return false
 }
 
 func clearResumeData(outDir, root string) error {
-	sidecarDir := filepath.Dir(transfer.SidecarPath(outDir, root, "probe"))
-	return os.RemoveAll(sidecarDir)
+	var firstErr error
+	for _, sidecarDir := range resumeSidecarDirs(outDir, root) {
+		if err := os.RemoveAll(sidecarDir); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func resumeSidecarDirs(outDir, root string) []string {
+	seen := make(map[string]struct{}, 2)
+	add := func(r string) {
+		dir := filepath.Dir(transfer.SidecarPath(outDir, r, "probe"))
+		seen[dir] = struct{}{}
+	}
+	add("")
+	if strings.TrimSpace(root) != "" {
+		add(root)
+	}
+	dirs := make([]string, 0, len(seen))
+	for dir := range seen {
+		dirs = append(dirs, dir)
+	}
+	return dirs
 }
 
 func formatBytes(n int64) string {
