@@ -10,7 +10,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 )
 
-const dumbCopyBufferSize = 8 * 1024 * 1024
+const dumbCopyBufferSize = 1 * 1024 * 1024
 
 type zeroReader struct{}
 

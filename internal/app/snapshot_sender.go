@@ -785,11 +785,6 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for _, c := range extra {
-				c.close()
-			}
-		}()
 		conns := make([]transfer.Conn, 0, 1+len(extra))
 		conns = append(conns, transferConn)
 		for _, c := range extra {
