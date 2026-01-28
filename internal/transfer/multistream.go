@@ -2137,6 +2137,15 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		state.done = true
 		state.mu.Unlock()
 
+		if opts.Resume && state.sidecar != nil {
+			if err := state.sidecar.Flush(); err != nil {
+				ok = false
+				if errMsg == "" {
+					errMsg = fmt.Sprintf("failed to flush sidecar: %v", err)
+				}
+			}
+		}
+
 		if opts.FileDoneFn != nil {
 			opts.FileDoneFn(state.item.RelPath, ok)
 		}
