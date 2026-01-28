@@ -1,5 +1,5 @@
 # Thruflux
-**Project and default server are under temporary maintenance, things might not work at the moment. But it will be back up soon (within 1 day of the latest README commit) so watch out!** 
+**Project and default server are under heavy maintenance, things will NOT work at the moment. But it will be back up soon (within 1 day of the latest README commit) so watch out!** 
 
 **Update: Many experiments ongoing to push throughput further, and so far it's showing very good signs, up to ~x2.5 faster than before! Please wait until next release, it's coming soon :)**
 
