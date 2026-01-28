@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
@@ -550,100 +549,6 @@ sendLoop:
 	}
 
 	// Write EOF marker: "EOF1"
-	if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
-		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
-	}
-
-	return fileCRC.Sum32(), nil
-}
-
-// sendFileChunksStriped sends a file across multiple streams by interleaving chunk indices.
-// Each stripe sends chunks where (index % stripeCount) == stripeIndex.
-func sendFileChunksStriped(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, stripeIndex, stripeCount int, progressFn ProgressFn, totalCounter *int64) (uint32, error) {
-	if fileSize > maxFileSize {
-		return 0, ErrFileSizeTooLarge
-	}
-	if chunkSize == 0 {
-		chunkSize = DefaultChunkSize
-	}
-	if stripeCount < 1 {
-		return 0, fmt.Errorf("invalid stripe count %d", stripeCount)
-	}
-	if stripeIndex < 0 || stripeIndex >= stripeCount {
-		return 0, fmt.Errorf("invalid stripe index %d", stripeIndex)
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
-	totalChunks := int((fileSize + int64(chunkSize) - 1) / int64(chunkSize))
-	fileCRC := crc32.New(crc32cTable)
-
-	bufPool := chunkPoolFor(chunkSize)
-	if bufPool == nil {
-		bufPool = bufpool.New(int(chunkSize))
-	}
-
-	var bytesProcessed int64
-	for chunkIndex := stripeIndex; chunkIndex < totalChunks; chunkIndex += stripeCount {
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		default:
-		}
-
-		offset := int64(chunkIndex) * int64(chunkSize)
-		remaining := fileSize - offset
-		if remaining <= 0 {
-			break
-		}
-		chunkLen := int64(chunkSize)
-		if remaining < chunkLen {
-			chunkLen = remaining
-		}
-
-		buf := bufPool.Get()
-		n, err := readAtWithPool(ctx, file, offset, buf[:chunkLen])
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			bufPool.Put(buf)
-			return 0, fmt.Errorf("failed to read file: %w", err)
-		}
-		if n == 0 {
-			bufPool.Put(buf)
-			break
-		}
-
-		chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-		fileCRC.Write(buf[:n])
-
-		var header [12]byte
-		binary.BigEndian.PutUint32(header[0:4], uint32(chunkIndex))
-		binary.BigEndian.PutUint32(header[4:8], uint32(n))
-		binary.BigEndian.PutUint32(header[8:12], chunkCRC)
-		if err := writeFullWithTimeout(ctx, s, header[:], relPath, "chunk-header"); err != nil {
-			bufPool.Put(buf)
-			return 0, fmt.Errorf("failed to write chunk header: %w", err)
-		}
-		if err := writeFullWithTimeout(ctx, s, buf[:n], relPath, "chunk-data"); err != nil {
-			bufPool.Put(buf)
-			return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
-		}
-		bufPool.Put(buf)
-
-		bytesProcessed += int64(n)
-		if progressFn != nil && totalCounter != nil {
-			total := atomic.AddInt64(totalCounter, int64(n))
-			progressFn(relPath, total, fileSize)
-		}
-	}
-
-	if progressFn != nil && totalCounter == nil {
-		progressFn(relPath, bytesProcessed, fileSize)
-	}
-
 	if err := writeFullWithTimeout(ctx, s, []byte(eofMagic), relPath, "eof"); err != nil {
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}

@@ -50,8 +50,6 @@ func Run(args []string) {
 	turnOnly := false
 	var chunkSize uint64
 	parallelFiles := 0
-	fileStreams := 1
-	var stripeMinBytes int64
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--max-receivers" && i+1 < len(args) {
@@ -143,7 +141,7 @@ func Run(args []string) {
 			quicMaxIncomingStreams = parsed
 			continue
 		}
-		if (arg == "--chunk-size" || arg == "--parallel-files" || arg == "--file-streams" || arg == "--stripe-min-bytes") && i+1 < len(args) {
+		if (arg == "--chunk-size" || arg == "--parallel-files") && i+1 < len(args) {
 			i++
 			value := args[i]
 			switch arg {
@@ -161,20 +159,6 @@ func Run(args []string) {
 					os.Exit(2)
 				}
 				parallelFiles = parsed
-			case "--file-streams":
-				parsed, err := strconv.Atoi(value)
-				if err != nil || parsed < 1 || parsed > 16 {
-					fmt.Fprintln(os.Stderr, "invalid --file-streams value")
-					os.Exit(2)
-				}
-				fileStreams = parsed
-			case "--stripe-min-bytes":
-				parsed, err := strconv.ParseInt(value, 10, 64)
-				if err != nil || parsed < 0 {
-					fmt.Fprintln(os.Stderr, "invalid --stripe-min-bytes value")
-					os.Exit(2)
-				}
-				stripeMinBytes = parsed
 			}
 			continue
 		}
@@ -196,9 +180,6 @@ func Run(args []string) {
 	if len(stunServers) == 0 {
 		stunServers = append([]string{}, senderDefaultStunServers...)
 	}
-	if fileStreams < 1 {
-		fileStreams = 1
-	}
 
 	logLevel := "error"
 	logger := logging.New("thruflux-sender", logLevel)
@@ -217,10 +198,8 @@ func Run(args []string) {
 		TurnServers:            turnServers,
 		TurnOnly:               turnOnly,
 		TransferOpts: transfer.Options{
-			ChunkSize:      uint32(chunkSize),
-			ParallelFiles:  parallelFiles,
-			FileStreams:    fileStreams,
-			StripeMinBytes: stripeMinBytes,
+			ChunkSize:     uint32(chunkSize),
+			ParallelFiles: parallelFiles,
 		},
 	}); err != nil {
 		logger.Error("snapshot sender failed", "error", err)
@@ -248,8 +227,6 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
 	fmt.Fprintln(os.Stderr, "  --chunk-size N              chunk size in bytes (default 0=auto)")
 	fmt.Fprintln(os.Stderr, "  --parallel-files N          max concurrent file transfers (1..8)")
-	fmt.Fprintln(os.Stderr, "  --file-streams N            streams per large file (1..16, default 1)")
-	fmt.Fprintln(os.Stderr, "  --stripe-min-bytes N        minimum file size to stripe (default 0=auto)")
 }
 
 func hasHelpFlag(args []string) bool {

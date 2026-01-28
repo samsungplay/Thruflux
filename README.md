@@ -125,8 +125,6 @@ thru host <paths...> [flags]
 | `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `100`).                                                                                    |
 | `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
 | `--parallel-files`                                        | Concurrent file transfers (1..8).                                                                                             |
-| `--file-streams`                                          | Streams per large file (1..16, default `1`).                                                                                  |
-| `--stripe-min-bytes`                                      | Minimum file size to enable striping (default auto).                                                                          |
 | `--benchmark`                                             | Print throughput stats.                                                                                                       |
 | `--version`, `-v`                                         | Print the Thruflux CLI version.                                                                                               |
 | `--help`, `-h`                                            | Show usage and flag descriptions.                                                                                             |
