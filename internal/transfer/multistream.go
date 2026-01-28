@@ -2335,7 +2335,15 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		state, ok := stateByKey[req.StreamID]
 		stateMu.Unlock()
 		if !ok {
-			return fmt.Errorf("resume request for unknown file %d", req.StreamID)
+			if !fileReady.wait(recvCtx, req.StreamID) {
+				return fmt.Errorf("resume request for unknown file %d", req.StreamID)
+			}
+			stateMu.Lock()
+			state, ok = stateByKey[req.StreamID]
+			stateMu.Unlock()
+			if !ok {
+				return fmt.Errorf("resume request for unknown file %d", req.StreamID)
+			}
 		}
 		if req.FileID != "" && state.item.ID != "" && req.FileID != state.item.ID {
 			return fmt.Errorf("resume request file id mismatch for %s", state.item.RelPath)
