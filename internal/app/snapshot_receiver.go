@@ -72,8 +72,10 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		return fmt.Errorf("failed to resolve output dir: %w", err)
 	}
 	cfg.OutDir = absOut
-	if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output dir: %w", err)
+	if !cfg.Dumb {
+		if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
+			return fmt.Errorf("failed to create output dir: %w", err)
+		}
 	}
 
 	peerID := randomPeerID()
@@ -514,7 +516,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	var lastProgress int64
 	if r.dumb {
-		if _, err := recvDumbFile(baseCtx, transferConn, r.outDir, func(relpath string, bytesReceived int64, total int64) {
+		if _, err := recvDumbDiscard(baseCtx, transferConn, func(relpath string, bytesReceived int64, total int64) {
 			if !shouldUpdateProgress(&lastProgress) {
 				return
 			}

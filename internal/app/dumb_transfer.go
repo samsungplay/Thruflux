@@ -5,33 +5,31 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 )
 
 const dumbCopyBufferSize = 8 * 1024 * 1024
 
-func sendDumbFile(ctx context.Context, conn transfer.Conn, filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
+type zeroReader struct{}
 
-	info, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat file: %w", err)
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
 	}
-	if info.IsDir() {
-		return fmt.Errorf("dumb mode requires a single file, got directory: %s", filePath)
-	}
+	return len(p), nil
+}
 
-	name := filepath.Base(filePath)
+func sendDumbData(ctx context.Context, conn transfer.Conn, name string, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("invalid size")
+	}
 	nameBytes := []byte(name)
+	if len(nameBytes) == 0 {
+		nameBytes = []byte("mem.bin")
+	}
 	if len(nameBytes) > 0xFFFF {
-		return fmt.Errorf("file name too long")
+		return fmt.Errorf("name too long")
 	}
 
 	stream, err := conn.OpenStream(ctx)
@@ -46,18 +44,19 @@ func sendDumbFile(ctx context.Context, conn transfer.Conn, filePath string) erro
 	if _, err := stream.Write(nameBytes); err != nil {
 		return fmt.Errorf("failed to write name: %w", err)
 	}
-	if err := binary.Write(stream, binary.BigEndian, uint64(info.Size())); err != nil {
+	if err := binary.Write(stream, binary.BigEndian, uint64(size)); err != nil {
 		return fmt.Errorf("failed to write size: %w", err)
 	}
 
+	reader := io.LimitReader(zeroReader{}, size)
 	buf := make([]byte, dumbCopyBufferSize)
-	if _, err := io.CopyBuffer(stream, file, buf); err != nil {
-		return fmt.Errorf("failed to send file: %w", err)
+	if _, err := io.CopyBuffer(stream, reader, buf); err != nil {
+		return fmt.Errorf("failed to send data: %w", err)
 	}
 	return nil
 }
 
-func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string, progressFn func(string, int64, int64)) (string, error) {
+func recvDumbDiscard(ctx context.Context, conn transfer.Conn, progressFn func(string, int64, int64)) (string, error) {
 	stream, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to accept stream: %w", err)
@@ -77,13 +76,6 @@ func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string, progre
 		return "", fmt.Errorf("failed to read size: %w", err)
 	}
 
-	outPath := filepath.Join(outDir, string(nameBuf))
-	outFile, err := os.Create(outPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer outFile.Close()
-
 	total := int64(size)
 	reader := io.LimitReader(stream, total)
 	buf := make([]byte, dumbCopyBufferSize)
@@ -92,9 +84,6 @@ func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string, progre
 	for received < total {
 		n, err := reader.Read(buf)
 		if n > 0 {
-			if _, werr := outFile.Write(buf[:n]); werr != nil {
-				return "", fmt.Errorf("failed to write output: %w", werr)
-			}
 			received += int64(n)
 			if progressFn != nil && shouldUpdateProgress(&lastProgress) {
 				progressFn(string(nameBuf), received, total)
@@ -113,5 +102,5 @@ func recvDumbFile(ctx context.Context, conn transfer.Conn, outDir string, progre
 	if progressFn != nil {
 		progressFn(string(nameBuf), received, total)
 	}
-	return outPath, nil
+	return string(nameBuf), nil
 }

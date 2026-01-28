@@ -199,7 +199,7 @@ func printReceiverUsage() {
 	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
 	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
-	fmt.Fprintln(os.Stderr, "  --dumb                      raw single-stream transfer")
+	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream (discarded on receive)")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")

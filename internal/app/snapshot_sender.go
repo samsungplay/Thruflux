@@ -55,6 +55,8 @@ type SnapshotSenderConfig struct {
 	TransferOpts           transfer.Options
 	Benchmark              bool
 	Dumb                   bool
+	DumbSizeBytes          int64
+	DumbName               string
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -76,6 +78,8 @@ type SnapshotSender struct {
 	transferFn   func(context.Context, string) error
 	dumb          bool
 	dumbPath      string
+	dumbSizeBytes int64
+	dumbName      string
 
 	peerID     string
 	sessionID  string
@@ -176,7 +180,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
-	if len(cfg.Paths) == 0 {
+	if len(cfg.Paths) == 0 && !(cfg.Dumb && cfg.DumbSizeBytes > 0) {
 		return fmt.Errorf("no input paths provided")
 	}
 	if cfg.MaxReceivers <= 0 {
@@ -201,27 +205,45 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.QuicMaxIncomingStreams = 100
 	}
 
-	stopScan := startScanStatus()
-	m, err := manifest.ScanPaths(cfg.Paths)
-	stopScan(err)
-	if err != nil {
-		return fmt.Errorf("failed to scan paths: %w", err)
-	}
-	if cfg.Dumb {
-		if len(cfg.Paths) != 1 {
-			return fmt.Errorf("dumb mode requires exactly one file path")
+	var (
+		m        manifest.Manifest
+		resolver func(string) string
+		err      error
+	)
+	if cfg.Dumb && cfg.DumbSizeBytes > 0 {
+		name := cfg.DumbName
+		if name == "" {
+			name = "mem.bin"
 		}
-		info, err := os.Stat(cfg.Paths[0])
+		m = manifest.Manifest{
+			Root:       "dumb",
+			Items:      []manifest.FileItem{{RelPath: name, Size: cfg.DumbSizeBytes, ModTime: time.Now().Unix(), IsDir: false}},
+			TotalBytes: cfg.DumbSizeBytes,
+			FileCount:  1,
+		}
+	} else {
+		stopScan := startScanStatus()
+		m, err = manifest.ScanPaths(cfg.Paths)
+		stopScan(err)
 		if err != nil {
-			return fmt.Errorf("failed to stat path: %w", err)
+			return fmt.Errorf("failed to scan paths: %w", err)
 		}
-		if info.IsDir() {
-			return fmt.Errorf("dumb mode requires a file, not a directory")
+		if cfg.Dumb {
+			if len(cfg.Paths) != 1 {
+				return fmt.Errorf("dumb mode requires exactly one file path")
+			}
+			info, err := os.Stat(cfg.Paths[0])
+			if err != nil {
+				return fmt.Errorf("failed to stat path: %w", err)
+			}
+			if info.IsDir() {
+				return fmt.Errorf("dumb mode requires a file, not a directory")
+			}
 		}
-	}
-	resolver, err := buildPathResolver(cfg.Paths)
-	if err != nil {
-		return err
+		resolver, err = buildPathResolver(cfg.Paths)
+		if err != nil {
+			return err
+		}
 	}
 	manifestID, err := hashManifestJSON(m)
 	if err != nil {
@@ -261,7 +283,9 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		transferOpts:           cfg.TransferOpts,
 		benchmark:              cfg.Benchmark,
 		dumb:                   cfg.Dumb,
-		dumbPath:               cfg.Paths[0],
+		dumbPath:               func() string { if len(cfg.Paths) > 0 { return cfg.Paths[0] }; return "" }(),
+		dumbSizeBytes:          cfg.DumbSizeBytes,
+		dumbName:               cfg.DumbName,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -285,7 +309,9 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		exitFn:                 os.Exit,
 	}
 	s.transferFn = s.runICEQUICTransfer
-	s.transferOpts.ResolveFilePath = resolver
+	if resolver != nil {
+		s.transferOpts.ResolveFilePath = resolver
+	}
 	s.closeConn = func() { conn.Close() }
 	s.onChange = s.logSnapshotState
 	s.logSnapshotState()
@@ -719,7 +745,19 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	authCancel()
 
 	if s.dumb {
-		return sendDumbFile(ctx, transferConn, s.dumbPath)
+		name := s.dumbName
+		if name == "" {
+			name = filepath.Base(s.dumbPath)
+		}
+		size := s.dumbSizeBytes
+		if size == 0 {
+			info, err := os.Stat(s.dumbPath)
+			if err != nil {
+				return fmt.Errorf("failed to stat path: %w", err)
+			}
+			size = info.Size()
+		}
+		return sendDumbData(ctx, transferConn, name, size)
 	}
 
 	opts := s.transferOptions()
