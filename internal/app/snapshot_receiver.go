@@ -30,6 +30,7 @@ type SnapshotReceiverConfig struct {
 	JoinCode               string
 	OutDir                 string
 	Benchmark              bool
+	Dumb                   bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -94,6 +95,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		joinCode:               cfg.JoinCode,
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
+		dumb:                   cfg.Dumb,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
 		udpWriteBufferBytes:    cfg.UDPWriteBufferBytes,
 		quicConnWindowBytes:    cfg.QuicConnWindowBytes,
@@ -131,6 +133,7 @@ type snapshotReceiver struct {
 	joinCode               string
 	outDir                 string
 	benchmark              bool
+	dumb                   bool
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -508,6 +511,17 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		exitWith(1)
 	}
 	authCancel()
+
+	if r.dumb {
+		if _, err := recvDumbFile(baseCtx, transferConn, r.outDir); err != nil {
+			stopUIFn()
+			fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+			r.logger.Error("dumb transfer failed", "error", err)
+			exitWith(1)
+		}
+		progressState.ForceComplete()
+		exitWith(0)
+	}
 
 	var lastProgress int64
 	var lastStats int64

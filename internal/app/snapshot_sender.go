@@ -54,6 +54,7 @@ type SnapshotSenderConfig struct {
 	ReceiverTTL            time.Duration
 	TransferOpts           transfer.Options
 	Benchmark              bool
+	Dumb                   bool
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -73,6 +74,8 @@ type SnapshotSender struct {
 	receiverTTL  time.Duration
 	transferOpts transfer.Options
 	transferFn   func(context.Context, string) error
+	dumb          bool
+	dumbPath      string
 
 	peerID     string
 	sessionID  string
@@ -204,6 +207,18 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	if err != nil {
 		return fmt.Errorf("failed to scan paths: %w", err)
 	}
+	if cfg.Dumb {
+		if len(cfg.Paths) != 1 {
+			return fmt.Errorf("dumb mode requires exactly one file path")
+		}
+		info, err := os.Stat(cfg.Paths[0])
+		if err != nil {
+			return fmt.Errorf("failed to stat path: %w", err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("dumb mode requires a file, not a directory")
+		}
+	}
 	resolver, err := buildPathResolver(cfg.Paths)
 	if err != nil {
 		return err
@@ -245,6 +260,8 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		receiverTTL:            cfg.ReceiverTTL,
 		transferOpts:           cfg.TransferOpts,
 		benchmark:              cfg.Benchmark,
+		dumb:                   cfg.Dumb,
+		dumbPath:               cfg.Paths[0],
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -700,6 +717,10 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("transport auth failed: %w", err)
 	}
 	authCancel()
+
+	if s.dumb {
+		return sendDumbFile(ctx, transferConn, s.dumbPath)
+	}
 
 	opts := s.transferOptions()
 	var lastProgress int64
