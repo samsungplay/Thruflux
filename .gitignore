@@ -39,3 +39,5 @@ dist/
 random_file.bin
 debug_sender.log
 debug_receiver.log
+
+.thruflux_resumedata/
