@@ -111,6 +111,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
+		dumbQuicConnections:    1,
 	}
 
 	go s.watchInterrupt()
@@ -139,6 +140,8 @@ type snapshotReceiver struct {
 	benchmark              bool
 	dumb                   bool
 	dumbTCP                bool
+	dumbQuicMu             sync.Mutex
+	dumbQuicConnections    int
 	udpReadBufferBytes     int
 	udpWriteBufferBytes    int
 	quicConnWindowBytes    int
@@ -236,12 +239,42 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		case r.signalCh <- env:
 		default:
 		}
+	case protocol.TypeDumbQUICMulti:
+		var msg protocol.DumbQUICMulti
+		if err := env.DecodePayload(&msg); err != nil {
+			r.logger.Error("failed to decode dumb_quic_multi", "error", err)
+			return
+		}
+		r.setDumbQuicConnections(msg.Connections)
+		select {
+		case r.signalCh <- env:
+		default:
+		}
 	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		select {
 		case r.signalCh <- env:
 		default:
 		}
 	}
+}
+
+func (r *snapshotReceiver) setDumbQuicConnections(n int) {
+	if n < 1 {
+		n = 1
+	}
+	r.dumbQuicMu.Lock()
+	r.dumbQuicConnections = n
+	r.dumbQuicMu.Unlock()
+}
+
+func (r *snapshotReceiver) getDumbQuicConnections() int {
+	r.dumbQuicMu.Lock()
+	n := r.dumbQuicConnections
+	r.dumbQuicMu.Unlock()
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 func (r *snapshotReceiver) setTurnServersIfEmpty(servers []string) bool {
@@ -535,7 +568,28 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	authCancel()
 
 	if r.dumb {
-		if _, err := recvDumbDiscard(baseCtx, transferConn, func(relpath string, bytesReceived int64, total int64) {
+		expectedConns := r.getDumbQuicConnections()
+		if expectedConns <= 1 {
+			expectedConns = r.waitForDumbQuicConnections(baseCtx, r.signalCh, 2*time.Second)
+		}
+		if expectedConns < 1 {
+			expectedConns = 1
+		}
+
+		var dumbConns []transfer.Conn
+		dumbConns = append(dumbConns, transferConn)
+		if expectedConns > 1 {
+			extraConns, err := r.acceptExtraDumbConns(baseCtx, quicTransport, expectedConns-1)
+			if err != nil {
+				stopUIFn()
+				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+				r.logger.Error("dumb transfer failed", "error", err)
+				exitWith(1)
+			}
+			dumbConns = append(dumbConns, extraConns...)
+		}
+
+		if err := recvDumbDiscardMulti(baseCtx, dumbConns, func(relpath string, bytesReceived int64, total int64) {
 			if !shouldUpdateProgress(&lastProgress) {
 				return
 			}
@@ -633,6 +687,95 @@ dial:
 		progressState.Update(relpath, bytesReceived, total)
 	})
 	return err
+}
+
+func (r *snapshotReceiver) waitForDumbQuicConnections(ctx context.Context, signalCh <-chan protocol.Envelope, timeout time.Duration) int {
+	current := r.getDumbQuicConnections()
+	if current > 1 || timeout <= 0 {
+		return current
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return r.getDumbQuicConnections()
+		case <-timer.C:
+			return r.getDumbQuicConnections()
+		case env := <-signalCh:
+			if env.Type == protocol.TypeDumbQUICMulti {
+				var msg protocol.DumbQUICMulti
+				if err := env.DecodePayload(&msg); err == nil {
+					r.setDumbQuicConnections(msg.Connections)
+				}
+				return r.getDumbQuicConnections()
+			}
+		}
+	}
+}
+
+func (r *snapshotReceiver) acceptExtraDumbConns(ctx context.Context, transport *transferquic.QUICTransport, extra int) ([]transfer.Conn, error) {
+	if extra <= 0 {
+		return nil, nil
+	}
+	if transport == nil {
+		return nil, fmt.Errorf("quic transport unavailable")
+	}
+
+	acceptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	conns := make([]transfer.Conn, 0, extra)
+	for i := 0; i < extra; i++ {
+		conn, err := transport.Accept(acceptCtx)
+		if err != nil {
+			return conns, err
+		}
+		authCtx, authCancel := context.WithTimeout(acceptCtx, 10*time.Second)
+		if err := authenticateTransport(authCtx, conn, r.joinCode, authRoleReceive); err != nil {
+			authCancel()
+			conn.Close()
+			return conns, err
+		}
+		authCancel()
+		conns = append(conns, conn)
+	}
+	return conns, nil
+}
+
+func recvDumbDiscardMulti(ctx context.Context, conns []transfer.Conn, progressFn func(string, int64, int64)) error {
+	if len(conns) == 0 {
+		return fmt.Errorf("no connections available")
+	}
+	if len(conns) == 1 {
+		_, err := recvDumbDiscard(ctx, conns[0], progressFn)
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, len(conns))
+	var wg sync.WaitGroup
+	for _, conn := range conns {
+		wg.Add(1)
+		go func(c transfer.Conn) {
+			defer wg.Done()
+			defer c.Close()
+			if _, err := recvDumbDiscard(ctx, c, progressFn); err != nil {
+				errCh <- err
+				cancel()
+			}
+		}(conn)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type receiverProgress struct {

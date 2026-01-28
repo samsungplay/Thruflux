@@ -21,4 +21,5 @@ const (
 	TypeTransferStart         = "transfer_start"
 	TypeTransferQueued        = "transfer_queued"
 	TypeDumbTCPListen         = "dumb_tcp_listen"
+	TypeDumbQUICMulti         = "dumb_quic_multi"
 )

@@ -126,3 +126,8 @@ type TransferQueued struct {
 type DumbTCPListen struct {
 	Addrs []string `json:"addrs"`
 }
+
+// DumbQUICMulti requests multiple QUIC connections for dumb mode.
+type DumbQUICMulti struct {
+	Connections int `json:"connections"`
+}

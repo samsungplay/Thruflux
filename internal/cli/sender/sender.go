@@ -44,6 +44,7 @@ func Run(args []string) {
 	dumbTCP := false
 	var dumbSizeBytes int64
 	dumbName := ""
+	dumbConnections := 1
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 512 * 1024 * 1024
@@ -78,6 +79,17 @@ func Run(args []string) {
 		if arg == "--dumb-tcp" {
 			dumb = true
 			dumbTCP = true
+			continue
+		}
+		if arg == "--dumb-connections" && i+1 < len(args) {
+			i++
+			value := args[i]
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 1 || parsed > 32 {
+				fmt.Fprintln(os.Stderr, "invalid --dumb-connections value")
+				os.Exit(2)
+			}
+			dumbConnections = parsed
 			continue
 		}
 		if arg == "--server-url" && i+1 < len(args) {
@@ -193,6 +205,14 @@ func Run(args []string) {
 		printSenderUsage()
 		os.Exit(2)
 	}
+	if dumbConnections != 1 && !dumb {
+		fmt.Fprintln(os.Stderr, "--dumb-connections requires --dumb")
+		os.Exit(2)
+	}
+	if dumbTCP && dumbConnections != 1 {
+		fmt.Fprintln(os.Stderr, "--dumb-connections is not supported with --dumb-tcp")
+		os.Exit(2)
+	}
 
 	if strings.TrimSpace(serverURL) == "" {
 		serverURL = senderDefaultServerURL
@@ -213,6 +233,7 @@ func Run(args []string) {
 		DumbTCP:                dumbTCP,
 		DumbSizeBytes:          dumbSizeBytes,
 		DumbName:               dumbName,
+		DumbConnections:        dumbConnections,
 		UDPReadBufferBytes:     udpReadBufferBytes,
 		UDPWriteBufferBytes:    udpWriteBufferBytes,
 		QuicConnWindowBytes:    quicConnWindowBytes,
@@ -246,6 +267,7 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
 	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
+	fmt.Fprintln(os.Stderr, "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")

@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/sheerbytes/sheerbytes/internal/bench"
 	"github.com/sheerbytes/sheerbytes/internal/clienthttp"
 	"github.com/sheerbytes/sheerbytes/internal/ice"
@@ -58,6 +60,7 @@ type SnapshotSenderConfig struct {
 	DumbSizeBytes          int64
 	DumbName               string
 	DumbTCP                bool
+	DumbConnections        int
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
 	QuicConnWindowBytes    int
@@ -82,6 +85,7 @@ type SnapshotSender struct {
 	dumbSizeBytes int64
 	dumbName      string
 	dumbTCP       bool
+	dumbConns     int
 
 	peerID     string
 	sessionID  string
@@ -191,6 +195,9 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	if cfg.ReceiverTTL <= 0 {
 		cfg.ReceiverTTL = 10 * time.Minute
 	}
+	if cfg.DumbConnections < 1 {
+		cfg.DumbConnections = 1
+	}
 	if cfg.UDPReadBufferBytes <= 0 {
 		cfg.UDPReadBufferBytes = 8 * 1024 * 1024
 	}
@@ -289,6 +296,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		dumbSizeBytes:          cfg.DumbSizeBytes,
 		dumbName:               cfg.DumbName,
 		dumbTCP:                cfg.DumbTCP,
+		dumbConns:              cfg.DumbConnections,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -763,7 +771,31 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 			}
 			size = info.Size()
 		}
-		return sendDumbData(ctx, transferConn, name, size)
+		if s.dumbConns <= 1 {
+			return sendDumbData(ctx, transferConn, name, size)
+		}
+		if err := sendSignal(protocol.TypeDumbQUICMulti, protocol.DumbQUICMulti{Connections: s.dumbConns}); err != nil {
+			return fmt.Errorf("failed to send dumb quic multi: %w", err)
+		}
+		remoteAddr, err := resolveUDPAddr(quicConn.RemoteAddr())
+		if err != nil {
+			return err
+		}
+		extra, err := s.dialExtraDumbConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			for _, c := range extra {
+				c.close()
+			}
+		}()
+		conns := make([]transfer.Conn, 0, 1+len(extra))
+		conns = append(conns, transferConn)
+		for _, c := range extra {
+			conns = append(conns, c.conn)
+		}
+		return sendDumbDataMulti(ctx, conns, name, size)
 	}
 
 	opts := s.transferOptions()
@@ -800,6 +832,86 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 
 	return nil
+}
+
+type dumbExtraConn struct {
+	conn  transfer.Conn
+	close func()
+}
+
+func resolveUDPAddr(addr net.Addr) (*net.UDPAddr, error) {
+	if addr == nil {
+		return nil, fmt.Errorf("remote address is nil")
+	}
+	if udp, ok := addr.(*net.UDPAddr); ok {
+		return udp, nil
+	}
+	udp, err := net.ResolveUDPAddr("udp", addr.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve remote address: %w", err)
+	}
+	return udp, nil
+}
+
+func listenUDPForRemote(remote *net.UDPAddr) (*net.UDPConn, error) {
+	if remote == nil {
+		return nil, fmt.Errorf("remote address is nil")
+	}
+	if remote.IP != nil && remote.IP.To4() != nil {
+		return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	}
+	return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0, Zone: remote.Zone})
+}
+
+func (s *SnapshotSender) dialExtraDumbConns(ctx context.Context, peerID string, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
+	if extra <= 0 {
+		return nil, nil
+	}
+	if remote == nil {
+		return nil, fmt.Errorf("remote address is nil")
+	}
+
+	conns := make([]dumbExtraConn, 0, extra)
+	for i := 0; i < extra; i++ {
+		udpConn, err := listenUDPForRemote(remote)
+		if err != nil {
+			return conns, err
+		}
+		_ = transport.ApplyUDPBeyondBestEffort(udpConn, s.udpReadBufferBytes, s.udpWriteBufferBytes)
+		tr := &quic.Transport{Conn: udpConn}
+		quicConn, err := tr.Dial(ctx, remote, tlsConf, quicCfg)
+		if err != nil {
+			udpConn.Close()
+			return conns, err
+		}
+		tconn, err := transferquic.NewDialer(quicConn, s.logger).Dial(ctx, peerID)
+		if err != nil {
+			quicConn.CloseWithError(0, "dial_failed")
+			udpConn.Close()
+			return conns, err
+		}
+		authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := authenticateTransport(authCtx, tconn, s.joinCode, authRoleSender); err != nil {
+			authCancel()
+			tconn.Close()
+			quicConn.CloseWithError(0, "auth_failed")
+			udpConn.Close()
+			return conns, err
+		}
+		authCancel()
+		conn := tconn
+		qc := quicConn
+		uc := udpConn
+		conns = append(conns, dumbExtraConn{
+			conn: conn,
+			close: func() {
+				conn.Close()
+				qc.CloseWithError(0, "")
+				uc.Close()
+			},
+		})
+	}
+	return conns, nil
 }
 
 func (s *SnapshotSender) runDumbTCPTransfer(ctx context.Context, peerID string) error {

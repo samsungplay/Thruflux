@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 )
@@ -39,6 +40,62 @@ func sendDumbData(ctx context.Context, conn transfer.Conn, name string, size int
 	defer stream.Close()
 
 	return sendDumbDataWriter(stream, nameBytes, size)
+}
+
+func splitDumbSizes(total int64, parts int) []int64 {
+	if parts < 1 {
+		return []int64{total}
+	}
+	sizes := make([]int64, parts)
+	if total <= 0 {
+		return sizes
+	}
+	base := total / int64(parts)
+	rem := total % int64(parts)
+	for i := 0; i < parts; i++ {
+		sizes[i] = base
+		if int64(i) < rem {
+			sizes[i]++
+		}
+	}
+	return sizes
+}
+
+func sendDumbDataMulti(ctx context.Context, conns []transfer.Conn, name string, size int64) error {
+	if len(conns) == 0 {
+		return fmt.Errorf("no connections available")
+	}
+	if len(conns) == 1 {
+		return sendDumbData(ctx, conns[0], name, size)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sizes := splitDumbSizes(size, len(conns))
+	errCh := make(chan error, len(conns))
+	var wg sync.WaitGroup
+
+	for i, conn := range conns {
+		partName := fmt.Sprintf("%s.part%02d", name, i+1)
+		partSize := sizes[i]
+		wg.Add(1)
+		go func(c transfer.Conn, n string, sz int64) {
+			defer wg.Done()
+			if err := sendDumbData(ctx, c, n, sz); err != nil {
+				errCh <- err
+				cancel()
+			}
+		}(conn, partName, partSize)
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sendDumbDataWriter(w io.Writer, nameBytes []byte, size int64) error {
