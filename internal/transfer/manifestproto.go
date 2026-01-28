@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -759,7 +758,7 @@ done:
 		}
 	}
 
-	return fileCRC.Sum32(), nil
+	return 0, nil
 }
 
 // sendDirRecord sends a directory record.
