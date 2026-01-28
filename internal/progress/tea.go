@@ -75,21 +75,21 @@ func renderReceiverTea(ctx context.Context, w io.Writer, view func() ReceiverVie
 		for {
 			select {
 			case <-ctx.Done():
-				_ = program.Send(stopMsg{})
+				program.Send(stopMsg{})
 				return
 			case <-stop:
-				_ = program.Send(stopMsg{})
+				program.Send(stopMsg{})
 				return
 			case <-ticker.C:
-				_ = program.Send(tickMsg{})
+				program.Send(tickMsg{})
 			}
 		}
 	}()
 	return func() {
 		close(stop)
 		ticker.Stop()
-		_ = program.Send(tickMsg{})
-		_ = program.Send(stopMsg{})
+		program.Send(tickMsg{})
+		program.Send(stopMsg{})
 	}
 }
 
@@ -105,21 +105,21 @@ func renderSenderTea(ctx context.Context, w io.Writer, view func() SenderView, v
 		for {
 			select {
 			case <-ctx.Done():
-				_ = program.Send(stopMsg{})
+				program.Send(stopMsg{})
 				return
 			case <-stop:
-				_ = program.Send(stopMsg{})
+				program.Send(stopMsg{})
 				return
 			case <-ticker.C:
-				_ = program.Send(tickMsg{})
+				program.Send(tickMsg{})
 			}
 		}
 	}()
 	return func() {
 		close(stop)
 		ticker.Stop()
-		_ = program.Send(tickMsg{})
-		_ = program.Send(stopMsg{})
+		program.Send(tickMsg{})
+		program.Send(stopMsg{})
 	}
 }
 
