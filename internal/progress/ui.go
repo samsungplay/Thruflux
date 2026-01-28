@@ -77,7 +77,7 @@ func IsTTY(w io.Writer) bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
-func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) func() {
+func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool) func() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
@@ -111,13 +111,15 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
 				lines++
 			}
-			if len(v.TransportLines) > 0 {
-				for _, line := range v.TransportLines {
-					fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
-					lines++
+			if verbose {
+				if len(v.TransportLines) > 0 {
+					for _, line := range v.TransportLines {
+						fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
+						lines++
+					}
 				}
+				lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
 			}
-			lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
 			fmt.Fprintf(w, "%s\n", colorize(formatReceiverLine(v), colorGreen, isTTY))
 			lines++
 			currentFile := v.CurrentFile
@@ -173,7 +175,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView) 
 	}
 }
 
-func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func() {
+func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verbose bool) func() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
@@ -224,8 +226,10 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 					})
 				}
 				lines += renderTable(w, headers, rows, widths)
-				for _, row := range v.Rows {
-					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+				if verbose {
+					for _, row := range v.Rows {
+						lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+					}
 				}
 			} else {
 				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
@@ -243,8 +247,10 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView) func
 					})
 				}
 				lines += renderTable(w, headers, rows, widths)
-				for _, row := range v.Rows {
-					lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+				if verbose {
+					for _, row := range v.Rows {
+						lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+					}
 				}
 			}
 			lastLines = lines

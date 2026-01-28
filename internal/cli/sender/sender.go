@@ -42,6 +42,7 @@ func Run(args []string) {
 	benchmark := false
 	dumb := false
 	dumbTCP := false
+	verbose := false
 	var dumbSizeBytes int64
 	dumbName := ""
 	dumbConnections := 1
@@ -71,6 +72,10 @@ func Run(args []string) {
 		}
 		if arg == "--benchmark" {
 			benchmark = true
+			continue
+		}
+		if arg == "--verbose" {
+			verbose = true
 			continue
 		}
 		if arg == "--dumb" {
@@ -234,6 +239,9 @@ func Run(args []string) {
 	}
 
 	logLevel := "error"
+	if verbose {
+		logLevel = "info"
+	}
 	logger := logging.New("thruflux-sender", logLevel)
 	if err := app.RunSnapshotSender(context.Background(), logger, app.SnapshotSenderConfig{
 		ServerURL:              serverURL,
@@ -241,6 +249,7 @@ func Run(args []string) {
 		MaxReceivers:           maxReceivers,
 		ReceiverTTL:            10 * time.Minute,
 		Benchmark:              benchmark,
+		Verbose:                verbose,
 		Dumb:                   dumb,
 		DumbTCP:                dumbTCP,
 		DumbSizeBytes:          dumbSizeBytes,
@@ -278,6 +287,7 @@ func printSenderUsage() {
 	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
 	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
+	fmt.Fprintln(os.Stderr, "  --verbose                   enable verbose UI/logging")
 	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
 	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
 	fmt.Fprintln(os.Stderr, "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")

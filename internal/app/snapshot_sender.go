@@ -72,6 +72,7 @@ type SnapshotSenderConfig struct {
 	StunServers            []string
 	TurnServers            []string
 	TurnOnly               bool
+	Verbose                bool
 }
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
@@ -126,6 +127,7 @@ type SnapshotSender struct {
 	transportSummary       string
 	transportLines         []string
 	transportLogged        bool
+	verbose                bool
 	now                    func() time.Time
 	onChange               func()
 	exitFn                 func(int)
@@ -281,6 +283,13 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 
 	fmt.Printf("\n=== Join Code: %s ===\n\n", joinCode)
+	if len(cfg.Paths) > 0 {
+		fmt.Fprintln(os.Stdout, "Sharing the following paths:")
+		for _, path := range cfg.Paths {
+			fmt.Fprintf(os.Stdout, "  - %s\n", path)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
 
 	wsURL, err := buildWebSocketURL(cfg.ServerURL, joinCode, peerID, "sender", cfg.MaxReceivers)
 	if err != nil {
@@ -311,6 +320,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		dumbTCP:                cfg.DumbTCP,
 		dumbConns:              cfg.DumbConnections,
 		parallelConns:          cfg.ParallelConnections,
+		verbose:                cfg.Verbose,
 		peerID:                 peerID,
 		sessionID:              sessionID,
 		joinCode:               joinCode,
@@ -348,7 +358,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		s.startBenchmarkLoop(ctx)
 	}
 
-	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView)
+	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView, s.verbose)
 	defer uiStop()
 
 	go s.cleanupLoop(ctx)
@@ -780,7 +790,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer quicConn.CloseWithError(0, "")
 
 	iceLog("connect_ok")
-	fmt.Fprintf(os.Stderr, "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
+	if s.verbose {
+		fmt.Fprintf(os.Stderr, "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
+	}
 	// Log route
 	s.setSenderRoute(peerID, fmt.Sprintf("local=%s remote=%s", quicConn.LocalAddr(), quicConn.RemoteAddr()))
 
@@ -796,7 +808,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		return fmt.Errorf("failed to dial transfer connection: %w", err)
 	}
 	defer transferConn.Close()
-	fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
+	if s.verbose {
+		fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
+	}
 
 	authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := authenticateTransport(authCtx, transferConn, s.joinCode, authRoleSender); err != nil {
@@ -1493,7 +1507,7 @@ func (s *SnapshotSender) setTransportLines(summary string, lines []string) {
 	s.paramsMu.Lock()
 	s.transportSummary = summary
 	s.transportLines = append([]string(nil), lines...)
-	if !s.tuneTTY && !s.transportLogged && summary != "" {
+	if s.verbose && !s.tuneTTY && !s.transportLogged && summary != "" {
 		fmt.Fprintln(os.Stdout, summary)
 		for _, line := range lines {
 			fmt.Fprintln(os.Stdout, line)
@@ -1851,16 +1865,21 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		})
 	}
 	s.mu.Lock()
-	header := s.snapshotLine
+	header := ""
+	if s.verbose {
+		header = s.snapshotLine
+	}
 	s.mu.Unlock()
 
-	if tune := s.tuneHeaderLine(); tune != "" {
-		if header != "" {
-			header += "\n"
+	if s.verbose {
+		if tune := s.tuneHeaderLine(); tune != "" {
+			if header != "" {
+				header += "\n"
+			}
+			header += tune
 		}
-		header += tune
 	}
-	if s.tuneTTY {
+	if s.verbose && s.tuneTTY {
 		if lines := s.transportHeaderLines(); len(lines) > 0 {
 			if header != "" {
 				header = header + "\n"

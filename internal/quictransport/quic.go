@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
-	"os"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -114,21 +113,17 @@ func Listen(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger) (*
 
 // ListenWithConfig creates a QUIC listener on the given PacketConn using a custom config.
 func ListenWithConfig(ctx context.Context, udpConn net.PacketConn, logger *slog.Logger, config *quic.Config) (*quic.Listener, error) {
-	fmt.Fprintf(os.Stderr, "[TRACE quic] ListenWithConfig called, localAddr=%v\n", udpConn.LocalAddr())
 	tlsConfig := ServerConfig()
 	if config == nil {
 		config = DefaultServerQUICConfig()
 	}
 
-	fmt.Fprintf(os.Stderr, "[TRACE quic] calling quic.Listen...\n")
 	listener, err := quic.Listen(udpConn, tlsConfig, config)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[TRACE quic] quic.Listen FAILED: %v\n", err)
 		logger.Error("QUIC listen failed", "error", err, "local_addr", udpConn.LocalAddr())
 		return nil, err
 	}
 
-	fmt.Fprintf(os.Stderr, "[TRACE quic] quic.Listen returned OK\n")
 	logger.Info("QUIC listener created", "local_addr", udpConn.LocalAddr())
 	return listener, nil
 }
@@ -144,15 +139,12 @@ func ListenWithTransport(ctx context.Context, transport *quic.Transport, logger 
 		config = DefaultServerQUICConfig()
 	}
 
-	fmt.Fprintf(os.Stderr, "[TRACE quic] ListenWithTransport called, localAddr=%v\n", transport.Conn.LocalAddr())
 	listener, err := transport.Listen(tlsConfig, config)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[TRACE quic] transport.Listen FAILED: %v\n", err)
 		logger.Error("QUIC listen failed", "error", err, "local_addr", transport.Conn.LocalAddr())
 		return nil, err
 	}
 
-	fmt.Fprintf(os.Stderr, "[TRACE quic] transport.Listen returned OK\n")
 	logger.Info("QUIC listener created", "local_addr", transport.Conn.LocalAddr())
 	return listener, nil
 }

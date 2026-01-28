@@ -40,6 +40,7 @@ func Run(args []string) {
 	benchmark := false
 	dumb := false
 	dumbTCP := false
+	verbose := false
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 512 * 1024 * 1024
@@ -57,6 +58,10 @@ func Run(args []string) {
 		}
 		if arg == "--benchmark" {
 			benchmark = true
+			continue
+		}
+		if arg == "--verbose" {
+			verbose = true
 			continue
 		}
 		if arg == "--dumb" {
@@ -171,12 +176,16 @@ func Run(args []string) {
 	}
 
 	logLevel := "error"
+	if verbose {
+		logLevel = "info"
+	}
 	logger := logging.New("thruflux-receiver", logLevel)
 	if err := app.RunSnapshotReceiver(context.Background(), logger, app.SnapshotReceiverConfig{
 		ServerURL:              serverURL,
 		JoinCode:               joinCode,
 		OutDir:                 outDir,
 		Benchmark:              benchmark,
+		Verbose:                verbose,
 		Dumb:                   dumb,
 		DumbTCP:                dumbTCP,
 		UDPReadBufferBytes:     udpReadBufferBytes,
@@ -208,6 +217,7 @@ func printReceiverUsage() {
 	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
 	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
+	fmt.Fprintln(os.Stderr, "  --verbose                   enable verbose UI/logging")
 	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream (discarded on receive)")
 	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (discarded on receive)")
 	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")

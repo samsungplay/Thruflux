@@ -42,6 +42,7 @@ type SnapshotReceiverConfig struct {
 	StunServers            []string
 	TurnServers            []string
 	TurnOnly               bool
+	Verbose                bool
 }
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
@@ -103,6 +104,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		joinCode:               cfg.JoinCode,
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
+		verbose:                cfg.Verbose,
 		dumb:                   cfg.Dumb,
 		dumbTCP:                cfg.DumbTCP,
 		parallelConnections:    cfg.ParallelConnections,
@@ -160,6 +162,7 @@ type snapshotReceiver struct {
 	turnServers            []string
 	turnOnly               bool
 	turnMu                 sync.RWMutex
+	verbose                bool
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -238,10 +241,12 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			r.logger.Error("failed to decode transfer_queued", "error", err)
 			return
 		}
-		if queued.Position > 0 {
-			fmt.Printf("Queued for transfer (position %d, active=%d/%d)\n", queued.Position, queued.Active, queued.Max)
-		} else {
-			fmt.Printf("Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
+		if r.verbose {
+			if queued.Position > 0 {
+				fmt.Printf("Queued for transfer (position %d, active=%d/%d)\n", queued.Position, queued.Active, queued.Max)
+			} else {
+				fmt.Printf("Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
+			}
 		}
 	case protocol.TypeDumbTCPListen:
 		select {
@@ -346,7 +351,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		r.startReceiverBenchLoop(benchCtx, progressState)
 		defer benchCancel()
 	}
-	stopUI := progress.RenderReceiver(baseCtx, os.Stdout, progressState.View)
+	stopUI := progress.RenderReceiver(baseCtx, os.Stdout, progressState.View, r.verbose)
 	var stopUIOnce sync.Once
 	stopUIFn := func() {
 		stopUIOnce.Do(stopUI)
@@ -388,7 +393,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	if r.dumbTCP {
 		if err := r.runDumbTCPTransfer(baseCtx, progressState, &lastProgress); err != nil {
 			stopUIFn()
-			fmt.Fprintf(os.Stderr, "dumb tcp transfer failed: %v\n", err)
+			if r.verbose {
+				fmt.Fprintf(os.Stderr, "dumb tcp transfer failed: %v\n", err)
+			}
 			r.logger.Error("dumb tcp transfer failed", "error", err)
 			exitWith(1)
 		}
@@ -448,9 +455,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	transportLines := []string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)}
 	progressState.SetTransportLines(append([]string{transportSummary}, transportLines...))
 	if !progress.IsTTY(os.Stdout) {
-		fmt.Fprintln(os.Stdout, transportSummary)
-		for _, line := range transportLines {
-			fmt.Fprintln(os.Stdout, line)
+		if r.verbose {
+			fmt.Fprintln(os.Stdout, transportSummary)
+			for _, line := range transportLines {
+				fmt.Fprintln(os.Stdout, line)
+			}
 		}
 	}
 
@@ -576,7 +585,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	defer transferConn.Close()
-	fmt.Fprintf(os.Stderr, "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
+	if r.verbose {
+		fmt.Fprintf(os.Stderr, "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
+	}
 
 	authCtx, authCancel := context.WithTimeout(baseCtx, 10*time.Second)
 	if err := authenticateTransport(authCtx, transferConn, r.joinCode, authRoleReceive); err != nil {
@@ -604,7 +615,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, expectedConns-1)
 			if err != nil {
 				stopUIFn()
-				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+				if r.verbose {
+					fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+				}
 				r.logger.Error("dumb transfer failed", "error", err)
 				exitWith(1)
 			}
@@ -621,7 +634,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}); err != nil {
 			dumbStop()
 			stopUIFn()
-			fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+			if r.verbose {
+				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+			}
 			r.logger.Error("dumb transfer failed", "error", err)
 			exitWith(1)
 		}
