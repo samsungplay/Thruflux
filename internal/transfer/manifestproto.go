@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -382,6 +383,8 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		resume.totalChunks = totalChunks
 	}
 
+	fileCRC := crc32.New(crc32cTable)
+
 	// Determine read-ahead depth (bounded, fixed)
 	maxReadAhead := uint32(DefaultSendQueueMax)
 
@@ -444,8 +447,8 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				break
 			}
 
-		// Skip CRC32C calculation for temporary testing
-		chunkCRC := uint32(0)
+			// Calculate CRC in read-ahead
+			chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
 
 			// Send chunk data to sender
 			// If channel is full, wait for space or cancellation
@@ -510,8 +513,9 @@ sendLoop:
 		}
 
 		if sendChunk {
-			// CRC is already calculated in read-ahead (skipped)
+			// CRC is already calculated in read-ahead
 			chunkCRC := chunk.crc
+			fileCRC.Write(chunk.buf[:chunk.n])
 
 			var header [12]byte
 			binary.BigEndian.PutUint32(header[0:4], nextToSend)
@@ -549,7 +553,7 @@ sendLoop:
 		return 0, fmt.Errorf("failed to write EOF magic: %w", err)
 	}
 
-	return 0, nil
+	return fileCRC.Sum32(), nil
 }
 
 // receiveFileChunksWindowed receives file chunks, writes to disk,
@@ -573,6 +577,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 	bytesReceived := uint64(0)
 	initialBytes := uint64(0)
+	fileCRC := crc32.New(crc32cTable)
 	if resume != nil && resume.sidecar != nil {
 		resume.totalChunks = resume.sidecar.TotalChunks
 	}
@@ -696,8 +701,14 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 			if !ok {
 				goto done
 			}
-			// Skip CRC32C verification for temporary testing
+			if crc32.Checksum(chunk.buf[:chunk.n], crc32cTable) != chunk.crc {
+				bufPool.Put(chunk.buf)
+				return 0, ErrCRC32Mismatch
+			}
+
+			// Update Rolling File CRC
 			bytesReceived += uint64(chunk.n)
+			fileCRC.Write(chunk.buf[:chunk.n])
 
 			// Prepare Async Write
 			writeWg.Add(1)
@@ -758,7 +769,7 @@ done:
 		}
 	}
 
-	return 0, nil
+	return fileCRC.Sum32(), nil
 }
 
 // sendDirRecord sends a directory record.
