@@ -131,3 +131,8 @@ type DumbTCPListen struct {
 type DumbQUICMulti struct {
 	Connections int `json:"connections"`
 }
+
+// DumbQUICDone indicates dumb QUIC transfer completion.
+type DumbQUICDone struct {
+	Parts int `json:"parts"`
+}

@@ -316,6 +316,17 @@ func (r *snapshotReceiver) sendAccept(manifestID string) {
 	}
 }
 
+func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
+	env, err := protocol.NewEnvelope(protocol.TypeDumbQUICDone, protocol.NewMsgID(), protocol.DumbQUICDone{Parts: parts})
+	if err != nil {
+		return err
+	}
+	env.SessionID = r.sessionID
+	env.From = r.peerID
+	env.To = r.senderID
+	return r.conn.Send(env)
+}
+
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
@@ -600,6 +611,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			r.logger.Error("dumb transfer failed", "error", err)
 			exitWith(1)
 		}
+		_ = r.sendDumbQUICDone(len(dumbConns))
 		progressState.ForceComplete()
 		exitWith(0)
 	}

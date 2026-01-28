@@ -396,7 +396,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 		s.logger.Error("receiver left session", "peer_id", peerLeft.PeerID, "session_id", s.sessionID)
 		s.handlePeerLeft(peerLeft.PeerID)
 
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeDumbQUICDone:
 		s.forwardSignal(env)
 	}
 }
@@ -790,7 +790,13 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		for _, c := range extra {
 			conns = append(conns, c.conn)
 		}
-		return sendDumbDataMulti(ctx, conns, name, size)
+		if err := sendDumbDataMulti(ctx, conns, name, size); err != nil {
+			return err
+		}
+		if err := s.waitForDumbQUICDone(ctx, peerID, 10*time.Second); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	opts := s.transferOptions()
@@ -827,6 +833,37 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 
 	return nil
+}
+
+func (s *SnapshotSender) waitForDumbQUICDone(ctx context.Context, peerID string, timeout time.Duration) error {
+	signalCh := s.getSignalCh(peerID)
+	if signalCh == nil {
+		return fmt.Errorf("no signal channel for %s", peerID)
+	}
+	waitCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	for {
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("timeout waiting for dumb completion")
+		case env := <-signalCh:
+			if env.Type != protocol.TypeDumbQUICDone {
+				continue
+			}
+			var msg protocol.DumbQUICDone
+			if err := env.DecodePayload(&msg); err != nil {
+				return err
+			}
+			if msg.Parts <= 0 {
+				return nil
+			}
+			return nil
+		}
+	}
 }
 
 type dumbExtraConn struct {
@@ -1056,7 +1093,7 @@ func (s *SnapshotSender) forwardSignal(env protocol.Envelope) {
 		return
 	}
 	switch env.Type {
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeDumbQUICDone:
 		select {
 		case ch <- env:
 		default:
