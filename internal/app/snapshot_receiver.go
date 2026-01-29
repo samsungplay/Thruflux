@@ -34,6 +34,9 @@ type SnapshotReceiverConfig struct {
 	JoinCode               string
 	OutDir                 string
 	Benchmark              bool
+	AutoAccept             bool
+	AutoNoResume           bool
+	AutoYesResume          bool
 	ParallelConnections    int
 	ParallelStreams        int
 	UDPReadBufferBytes     int
@@ -105,6 +108,9 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		joinCode:               cfg.JoinCode,
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
+		autoAccept:             cfg.AutoAccept,
+		autoNoResume:           cfg.AutoNoResume,
+		autoYesResume:          cfg.AutoYesResume,
 		verbose:                cfg.Verbose,
 		parallelConnections:    cfg.ParallelConnections,
 		parallelStreams:        cfg.ParallelStreams,
@@ -146,6 +152,9 @@ type snapshotReceiver struct {
 	joinCode               string
 	outDir                 string
 	benchmark              bool
+	autoAccept             bool
+	autoNoResume           bool
+	autoYesResume          bool
 	parallelConnections    int
 	parallelStreams        int
 	udpReadBufferBytes     int
@@ -205,25 +214,35 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			r.manifestPrompted = true
 			printIncomingSummary(offer.Summary)
 			reader := bufio.NewReader(os.Stdin)
-			accepted, err := promptAccept(reader)
-			if err != nil {
-				r.logger.Error("failed to read acceptance", "error", err)
-				fmt.Fprintf(termio.StderrFile(), "failed to read acceptance: %v\n", err)
-				os.Exit(1)
+			accepted := r.autoAccept
+			if !r.autoAccept {
+				ok, err := promptAccept(reader)
+				if err != nil {
+					r.logger.Error("failed to read acceptance", "error", err)
+					fmt.Fprintf(termio.StderrFile(), "failed to read acceptance: %v\n", err)
+					os.Exit(1)
+				}
+				accepted = ok
 			}
 			if !accepted {
 				fmt.Fprintln(termio.StderrFile(), "Transfer declined.")
 				os.Exit(1)
 			}
 			if hasResumeData(r.outDir, offer.Summary.RootName) {
-				resume, err := promptResumeOrOverwrite(reader)
-				if err != nil {
-					r.logger.Error("failed to read resume choice", "error", err)
-					fmt.Fprintf(termio.StderrFile(), "failed to read resume choice: %v\n", err)
-					os.Exit(1)
-				}
-				if !resume {
+				if r.autoNoResume {
 					r.clearResumeOnStart = true
+				} else if r.autoYesResume {
+					// keep resume data
+				} else {
+					resume, err := promptResumeOrOverwrite(reader)
+					if err != nil {
+						r.logger.Error("failed to read resume choice", "error", err)
+						fmt.Fprintf(termio.StderrFile(), "failed to read resume choice: %v\n", err)
+						os.Exit(1)
+					}
+					if !resume {
+						r.clearResumeOnStart = true
+					}
 				}
 			}
 		}

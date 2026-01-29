@@ -157,6 +157,9 @@ thru join <join-code> [flags]
 | `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs.                                     |
 | `--benchmark`                                                                           | Print throughput stats.                                |
 | `--verbose`                                                                             | Enable verbose UI/logging.                             |
+| `--yes`                                                                                 | Auto-accept the transfer prompt.                       |
+| `--no-resume`                                                                           | Overwrite existing data without prompting.             |
+| `--yes-resume`                                                                          | Resume existing data without prompting.                |
 | `--udp-read-buffer-bytes` / `--udp-write-buffer-bytes`                                   | UDP buffer sizes (default `8388608`).                  |
 | `--version`, `-v`                                                                       | Print the Thruflux CLI version.                        |
 | `--help`, `-h`                                                                          | Show usage and flag descriptions.                      |

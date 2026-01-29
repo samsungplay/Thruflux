@@ -7,6 +7,11 @@ builds:
     binary: thru
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
+  - id: thruserv
+    main: ./cmd/thruserv
+    binary: thruserv
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
 
 archives:
   - id: default

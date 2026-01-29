@@ -39,6 +39,9 @@ func Run(args []string) {
 	outDir := ""
 	serverURL := ""
 	benchmark := false
+	autoYes := false
+	autoNoResume := false
+	autoYesResume := false
 	verbose := false
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
@@ -57,6 +60,18 @@ func Run(args []string) {
 		}
 		if arg == "--benchmark" {
 			benchmark = true
+			continue
+		}
+		if arg == "--yes" {
+			autoYes = true
+			continue
+		}
+		if arg == "--no-resume" {
+			autoNoResume = true
+			continue
+		}
+		if arg == "--yes-resume" {
+			autoYesResume = true
 			continue
 		}
 		if arg == "--verbose" {
@@ -150,6 +165,10 @@ func Run(args []string) {
 		printReceiverUsage()
 		os.Exit(2)
 	}
+	if autoNoResume && autoYesResume {
+		fmt.Fprintln(termio.Stderr(), "--no-resume and --yes-resume are mutually exclusive")
+		os.Exit(2)
+	}
 	if joinCode == "" {
 		printReceiverUsage()
 		os.Exit(2)
@@ -176,6 +195,9 @@ func Run(args []string) {
 		OutDir:                 outDir,
 		Benchmark:              benchmark,
 		Verbose:                verbose,
+		AutoAccept:             autoYes,
+		AutoNoResume:           autoNoResume,
+		AutoYesResume:          autoYesResume,
 		StartupMessage:         strings.TrimSpace(os.Getenv("THRU_STARTUP_MESSAGE")),
 		UDPReadBufferBytes:     udpReadBufferBytes,
 		UDPWriteBufferBytes:    udpWriteBufferBytes,
@@ -208,6 +230,9 @@ func printReceiverUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
+	fmt.Fprintln(termio.Stderr(), "  --yes                       auto-accept transfer prompts")
+	fmt.Fprintln(termio.Stderr(), "  --no-resume                 overwrite existing data without prompting")
+	fmt.Fprintln(termio.Stderr(), "  --yes-resume                resume existing data without prompting")
 	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
