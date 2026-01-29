@@ -48,6 +48,16 @@ func (c *progressCollector) Update(relpath string, bytes int64, total int64) {
 	c.mu.Unlock()
 }
 
+func (c *progressCollector) Add(relpath string, delta int64) {
+	if relpath == "" || delta == 0 {
+		return
+	}
+	c.mu.Lock()
+	c.latest[relpath] += delta
+	c.dirty[relpath] = struct{}{}
+	c.mu.Unlock()
+}
+
 func (c *progressCollector) Flush(apply func(relpath string, bytes int64, total int64)) {
 	c.mu.Lock()
 	if len(c.dirty) == 0 {

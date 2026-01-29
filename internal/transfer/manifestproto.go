@@ -176,6 +176,76 @@ func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath stri
 	}
 }
 
+func readFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath string, phase string, deltaFn ProgressDeltaFn) error {
+	if deltaFn == nil {
+		return readFullWithTimeout(ctx, s, buf, relPath, phase)
+	}
+	if ds, ok := s.(streamDeadlineSetter); ok {
+		deadline := time.Now().Add(streamIOTimeout)
+		if dl, has := ctx.Deadline(); has && dl.Before(deadline) {
+			deadline = dl
+		}
+		_ = ds.SetReadDeadline(deadline)
+		read := 0
+		for read < len(buf) {
+			n, err := s.Read(buf[read:])
+			if n > 0 {
+				read += n
+				deltaFn(relPath, int64(n))
+			}
+			if err != nil {
+				_ = ds.SetReadDeadline(time.Time{})
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				_ = ds.SetReadDeadline(time.Time{})
+				return ctx.Err()
+			default:
+			}
+		}
+		_ = ds.SetReadDeadline(time.Time{})
+		return nil
+	}
+
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		read := 0
+		for read < len(buf) {
+			n, err := s.Read(buf[read:])
+			if n > 0 {
+				read += n
+				deltaFn(relPath, int64(n))
+			}
+			if err != nil {
+				resultCh <- readResult{n: read, err: err}
+				return
+			}
+		}
+		resultCh <- readResult{n: read, err: nil}
+	}()
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.n != len(buf) {
+			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
+		}
+		return nil
+	case <-time.After(streamIOTimeout):
+		fmt.Fprintf(os.Stderr, "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		os.Exit(1)
+		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
 	if ds, ok := s.(streamDeadlineSetter); ok {
 		deadline := time.Now().Add(streamIOTimeout)
@@ -212,6 +282,76 @@ func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath str
 	go func() {
 		n, err := s.Write(buf)
 		resultCh <- writeResult{n: n, err: err}
+	}()
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return res.err
+		}
+		if res.n != len(buf) {
+			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
+		}
+		return nil
+	case <-time.After(streamIOTimeout):
+		fmt.Fprintf(os.Stderr, "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		os.Exit(1)
+		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func writeFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath string, phase string, deltaFn ProgressDeltaFn) error {
+	if deltaFn == nil {
+		return writeFullWithTimeout(ctx, s, buf, relPath, phase)
+	}
+	if ds, ok := s.(streamDeadlineSetter); ok {
+		deadline := time.Now().Add(streamIOTimeout)
+		if dl, has := ctx.Deadline(); has && dl.Before(deadline) {
+			deadline = dl
+		}
+		_ = ds.SetWriteDeadline(deadline)
+		written := 0
+		for written < len(buf) {
+			n, err := s.Write(buf[written:])
+			if n > 0 {
+				written += n
+				deltaFn(relPath, int64(n))
+			}
+			if err != nil {
+				_ = ds.SetWriteDeadline(time.Time{})
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				_ = ds.SetWriteDeadline(time.Time{})
+				return ctx.Err()
+			default:
+			}
+		}
+		_ = ds.SetWriteDeadline(time.Time{})
+		return nil
+	}
+
+	type writeResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan writeResult, 1)
+	go func() {
+		written := 0
+		for written < len(buf) {
+			n, err := s.Write(buf[written:])
+			if n > 0 {
+				written += n
+				deltaFn(relPath, int64(n))
+			}
+			if err != nil {
+				resultCh <- writeResult{n: written, err: err}
+				return
+			}
+		}
+		resultCh <- writeResult{n: written, err: nil}
 	}()
 	select {
 	case res := <-resultCh:
@@ -284,6 +424,9 @@ var (
 // It receives the relative path, bytes transferred so far, and total bytes.
 type ProgressFn func(relpath string, bytesSent int64, total int64)
 
+// ProgressDeltaFn reports incremental bytes transferred (for smoother progress).
+type ProgressDeltaFn func(relpath string, delta int64)
+
 // SendManifest sends a manifest and all its files/directories over the stream.
 // It writes the protocol header (magic + manifest JSON), then sends each item
 // in the manifest sequentially (directories first, then files with their content).
@@ -332,7 +475,7 @@ func SendManifest(ctx context.Context, s Stream, rootPath string, m manifest.Man
 		} else {
 			// Send file record with content (chunked)
 			filePath := filepath.Join(rootPath, filepath.FromSlash(item.RelPath))
-			if err := sendFileRecordChunked(ctx, s, item.RelPath, filePath, item.Size, chunkSize, progressFn); err != nil {
+			if err := sendFileRecordChunked(ctx, s, item.RelPath, filePath, item.Size, chunkSize, progressFn, nil); err != nil {
 				return fmt.Errorf("failed to send file record for %s: %w", item.RelPath, err)
 			}
 		}
@@ -365,7 +508,7 @@ type resumeState struct {
 
 // sendFileChunksWindowed sends file chunks using the windowed, read-ahead pipeline
 // and returns the computed CRC32.
-func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, resume *resumePlan, startChunk uint32, chunkCount uint32) (uint32, error) {
+func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, progressDeltaFn ProgressDeltaFn, resume *resumePlan, startChunk uint32, chunkCount uint32) (uint32, error) {
 	if fileSize > maxFileSize {
 		return 0, ErrFileSizeTooLarge
 	}
@@ -545,7 +688,7 @@ sendLoop:
 			}
 
 			// Write chunk bytes
-			if err := writeFullWithTimeout(ctx, s, chunk.buf[:chunk.n], relPath, "chunk-data"); err != nil {
+			if err := writeFullWithTimeoutDelta(ctx, s, chunk.buf[:chunk.n], relPath, "chunk-data", progressDeltaFn); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk bytes: %w", err)
 			}
@@ -579,7 +722,7 @@ sendLoop:
 
 // receiveFileChunksWindowed receives file chunks, writes to disk,
 // and returns the computed CRC32.
-func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, resume *resumeState, startChunk uint32, chunkCount uint32) (uint32, error) {
+func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, filePath string, fileSize uint64, chunkSize uint32, progressFn ProgressFn, progressDeltaFn ProgressDeltaFn, resume *resumeState, startChunk uint32, chunkCount uint32) (uint32, error) {
 	outFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open output file %s: %w", filePath, err)
@@ -688,7 +831,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				sendReadErr(fmt.Errorf("chunk length %d exceeds buffer size %d", chunkLen, len(buf)))
 				return
 			}
-			if err := readFullWithTimeout(readerCtx, s, buf[:chunkLen], relPath, "data"); err != nil {
+			if err := readFullWithTimeoutDelta(readerCtx, s, buf[:chunkLen], relPath, "data", progressDeltaFn); err != nil {
 				bufPool.Put(buf)
 				sendReadErr(fmt.Errorf("failed to read chunk bytes: %w", err))
 				return
@@ -840,7 +983,7 @@ func sendDirRecord(ctx context.Context, s Stream, relPath string) error {
 }
 
 // sendFileRecordChunked sends a file record with chunked content.
-func sendFileRecordChunked(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn) error {
+func sendFileRecordChunked(ctx context.Context, s Stream, relPath string, filePath string, fileSize int64, chunkSize uint32, progressFn ProgressFn, progressDeltaFn ProgressDeltaFn) error {
 	// Validate relpath
 	if err := validateRelPath(relPath); err != nil {
 		return err
@@ -875,7 +1018,7 @@ func sendFileRecordChunked(ctx context.Context, s Stream, relPath string, filePa
 		return fmt.Errorf("failed to write chunk size: %w", err)
 	}
 
-	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil, 0, 0); err != nil {
+	if _, err := sendFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, progressDeltaFn, nil, 0, 0); err != nil {
 		return err
 	}
 
@@ -1002,7 +1145,7 @@ func RecvManifest(ctx context.Context, s Stream, outDir string, progressFn Progr
 				return m, fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 			}
 
-			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil, 0, 0); err != nil {
+			if _, err := receiveFileChunksWindowed(ctx, s, relPath, filePath, fileSize, chunkSize, progressFn, nil, nil, 0, 0); err != nil {
 				return m, err
 			}
 

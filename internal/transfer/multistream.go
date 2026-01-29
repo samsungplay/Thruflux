@@ -37,6 +37,7 @@ type Options struct {
 	NoRootDir        bool
 	ResolveFilePath  func(relPath string) string
 	ProgressFn       ProgressFn
+	ProgressDeltaFn  ProgressDeltaFn
 	TransferStatsFn  TransferStatsFn
 	ResumeStatsFn    ResumeStatsFn
 	FileDoneFn       FileDoneFn
@@ -559,7 +560,7 @@ func chunkSizeForIndex(fileSize int64, chunkSize uint32, idx uint32) uint32 {
 	return chunkSize
 }
 
-func writeChunkFrame(ctx context.Context, s Stream, state *sendFileState, chunkIndex uint32, chunkLen uint32, chunkCRC uint32, data []byte) error {
+func writeChunkFrame(ctx context.Context, s Stream, state *sendFileState, chunkIndex uint32, chunkLen uint32, chunkCRC uint32, data []byte, progressDeltaFn ProgressDeltaFn) error {
 	var header [dataChunkHeaderLen]byte
 	binary.BigEndian.PutUint64(header[0:8], state.key)
 	binary.BigEndian.PutUint32(header[8:12], chunkIndex)
@@ -568,7 +569,7 @@ func writeChunkFrame(ctx context.Context, s Stream, state *sendFileState, chunkI
 	if err := writeFullWithTimeout(ctx, s, header[:], state.item.RelPath, "mux-header"); err != nil {
 		return err
 	}
-	if err := writeFullWithTimeout(ctx, s, data[:chunkLen], state.item.RelPath, "mux-data"); err != nil {
+	if err := writeFullWithTimeoutDelta(ctx, s, data[:chunkLen], state.item.RelPath, "mux-data", progressDeltaFn); err != nil {
 		return err
 	}
 	return nil
@@ -1288,7 +1289,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					return
 				}
 				chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), chunkCRC, buf[:n]); err != nil {
+				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), chunkCRC, buf[:n], opts.ProgressDeltaFn); err != nil {
 					bufPool.Put(buf)
 					setErr(err)
 					return
@@ -1676,7 +1677,9 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 					}
 
 					progressFn := opts.ProgressFn
+					progressDeltaFn := opts.ProgressDeltaFn
 					var stripeProgressFn ProgressFn = progressFn
+					var stripeProgressDeltaFn ProgressDeltaFn = progressDeltaFn
 					if progressFn != nil && state.fileAgg != nil && state.fileAgg.stripeCount > 1 {
 						var lastProgress int64
 						stripeProgressFn = func(relpath string, bytesReceived int64, total int64) {
@@ -1689,8 +1692,29 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 							progressFn(relpath, newTotal, total)
 						}
 					}
+					if progressDeltaFn != nil && state.fileAgg != nil && state.fileAgg.stripeCount > 1 {
+						stripeProgressDeltaFn = func(relpath string, delta int64) {
+							if delta <= 0 {
+								return
+							}
+							atomic.AddInt64(&state.fileAgg.progressTotal, delta)
+							progressDeltaFn(relpath, delta)
+						}
+					}
 
-					computedCRC, err := receiveFileChunksWindowed(recvCtx, dataStream, state.begin.RelPath, filePath, state.begin.FileSize, state.begin.ChunkSize, stripeProgressFn, state.resume, state.begin.StripeStart, state.begin.StripeChunks)
+					computedCRC, err := receiveFileChunksWindowed(
+						recvCtx,
+						dataStream,
+						state.begin.RelPath,
+						filePath,
+						state.begin.FileSize,
+						state.begin.ChunkSize,
+						stripeProgressFn,
+						stripeProgressDeltaFn,
+						state.resume,
+						state.begin.StripeStart,
+						state.begin.StripeChunks,
+					)
 					if err != nil {
 						if state.fileAgg != nil {
 							state.fileAgg.mu.Lock()
@@ -2469,7 +2493,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					dataErrCh <- fmt.Errorf("chunk length %d exceeds buffer size %d", chunkLen, len(buf))
 					return
 				}
-				if err := readFullWithTimeout(recvCtx, s, buf[:chunkLen], state.item.RelPath, "mux-data"); err != nil {
+				deltaFn := opts.ProgressDeltaFn
+				if err := readFullWithTimeoutDelta(recvCtx, s, buf[:chunkLen], state.item.RelPath, "mux-data", deltaFn); err != nil {
 					bufPool.Put(buf)
 					finalizeFile(state, false, err.Error())
 					dataErrCh <- err

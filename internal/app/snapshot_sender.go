@@ -965,6 +965,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	opts.ProgressFn = func(relpath string, bytesSent int64, total int64) {
 		progressCollector.Update(relpath, bytesSent, total)
 	}
+	opts.ProgressDeltaFn = func(relpath string, delta int64) {
+		progressCollector.Add(relpath, delta)
+	}
 	opts.TransferStatsFn = func(activeFiles, completedFiles int, remainingBytes int64) {
 		if !shouldUpdateProgress(&lastStats) {
 			return

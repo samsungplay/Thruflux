@@ -726,6 +726,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			progressCollector.Update(relpath, bytesReceived, total)
 		},
+		ProgressDeltaFn: func(relpath string, delta int64) {
+			progressCollector.Add(relpath, delta)
+		},
 		TransferStatsFn: func(activeFiles, completedFiles int, remainingBytes int64) {
 			if !shouldUpdateProgress(&lastStats) {
 				return
