@@ -424,9 +424,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			err = fmt.Errorf("transfer failed")
 		}
 		lastErr = err
-		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
-		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
-		r.logger.Error("transfer failed", "error", err)
 		exitWith(1)
 	}
 
