@@ -163,7 +163,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 			if currentFile == "" {
 				currentFile = "-"
 			}
-			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
+			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("📄 file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
 			lines++
 			if v.Benchmark {
 				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
@@ -194,7 +194,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 				if currentFile == "" {
 					currentFile = "-"
 				}
-				fmt.Fprintf(w, "%s file=%s (%d/%d)\n", formatReceiverLine(v), currentFile, v.FileDone, v.FileTotal)
+				fmt.Fprintf(w, "%s file=%s (%d/%d)\n", formatReceiverLine(v), "📄 "+currentFile, v.FileDone, v.FileTotal)
 			}
 		}
 	}

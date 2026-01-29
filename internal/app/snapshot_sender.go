@@ -74,8 +74,8 @@ func joinCodeHeaderLines(joinCode string) []string {
 	if len(joinCode) == 20 {
 		joinCode = joinCode[:5] + "-" + joinCode[5:10] + "-" + joinCode[10:15] + "-" + joinCode[15:]
 	}
-	title := "JOIN CODE"
-	cmd := fmt.Sprintf("thru join %s --out <dir>", joinCode)
+	title := "🔑 JOIN CODE"
+	cmd := fmt.Sprintf("📥 thru join %s --out <dir>", joinCode)
 	lines := []string{title, joinCode, cmd}
 	width := 0
 	for _, line := range lines {
@@ -350,10 +350,10 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		headerLines = append([]string{fmt.Sprintf(">>.. %s", cfg.StartupMessage)}, headerLines...)
 	}
 	if copied {
-		headerLines = append(headerLines, "Join code copied to clipboard.")
+		headerLines = append(headerLines, "📋 Join code copied to clipboard.")
 	}
 	if len(cfg.Paths) > 0 {
-		headerLines = append(headerLines, "Sharing the following paths:")
+		headerLines = append(headerLines, "📦 Sharing the following paths:")
 		for _, path := range cfg.Paths {
 			headerLines = append(headerLines, fmt.Sprintf("  - %s", path))
 		}
