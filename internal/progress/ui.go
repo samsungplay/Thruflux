@@ -107,9 +107,6 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		fmt.Fprint(w, "\033[?1049h")
 		fmt.Fprint(w, "\033[?25l")
 	}
-	lastLines := 0
-	cleared := false
-
 	renderOnce := func() {
 		renderMu.Lock()
 		defer renderMu.Unlock()
@@ -121,13 +118,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 			lastBench = time.Now()
 		}
 		if isTTY {
-			if lastLines > 0 {
-				fmt.Fprintf(w, "\033[%dA", lastLines)
-				fmt.Fprint(w, "\033[J")
-			} else if !cleared {
-				fmt.Fprint(w, "\033[H\033[J")
-				cleared = true
-			}
+			fmt.Fprint(w, "\033[H\033[J")
 			lines := 0
 			if v.StartupLine != "" {
 				fmt.Fprintln(w, colorize(v.StartupLine, colorCyan, isTTY))
@@ -158,7 +149,6 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
 				lines++
 			}
-			lastLines = lines
 		} else {
 			if v.StartupLine != "" {
 				fmt.Fprintln(w, v.StartupLine)
@@ -218,9 +208,6 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 		fmt.Fprint(w, "\033[?1049h")
 		fmt.Fprint(w, "\033[?25l")
 	}
-	lastLines := 0
-	cleared := false
-
 	renderOnce := func() {
 		renderMu.Lock()
 		defer renderMu.Unlock()
@@ -232,13 +219,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 			lastBench = time.Now()
 		}
 		if isTTY {
-			if lastLines > 0 {
-				fmt.Fprintf(w, "\033[%dA", lastLines)
-				fmt.Fprint(w, "\033[J")
-			} else if !cleared {
-				fmt.Fprint(w, "\033[H\033[J")
-				cleared = true
-			}
+			fmt.Fprint(w, "\033[H\033[J")
 			lines := 0
 			lines += writeHeader(w, v.Header, isTTY)
 			if v.Benchmark {
@@ -288,7 +269,6 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 					}
 				}
 			}
-			lastLines = lines
 		} else {
 			writeHeader(w, v.Header, false)
 			if v.Benchmark {
