@@ -396,6 +396,17 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	r.uiCleanup = stopUIFn
 	r.cleanupMu.Unlock()
 	defer stopUIFn()
+	var lastErr error
+	fail := func(err error) {
+		if err == nil {
+			err = fmt.Errorf("transfer failed")
+		}
+		lastErr = err
+		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
+		r.logger.Error("transfer failed", "error", err)
+		exitWith(1)
+	}
 	exitWith := func(code int) {
 		r.cleanupMu.Lock()
 		cleanup := r.uiCleanup
@@ -409,6 +420,10 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			// Set stage to FAILED for UI/logs
 			progressState.SetIceStage(fmt.Sprintf("FAILED (code=%d)", code))
 
+			if lastErr != nil {
+				fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", lastErr)
+				fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", lastErr)
+			}
 			r.logger.Error("receiver exiting", "code", code, "ice_stage", view.IceStage, "route", view.Route, "current_file", view.CurrentFile, "bytes_done", stats.BytesDone, "bytes_total", stats.Total, "session_id", r.sessionID, "sender_id", r.senderID)
 			fmt.Fprintf(termio.Stderr(), "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
 		}
@@ -433,17 +448,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	var lastProgress int64
 	if r.dumbTCP {
 		if err := r.runDumbTCPTransfer(baseCtx, progressState, &lastProgress); err != nil {
-			r.cleanupMu.Lock()
-			cleanup := r.uiCleanup
-			r.cleanupMu.Unlock()
-			if cleanup != nil {
-				cleanup()
-			}
-			if r.verbose {
-				fmt.Fprintf(termio.Stderr(), "dumb tcp transfer failed: %v\n", err)
-			}
-			r.logger.Error("dumb tcp transfer failed", "error", err)
-			exitWith(1)
+			fail(err)
 		}
 		progressState.ForceComplete()
 		exitWith(0)
@@ -462,8 +467,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 	prober, err = ice.NewProber(proberCfg, r.logger)
 	if err != nil {
-		r.logger.Error("failed to create prober", "error", err)
-		exitWith(1)
+		fail(err)
 	}
 	defer prober.Close()
 
@@ -474,8 +478,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	// Send candidates to sender
 	// We reuse IceCandidates message type for simplicity
 	if err := sendSignal(protocol.TypeIceCandidates, protocol.IceCandidates{Candidates: localCandidates}); err != nil {
-		r.logger.Error("failed to send candidates", "error", err)
-		exitWith(1)
+		fail(err)
 	}
 	progressState.SetIceStage(fmt.Sprintf("local_candidates_sent count=%d", len(localCandidates)))
 
@@ -512,8 +515,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	// Share the prober transport to avoid multiple QUIC readers on the same UDP socket.
 	quicListener, err := quictransport.ListenWithTransport(baseCtx, prober.Transport(), r.logger, quicCfg)
 	if err != nil {
-		r.logger.Error("failed to listen for QUIC", "error", err)
-		exitWith(1)
+		fail(err)
 	}
 	defer quicListener.Close()
 
@@ -656,16 +658,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	authCtx, authCancel := context.WithTimeout(baseCtx, 10*time.Second)
 	if err := authenticateTransport(authCtx, transferConn, r.joinCode, authRoleReceive); err != nil {
 		authCancel()
-		r.cleanupMu.Lock()
-		cleanup := r.uiCleanup
-		r.cleanupMu.Unlock()
-		if cleanup != nil {
-			cleanup()
-		}
-		fmt.Fprintf(termio.Stderr(), "transport auth failed: %v\n", err)
-		fmt.Fprintf(termio.Stdout(), "transport auth failed: %v\n", err)
-		r.logger.Error("transport auth failed", "error", err)
-		exitWith(1)
+		fail(err)
 	}
 	authCancel()
 
@@ -683,17 +676,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if expectedConns > 1 {
 			extraConns, err := r.acceptExtraConns(baseCtx, acceptTransport, expectedConns-1)
 			if err != nil {
-				r.cleanupMu.Lock()
-				cleanup := r.uiCleanup
-				r.cleanupMu.Unlock()
-				if cleanup != nil {
-					cleanup()
-				}
-				if r.verbose {
-					fmt.Fprintf(termio.Stderr(), "dumb transfer failed: %v\n", err)
-				}
-				r.logger.Error("dumb transfer failed", "error", err)
-				exitWith(1)
+				fail(err)
 			}
 			dumbConns = append(dumbConns, extraConns...)
 		}
@@ -707,17 +690,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			dumbCollector.Update(relpath, bytesReceived, total)
 		}); err != nil {
 			dumbStop()
-			r.cleanupMu.Lock()
-			cleanup := r.uiCleanup
-			r.cleanupMu.Unlock()
-			if cleanup != nil {
-				cleanup()
-			}
-			if r.verbose {
-				fmt.Fprintf(termio.Stderr(), "dumb transfer failed: %v\n", err)
-			}
-			r.logger.Error("dumb transfer failed", "error", err)
-			exitWith(1)
+			fail(err)
 		}
 		dumbStop()
 		_ = r.sendDumbQUICDone(len(dumbConns))
@@ -744,14 +717,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		conns = append(conns, extraConns...)
 	}
 	if len(conns) == 0 {
-		r.cleanupMu.Lock()
-		cleanup := r.uiCleanup
-		r.cleanupMu.Unlock()
-		if cleanup != nil {
-			cleanup()
-		}
-		fmt.Fprintf(termio.Stderr(), "transfer failed: no connections available\n")
-		exitWith(1)
+		fail(fmt.Errorf("no connections available"))
 	}
 	progressState.SetConnCount(len(conns))
 	defer func() {
@@ -819,16 +785,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	if len(conns) > 1 {
 		multi, err := transfer.NewMultiConn(conns)
 		if err != nil {
-			r.cleanupMu.Lock()
-			cleanup := r.uiCleanup
-			r.cleanupMu.Unlock()
-			if cleanup != nil {
-				cleanup()
-			}
-			fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
-			fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
-			r.logger.Error("transfer failed", "error", err)
-			exitWith(1)
+			fail(err)
 		}
 		defer multi.Close()
 		recvConn = multi
@@ -849,16 +806,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.ForceComplete()
 			exitWith(0)
 		}
-		r.cleanupMu.Lock()
-		cleanup := r.uiCleanup
-		r.cleanupMu.Unlock()
-		if cleanup != nil {
-			cleanup()
-		}
-		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
-		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
-		r.logger.Error("transfer failed", "error", err)
-		exitWith(1)
+		fail(err)
 	}
 
 	if r.benchmark {
