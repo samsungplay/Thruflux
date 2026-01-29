@@ -2125,7 +2125,17 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		typ byte
 		msg any
 	}
-	controlCh := make(chan controlEvent, 64)
+	controlBuf := 64
+	if totalFiles > 0 {
+		controlBuf = totalFiles * 2
+		if controlBuf < 64 {
+			controlBuf = 64
+		}
+		if controlBuf > 4096 {
+			controlBuf = 4096
+		}
+	}
+	controlCh := make(chan controlEvent, controlBuf)
 	controlErr := make(chan error, 1)
 	go func() {
 		for {
