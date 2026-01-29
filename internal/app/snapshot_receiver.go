@@ -397,16 +397,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	r.cleanupMu.Unlock()
 	defer stopUIFn()
 	var lastErr error
-	fail := func(err error) {
-		if err == nil {
-			err = fmt.Errorf("transfer failed")
-		}
-		lastErr = err
-		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
-		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
-		r.logger.Error("transfer failed", "error", err)
-		exitWith(1)
-	}
 	exitWith := func(code int) {
 		r.cleanupMu.Lock()
 		cleanup := r.uiCleanup
@@ -428,6 +418,16 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			fmt.Fprintf(termio.Stderr(), "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
 		}
 		os.Exit(code)
+	}
+	fail := func(err error) {
+		if err == nil {
+			err = fmt.Errorf("transfer failed")
+		}
+		lastErr = err
+		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
+		r.logger.Error("transfer failed", "error", err)
+		exitWith(1)
 	}
 
 	iceLog := func(stage string) {
