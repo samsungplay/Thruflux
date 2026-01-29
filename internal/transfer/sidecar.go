@@ -58,6 +58,37 @@ func LoadOrCreateSidecar(path, fileID string, fileSize int64, chunkSize uint32) 
 	return CreateSidecar(path, fileID, fileSize, chunkSize)
 }
 
+func LoadOrCreateSidecarWithFallback(primaryPath, fallbackPath, fileID string, fileSize int64, chunkSize uint32) (*Sidecar, error) {
+	if chunkSize == 0 {
+		return nil, fmt.Errorf("chunk size must be > 0")
+	}
+	loadValid := func(path string) (*Sidecar, bool, error) {
+		if path == "" {
+			return nil, false, nil
+		}
+		sc, err := LoadSidecar(path)
+		if err != nil {
+			return nil, false, nil
+		}
+		if sc.ChunkSize != chunkSize || sc.FileSize != fileSize || sc.FileID != fileID {
+			_ = os.Remove(path)
+			return nil, false, nil
+		}
+		return sc, true, nil
+	}
+	if sc, ok, err := loadValid(primaryPath); err != nil {
+		return nil, err
+	} else if ok {
+		return sc, nil
+	}
+	if sc, ok, err := loadValid(fallbackPath); err != nil {
+		return nil, err
+	} else if ok {
+		return sc, nil
+	}
+	return CreateSidecar(primaryPath, fileID, fileSize, chunkSize)
+}
+
 // LoadSidecar reads a sidecar from disk.
 func LoadSidecar(path string) (*Sidecar, error) {
 	data, err := os.ReadFile(path)

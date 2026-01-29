@@ -1333,9 +1333,10 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		return m, err
 	}
 
+	rootedDir := filepath.Join(outDir, m.Root)
 	baseDir := outDir
 	if !opts.NoRootDir {
-		baseDir = filepath.Join(outDir, m.Root)
+		baseDir = rootedDir
 	}
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return m, fmt.Errorf("failed to create output directory %s: %w", baseDir, err)
@@ -1524,8 +1525,12 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			fileAgg.mu.Lock()
 			sidecar = fileAgg.sidecar
 			if sidecar == nil {
-				sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(item))
-				loaded, err := LoadOrCreateSidecar(sidecarPath, item.ID, int64(begin.FileSize), begin.ChunkSize)
+				primary := SidecarPath(baseDir, "", sidecarIdentifier(item))
+				fallback := ""
+				if rootedDir != baseDir {
+					fallback = SidecarPath(rootedDir, "", sidecarIdentifier(item))
+				}
+				loaded, err := LoadOrCreateSidecarWithFallback(primary, fallback, item.ID, int64(begin.FileSize), begin.ChunkSize)
 				if err != nil {
 					fileAgg.mu.Unlock()
 					return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
@@ -1535,8 +1540,12 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			}
 			fileAgg.mu.Unlock()
 		} else {
-			sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(item))
-			loaded, err := LoadOrCreateSidecar(sidecarPath, item.ID, int64(begin.FileSize), begin.ChunkSize)
+			primary := SidecarPath(baseDir, "", sidecarIdentifier(item))
+			fallback := ""
+			if rootedDir != baseDir {
+				fallback = SidecarPath(rootedDir, "", sidecarIdentifier(item))
+			}
+			loaded, err := LoadOrCreateSidecarWithFallback(primary, fallback, item.ID, int64(begin.FileSize), begin.ChunkSize)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
 			}
@@ -1990,9 +1999,10 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return m, err
 	}
 
+	rootedDir := filepath.Join(outDir, m.Root)
 	baseDir := outDir
 	if !opts.NoRootDir {
-		baseDir = filepath.Join(outDir, m.Root)
+		baseDir = rootedDir
 	}
 	if baseDir == "" {
 		baseDir = "."
@@ -2221,8 +2231,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return info, nil
 		}
 		if state.sidecar == nil {
-			sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(state.item))
-			loaded, err := LoadOrCreateSidecar(sidecarPath, state.item.ID, state.item.Size, state.chunkSize)
+			primary := SidecarPath(baseDir, "", sidecarIdentifier(state.item))
+			fallback := ""
+			if rootedDir != baseDir {
+				fallback = SidecarPath(rootedDir, "", sidecarIdentifier(state.item))
+			}
+			loaded, err := LoadOrCreateSidecarWithFallback(primary, fallback, state.item.ID, state.item.Size, state.chunkSize)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load sidecar: %w", err)
 			}
@@ -2311,8 +2325,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 
 		if opts.Resume && item.ID != "" && begin.ChunkSize > 0 {
-			sidecarPath := SidecarPath(baseDir, "", sidecarIdentifier(item))
-			loaded, err := LoadOrCreateSidecar(sidecarPath, item.ID, int64(begin.FileSize), begin.ChunkSize)
+			primary := SidecarPath(baseDir, "", sidecarIdentifier(item))
+			fallback := ""
+			if rootedDir != baseDir {
+				fallback = SidecarPath(rootedDir, "", sidecarIdentifier(item))
+			}
+			loaded, err := LoadOrCreateSidecarWithFallback(primary, fallback, item.ID, int64(begin.FileSize), begin.ChunkSize)
 			if err != nil {
 				_ = f.Close()
 				return fmt.Errorf("failed to load sidecar: %w", err)

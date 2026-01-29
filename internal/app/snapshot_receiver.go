@@ -125,6 +125,12 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		sessionID:              "",
 		dumbQuicConnections:    1,
 	}
+	s.progressState = newReceiverProgress(0, 0, "", s.outDir, s.benchmark)
+	uiStop := progress.RenderReceiver(ctx, os.Stderr, s.receiverView, s.verbose)
+	var uiStopOnce sync.Once
+	safeStop := func() { uiStopOnce.Do(uiStop) }
+	s.uiCleanup = safeStop
+	defer safeStop()
 
 	go s.watchInterrupt()
 
@@ -168,6 +174,8 @@ type snapshotReceiver struct {
 	verbose                bool
 	resumeEnabled          bool
 	manifestPrompted       bool
+	progressMu             sync.Mutex
+	progressState          *receiverProgress
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -373,25 +381,38 @@ func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
 	return r.conn.Send(env)
 }
 
+func (r *snapshotReceiver) setProgressState(state *receiverProgress) {
+	r.progressMu.Lock()
+	r.progressState = state
+	r.progressMu.Unlock()
+}
+
+func (r *snapshotReceiver) receiverView() progress.ReceiverView {
+	r.progressMu.Lock()
+	state := r.progressState
+	r.progressMu.Unlock()
+	if state == nil {
+		return progress.ReceiverView{OutDir: r.outDir}
+	}
+	return state.View()
+}
+
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
+	r.setProgressState(progressState)
 	if r.benchmark {
 		benchCtx, benchCancel := context.WithCancel(baseCtx)
 		r.startReceiverBenchLoop(benchCtx, progressState)
 		defer benchCancel()
 	}
-	stopUI := progress.RenderReceiver(baseCtx, os.Stderr, progressState.View, r.verbose)
-	var stopUIOnce sync.Once
-	stopUIFn := func() {
-		stopUIOnce.Do(stopUI)
-	}
-	r.cleanupMu.Lock()
-	r.uiCleanup = stopUIFn
-	r.cleanupMu.Unlock()
-	defer stopUIFn()
 	exitWith := func(code int) {
-		stopUIFn()
+		r.cleanupMu.Lock()
+		cleanup := r.uiCleanup
+		r.cleanupMu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 		if code != 0 {
 			view := progressState.View()
 			stats := view.Stats
@@ -422,7 +443,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	var lastProgress int64
 	if r.dumbTCP {
 		if err := r.runDumbTCPTransfer(baseCtx, progressState, &lastProgress); err != nil {
-			stopUIFn()
+			r.cleanupMu.Lock()
+			cleanup := r.uiCleanup
+			r.cleanupMu.Unlock()
+			if cleanup != nil {
+				cleanup()
+			}
 			if r.verbose {
 				fmt.Fprintf(os.Stderr, "dumb tcp transfer failed: %v\n", err)
 			}
@@ -622,7 +648,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	authCtx, authCancel := context.WithTimeout(baseCtx, 10*time.Second)
 	if err := authenticateTransport(authCtx, transferConn, r.joinCode, authRoleReceive); err != nil {
 		authCancel()
-		stopUIFn()
+		r.cleanupMu.Lock()
+		cleanup := r.uiCleanup
+		r.cleanupMu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 		fmt.Fprintf(os.Stderr, "transport auth failed: %v\n", err)
 		fmt.Fprintf(os.Stdout, "transport auth failed: %v\n", err)
 		r.logger.Error("transport auth failed", "error", err)
@@ -644,7 +675,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if expectedConns > 1 {
 			extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, expectedConns-1)
 			if err != nil {
-				stopUIFn()
+				r.cleanupMu.Lock()
+				cleanup := r.uiCleanup
+				r.cleanupMu.Unlock()
+				if cleanup != nil {
+					cleanup()
+				}
 				if r.verbose {
 					fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
 				}
@@ -663,7 +699,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			dumbCollector.Update(relpath, bytesReceived, total)
 		}); err != nil {
 			dumbStop()
-			stopUIFn()
+			r.cleanupMu.Lock()
+			cleanup := r.uiCleanup
+			r.cleanupMu.Unlock()
+			if cleanup != nil {
+				cleanup()
+			}
 			if r.verbose {
 				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
 			}
@@ -695,7 +736,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		conns = append(conns, extraConns...)
 	}
 	if len(conns) == 0 {
-		stopUIFn()
+		r.cleanupMu.Lock()
+		cleanup := r.uiCleanup
+		r.cleanupMu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 		fmt.Fprintf(os.Stderr, "transfer failed: no connections available\n")
 		exitWith(1)
 	}
@@ -758,7 +804,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	if len(conns) > 1 {
 		multi, err := transfer.NewMultiConn(conns)
 		if err != nil {
-			stopUIFn()
+			r.cleanupMu.Lock()
+			cleanup := r.uiCleanup
+			r.cleanupMu.Unlock()
+			if cleanup != nil {
+				cleanup()
+			}
 			fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
 			fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
 			r.logger.Error("transfer failed", "error", err)
@@ -769,7 +820,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	if _, err := transfer.RecvManifestMultiStream(recvCtx, recvConn, r.outDir, opts); err != nil {
-		stopUIFn()
+		r.cleanupMu.Lock()
+		cleanup := r.uiCleanup
+		r.cleanupMu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
 		fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
 		r.logger.Error("transfer failed", "error", err)
