@@ -390,7 +390,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		s.startBenchmarkLoop(ctx)
 	}
 
-	uiStop := progress.RenderSender(ctx, os.Stdout, s.senderView, s.verbose)
+	uiStop := progress.RenderSender(ctx, os.Stderr, s.senderView, s.verbose)
 	defer uiStop()
 
 	go s.cleanupLoop(ctx)

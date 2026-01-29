@@ -78,40 +78,77 @@ func IsTTY(w io.Writer) bool {
 }
 
 func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool) func() {
-	if IsTTY(w) {
-		return renderReceiverTea(ctx, w, view, verbose)
-	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
+	isTTY := IsTTY(w)
 	var lastBench time.Time
 	var renderMu sync.Mutex
-	ticker.Stop()
-	ticker = time.NewTicker(1 * time.Second)
+	if !isTTY {
+		ticker.Stop()
+		ticker = time.NewTicker(1 * time.Second)
+	} else {
+		fmt.Fprint(w, "\033[?25l")
+	}
+	lastLines := 0
 
 	renderOnce := func() {
 		renderMu.Lock()
 		defer renderMu.Unlock()
 		v := view()
-		if v.Benchmark {
+		if !isTTY && v.Benchmark {
 			if time.Since(lastBench) < 5*time.Second {
 				return
 			}
 			lastBench = time.Now()
 		}
-		if v.Benchmark {
-			fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
-				formatBenchRate(v.Bench.InstMBps),
-				formatBenchRate(v.Bench.EwmaMBps),
-				formatBenchRate(v.Bench.AvgMBps),
-				formatBenchRate(v.Bench.PeakMBps),
-				formatElapsed(v.Bench.Elapsed),
-				formatETA(v.Bench.ETA))
-		} else {
+		if isTTY {
+			if lastLines > 0 {
+				fmt.Fprintf(w, "\033[%dA", lastLines)
+				fmt.Fprint(w, "\033[J")
+			}
+			lines := 0
+			if v.OutDir != "" {
+				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
+				lines++
+			}
+			if verbose {
+				if len(v.TransportLines) > 0 {
+					for _, line := range v.TransportLines {
+						fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
+						lines++
+					}
+				}
+				lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
+			}
+			fmt.Fprintf(w, "%s\n", colorize(formatReceiverLine(v), colorGreen, isTTY))
+			lines++
 			currentFile := v.CurrentFile
 			if currentFile == "" {
 				currentFile = "-"
 			}
-			fmt.Fprintf(w, "%s file=%s (%d/%d)\n", formatReceiverLine(v), currentFile, v.FileDone, v.FileTotal)
+			fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("file: %s (%d/%d)", currentFile, v.FileDone, v.FileTotal), colorCyan, isTTY))
+			lines++
+			if v.Benchmark {
+				fmt.Fprintf(w, "%s\n", colorize(formatBenchLine(v.Bench), colorCyan, isTTY))
+				lines++
+			}
+			lastLines = lines
+		} else {
+			if v.Benchmark {
+				fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
+					formatBenchRate(v.Bench.InstMBps),
+					formatBenchRate(v.Bench.EwmaMBps),
+					formatBenchRate(v.Bench.AvgMBps),
+					formatBenchRate(v.Bench.PeakMBps),
+					formatElapsed(v.Bench.Elapsed),
+					formatETA(v.Bench.ETA))
+			} else {
+				currentFile := v.CurrentFile
+				if currentFile == "" {
+					currentFile = "-"
+				}
+				fmt.Fprintf(w, "%s file=%s (%d/%d)\n", formatReceiverLine(v), currentFile, v.FileDone, v.FileTotal)
+			}
 		}
 	}
 
@@ -132,55 +169,118 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 	return func() {
 		close(stop)
 		renderOnce()
+		if isTTY {
+			fmt.Fprint(w, "\033[?25h")
+		}
 	}
 }
 
 func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verbose bool) func() {
-	if IsTTY(w) {
-		return renderSenderTea(ctx, w, view, verbose)
-	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
+	isTTY := IsTTY(w)
 	var lastBench time.Time
 	var renderMu sync.Mutex
-	ticker.Stop()
-	ticker = time.NewTicker(1 * time.Second)
+	if !isTTY {
+		ticker.Stop()
+		ticker = time.NewTicker(1 * time.Second)
+	} else {
+		fmt.Fprint(w, "\033[?25l")
+	}
+	lastLines := 0
 
 	renderOnce := func() {
 		renderMu.Lock()
 		defer renderMu.Unlock()
 		v := view()
-		if v.Benchmark {
+		if !isTTY && v.Benchmark {
 			if time.Since(lastBench) < 5*time.Second {
 				return
 			}
 			lastBench = time.Now()
 		}
-		writeHeader(w, v.Header, false)
-		if v.Benchmark {
-			for _, row := range v.Rows {
-				fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
-					row.Peer,
-					row.Status,
-					formatCount(int64(row.Resumed)),
-					formatBenchRate2(row.Bench.InstMBps),
-					formatBenchRate2(row.Bench.EwmaMBps),
-					formatBenchRate2(row.Bench.AvgMBps),
-					formatBenchRate2(row.Bench.PeakMBps),
-					formatElapsed(row.Bench.Elapsed),
-					formatETA(row.Bench.ETA),
-				)
+		if isTTY {
+			if lastLines > 0 {
+				fmt.Fprintf(w, "\033[%dA", lastLines)
+				fmt.Fprint(w, "\033[J")
 			}
+			lines := 0
+			lines += writeHeader(w, v.Header, isTTY)
+			if v.Benchmark {
+				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "elapsed", "ETA"}
+				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9, 9}
+				rows := make([][]string, 0, len(v.Rows))
+				for _, row := range v.Rows {
+					rows = append(rows, []string{
+						row.Peer,
+						row.Status,
+						formatFileCount(row.FileDone, row.FileTotal),
+						formatCount(int64(row.Resumed)),
+						fmt.Sprintf("%.1f", row.Stats.Percent),
+						formatBenchRate2(row.Bench.InstMBps),
+						formatBenchRate2(row.Bench.EwmaMBps),
+						formatBenchRate2(row.Bench.AvgMBps),
+						formatBenchRate2(row.Bench.PeakMBps),
+						formatElapsed(row.Bench.Elapsed),
+						formatETA(row.Bench.ETA),
+					})
+				}
+				lines += renderTable(w, headers, rows, widths)
+				if verbose {
+					for _, row := range v.Rows {
+						lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+					}
+				}
+			} else {
+				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
+				widths := []int{10, 12, 9, 7, 5, 9, 9}
+				rows := make([][]string, 0, len(v.Rows))
+				for _, row := range v.Rows {
+					rows = append(rows, []string{
+						row.Peer,
+						row.Status,
+						formatFileCount(row.FileDone, row.FileTotal),
+						formatCount(int64(row.Resumed)),
+						fmt.Sprintf("%.1f", row.Stats.Percent),
+						formatRate(row.Stats.RateBps),
+						formatETA(row.Stats.ETA),
+					})
+				}
+				lines += renderTable(w, headers, rows, widths)
+				if verbose {
+					for _, row := range v.Rows {
+						lines += renderConnSection(w, row.Peer, row.Stage, row.Route, row.Probes, row.ConnCount, isTTY)
+					}
+				}
+			}
+			lastLines = lines
 		} else {
-			for _, row := range v.Rows {
-				fmt.Fprintf(w, "peer=%s status=%s resumed=%s %.1f%% %s ETA %s\n",
-					row.Peer,
-					row.Status,
-					formatCount(int64(row.Resumed)),
-					row.Stats.Percent,
-					formatRate(row.Stats.RateBps),
-					formatETA(row.Stats.ETA),
-				)
+			writeHeader(w, v.Header, false)
+			if v.Benchmark {
+				for _, row := range v.Rows {
+					fmt.Fprintf(w, "BENCH %s status=%s resumed=%s inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
+						row.Peer,
+						row.Status,
+						formatCount(int64(row.Resumed)),
+						formatBenchRate2(row.Bench.InstMBps),
+						formatBenchRate2(row.Bench.EwmaMBps),
+						formatBenchRate2(row.Bench.AvgMBps),
+						formatBenchRate2(row.Bench.PeakMBps),
+						formatElapsed(row.Bench.Elapsed),
+						formatETA(row.Bench.ETA),
+					)
+				}
+			} else {
+				for _, row := range v.Rows {
+					fmt.Fprintf(w, "peer=%s status=%s resumed=%s %.1f%% %s ETA %s\n",
+						row.Peer,
+						row.Status,
+						formatCount(int64(row.Resumed)),
+						row.Stats.Percent,
+						formatRate(row.Stats.RateBps),
+						formatETA(row.Stats.ETA),
+					)
+				}
 			}
 		}
 	}
@@ -202,6 +302,9 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 	return func() {
 		close(stop)
 		renderOnce()
+		if isTTY {
+			fmt.Fprint(w, "\033[?25h")
+		}
 	}
 }
 
