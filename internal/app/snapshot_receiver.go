@@ -389,7 +389,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		r.startReceiverBenchLoop(benchCtx, progressState)
 		defer benchCancel()
 	}
-	stopUI := progress.RenderReceiver(baseCtx, termio.Stderr(), progressState.View, r.verbose)
+	stopUI := progress.RenderReceiver(baseCtx, termio.Stderr(), progressState.View, r.verbose, true)
 	var stopUIOnce sync.Once
 	stopUIFn := func() {
 		stopUIOnce.Do(stopUI)

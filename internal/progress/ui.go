@@ -96,7 +96,7 @@ func IsTTY(w io.Writer) bool {
 	return false
 }
 
-func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool) func() {
+func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool, finalLine bool) func() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	stop := make(chan struct{})
 	isTTY := IsTTY(w)
@@ -201,6 +201,18 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		if isTTY {
 			fmt.Fprint(w, "\033[?25h")
 			fmt.Fprint(w, "\033[?1049l")
+		}
+		if isTTY && finalLine {
+			v := view()
+			fmt.Fprintln(w, formatReceiverLine(v))
+			currentFile := v.CurrentFile
+			if currentFile == "" {
+				currentFile = "-"
+			}
+			fmt.Fprintf(w, "file: %s (%d/%d)\n", currentFile, v.FileDone, v.FileTotal)
+			if v.Benchmark {
+				fmt.Fprintln(w, formatBenchLine(v.Bench))
+			}
 		}
 	}
 }
