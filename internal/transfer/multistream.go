@@ -1575,7 +1575,10 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		}
 		if opts.ResumeStatsFn != nil && totalChunks > 0 {
 			callResume := func() {
-				skippedChunks := uint32(sidecar.bitmap.CountSet())
+				skippedChunks := uint32(0)
+				if highest, ok := sidecar.HighestContiguous(); ok && highest >= 0 {
+					skippedChunks = uint32(highest + 1)
+				}
 				if skippedChunks > totalChunks {
 					skippedChunks = totalChunks
 				}
@@ -2265,7 +2268,10 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 		if opts.ResumeStatsFn != nil && state.totalChunks > 0 {
 			state.resumeOnce.Do(func() {
-				skippedChunks := uint32(state.sidecar.bitmap.CountSet())
+				skippedChunks := uint32(0)
+				if highest, ok := state.sidecar.HighestContiguous(); ok && highest >= 0 {
+					skippedChunks = uint32(highest + 1)
+				}
 				if skippedChunks > state.totalChunks {
 					skippedChunks = state.totalChunks
 				}
