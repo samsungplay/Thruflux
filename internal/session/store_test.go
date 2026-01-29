@@ -35,12 +35,18 @@ func TestStore_Create(t *testing.T) {
 			t.Errorf("Session ID length = %d, want 32", len(id))
 		}
 
-		// Verify join code format (20 chars, Crockford Base32)
-		if len(code) != 20 {
-			t.Errorf("Join code length = %d, want 20", len(code))
+		// Verify join code format (23 chars, 5-5-5-5 Crockford Base32)
+		if len(code) != 23 {
+			t.Errorf("Join code length = %d, want 23", len(code))
 		}
 
-		for _, char := range code {
+		for idx, char := range code {
+			if idx == 5 || idx == 11 || idx == 17 {
+				if char != '-' {
+					t.Errorf("Join code missing dash at %d: %s", idx, code)
+				}
+				continue
+			}
 			if char == 'I' || char == 'L' || char == 'O' || char == 'U' {
 				t.Errorf("Join code contains ambiguous character: %c in %s", char, code)
 			}

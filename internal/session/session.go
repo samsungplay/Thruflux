@@ -114,7 +114,7 @@ func generateSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-// generateJoinCode generates a random 20-character join code.
+// generateJoinCode generates a random join code formatted as 5-5-5-5.
 // Uses Crockford Base32 alphabet (uppercase), excluding ambiguous characters: I, L, O, U.
 func generateJoinCode() string {
 	chars := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -123,12 +123,12 @@ func generateJoinCode() string {
 
 	if _, err := rand.Read(b); err != nil {
 		// Fallback if rand fails
-		return strings.Repeat("0", 20)
+		return "00000-00000-00000-00000"
 	}
 
 	for i := 0; i < 20; i++ {
 		code[i] = chars[b[i]%byte(len(chars))]
 	}
 
-	return string(code)
+	return string(code[:5]) + "-" + string(code[5:10]) + "-" + string(code[10:15]) + "-" + string(code[15:])
 }

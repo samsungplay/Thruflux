@@ -71,9 +71,6 @@ func runClipboardCmd(payload string, name string, args ...string) bool {
 }
 
 func joinCodeHeaderLines(joinCode string) []string {
-	if len(joinCode) == 20 {
-		joinCode = joinCode[:5] + "-" + joinCode[5:10] + "-" + joinCode[10:15] + "-" + joinCode[15:]
-	}
 	title := "🔑 JOIN CODE"
 	cmd := fmt.Sprintf("📥 thru join %s --out <dir>", joinCode)
 	lines := []string{title, joinCode, cmd}
