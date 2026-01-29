@@ -39,6 +39,7 @@ const (
 	ReceiverStatusJoined       = "JOINED"
 	ReceiverStatusAccepted     = "ACCEPTED"
 	ReceiverStatusQueued       = "QUEUED"
+	ReceiverStatusPreparing    = "PREPARING"
 	ReceiverStatusTransferring = "TRANSFERRING"
 	ReceiverStatusDone         = "DONE"
 	ReceiverStatusFailed       = "FAILED"
@@ -463,6 +464,23 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 		}
 		s.logger.Error("receiver left session", "peer_id", peerLeft.PeerID, "session_id", s.sessionID)
 		s.handlePeerLeft(peerLeft.PeerID)
+
+	case protocol.TypeTransferStatus:
+		var status protocol.TransferStatus
+		if err := env.DecodePayload(&status); err != nil {
+			s.logger.Error("failed to decode transfer_status", "error", err)
+			return
+		}
+		peerID := env.From
+		now := s.now()
+		s.mu.Lock()
+		state := s.receivers[peerID]
+		if state != nil && state.Status != ReceiverStatusDone && state.Status != ReceiverStatusFailed {
+			state.Status = status.Status
+			state.LastSeen = now
+		}
+		s.mu.Unlock()
+		s.emitChange()
 
 	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeDumbQUICDone:
 		s.forwardSignal(env)

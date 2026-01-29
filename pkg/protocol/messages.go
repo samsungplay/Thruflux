@@ -125,6 +125,13 @@ type TransferQueued struct {
 	Max            int    `json:"max"`
 }
 
+// TransferStatus updates the sender UI about receiver-side status.
+type TransferStatus struct {
+	ManifestID     string `json:"manifest_id,omitempty"`
+	ReceiverPeerID string `json:"receiver_peer_id,omitempty"`
+	Status         string `json:"status"`
+}
+
 // DumbTCPListen provides TCP listen addresses for dumb mode.
 type DumbTCPListen struct {
 	Addrs []string `json:"addrs"`

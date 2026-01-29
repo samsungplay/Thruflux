@@ -447,6 +447,24 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		env.To = r.senderID
 		return r.conn.Send(env)
 	}
+	sendTransferStatus := func(status string) {
+		if r.senderID == "" {
+			return
+		}
+		payload := protocol.TransferStatus{
+			ManifestID:     start.ManifestID,
+			ReceiverPeerID: r.peerID,
+			Status:         status,
+		}
+		env, err := protocol.NewEnvelope(protocol.TypeTransferStatus, protocol.NewMsgID(), payload)
+		if err != nil {
+			return
+		}
+		env.SessionID = r.sessionID
+		env.From = r.peerID
+		env.To = r.senderID
+		_ = r.conn.Send(env)
+	}
 
 	var lastProgress int64
 	if r.dumbTCP {
@@ -755,6 +773,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		ParallelFiles: totalStreams,
 		OnManifestFn: func(m manifest.Manifest) {
 			if r.clearResumeOnStart {
+				sendTransferStatus(ReceiverStatusPreparing)
 				progressState.SetHeaderLine("Clearing resume data for this transfer...")
 				removed, err := clearResumeDataForManifest(r.outDir, m, true)
 				if err != nil {
@@ -762,6 +781,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				} else {
 					progressState.SetHeaderLine(fmt.Sprintf("Cleared %d resume files.", removed))
 				}
+				sendTransferStatus(ReceiverStatusTransferring)
 				r.clearResumeOnStart = false
 			}
 		},

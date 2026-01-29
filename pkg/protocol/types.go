@@ -20,6 +20,7 @@ const (
 	TypeManifestAccept        = "manifest_accept"
 	TypeTransferStart         = "transfer_start"
 	TypeTransferQueued        = "transfer_queued"
+	TypeTransferStatus        = "transfer_status"
 	TypeDumbTCPListen         = "dumb_tcp_listen"
 	TypeDumbQUICMulti         = "dumb_quic_multi"
 	TypeDumbQUICDone          = "dumb_quic_done"
