@@ -412,7 +412,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 		if code == 0 {
 			view := progressState.View()
-			line := formatReceiverLine(view)
+			line := formatReceiverLineFinal(view)
 			currentFile := view.CurrentFile
 			if currentFile == "" {
 				currentFile = "-"
@@ -947,6 +947,70 @@ func formatBytes(n int64) string {
 	}
 	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
 	return fmt.Sprintf("%.2f %s", value, suffixes[exp-1])
+}
+
+func formatReceiverLineFinal(v progress.ReceiverView) string {
+	bar := renderBarFinal(v.Stats.Percent, 20)
+	return fmt.Sprintf("%s %5.1f%%  %s  resumed=%d  ETA %s  (recv %s/%s)",
+		bar,
+		v.Stats.Percent,
+		formatRateFinal(v.Stats.RateBps),
+		v.Resumed,
+		formatETAFinal(v.Stats.ETA),
+		formatGiBFinal(v.Stats.BytesDone),
+		formatGiBFinal(v.Stats.Total),
+	)
+}
+
+func renderBarFinal(percent float64, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int((percent / 100) * float64(width))
+	if filled > width {
+		filled = width
+	}
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
+}
+
+func formatRateFinal(bps float64) string {
+	const (
+		k = 1024
+		m = 1024 * k
+		g = 1024 * m
+	)
+	if bps >= g {
+		return fmt.Sprintf("%.2f GB/s", bps/float64(g))
+	}
+	if bps >= m {
+		return fmt.Sprintf("%.1f MB/s", bps/float64(m))
+	}
+	if bps >= k {
+		return fmt.Sprintf("%.0f KB/s", bps/float64(k))
+	}
+	return fmt.Sprintf("%.0f B/s", bps)
+}
+
+func formatGiBFinal(n int64) string {
+	const g = 1024 * 1024 * 1024
+	if n <= 0 {
+		return "0.00 GiB"
+	}
+	return fmt.Sprintf("%.2f GiB", float64(n)/float64(g))
+}
+
+func formatETAFinal(d time.Duration) string {
+	if d <= 0 {
+		return "--:--:--"
+	}
+	secs := int(d.Seconds())
+	h := secs / 3600
+	m := (secs % 3600) / 60
+	s := secs % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
 func (r *snapshotReceiver) runDumbTCPTransfer(ctx context.Context, progressState *receiverProgress, lastProgress *int64) error {
