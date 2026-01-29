@@ -672,7 +672,7 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 	s.sendQueuedUpdates(queuedMsgs)
 
 	if err != nil {
-		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.StderrFile(), "transfer failed: %v\n", err)
 		s.logger.Error("transfer failed", "peer_id", peerID, "error", err)
 	} else {
 		s.ForceComplete(peerID)

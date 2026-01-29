@@ -217,21 +217,23 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			accepted, err := promptAccept(reader)
 			if err != nil {
 				r.logger.Error("failed to read acceptance", "error", err)
+				fmt.Fprintf(termio.StderrFile(), "failed to read acceptance: %v\n", err)
 				os.Exit(1)
 			}
 			if !accepted {
-				fmt.Fprintln(termio.Stderr(), "Transfer declined.")
+				fmt.Fprintln(termio.StderrFile(), "Transfer declined.")
 				os.Exit(1)
 			}
 			if hasResumeData(r.outDir, offer.Summary.RootName) {
 				resume, err := promptResumeOrOverwrite(reader)
 				if err != nil {
 					r.logger.Error("failed to read resume choice", "error", err)
+					fmt.Fprintf(termio.StderrFile(), "failed to read resume choice: %v\n", err)
 					os.Exit(1)
 				}
 				if !resume {
 					if err := clearResumeData(r.outDir, offer.Summary.RootName); err != nil && r.verbose {
-						fmt.Fprintf(termio.Stderr(), "Failed to clear resume data: %v\n", err)
+						fmt.Fprintf(termio.StderrFile(), "Failed to clear resume data: %v\n", err)
 					}
 				}
 			}
@@ -250,7 +252,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			if cleanup != nil {
 				cleanup()
 			}
-			fmt.Fprintf(termio.Stderr(), "\nSender disconnected (peer left).\n")
+			fmt.Fprintf(termio.StderrFile(), "\nSender disconnected (peer left).\n")
 			os.Exit(1)
 		}
 	case protocol.TypeTransferStart:
@@ -1467,7 +1469,8 @@ func (r *snapshotReceiver) watchInterrupt() {
 	sig := <-sigChan
 	r.logger.Error("received signal, exiting", "signal", sig.String())
 	transfer.FlushAllFlushers()
-	fmt.Fprint(termio.Stderr(), "\033[?25h")
+	fmt.Fprint(termio.StderrFile(), "\033[?25h")
+	fmt.Fprintf(termio.StderrFile(), "received signal, exiting\n")
 	os.Exit(1)
 }
 
