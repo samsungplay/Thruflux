@@ -1182,10 +1182,14 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 	p.mu.Lock()
 	offset := p.skipOffset[relpath]
 	effective := bytes + offset
-	if total > 0 {
-		if effective > total {
-			effective = total
+	capTotal := total
+	if capTotal <= 0 {
+		if known, ok := p.totals[relpath]; ok && known > 0 {
+			capTotal = known
 		}
+	}
+	if capTotal > 0 && effective > capTotal {
+		effective = capTotal
 	}
 	prev := p.perFile[relpath]
 	if effective > prev {
