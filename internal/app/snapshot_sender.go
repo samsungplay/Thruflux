@@ -72,7 +72,7 @@ func runClipboardCmd(payload string, name string, args ...string) bool {
 
 func joinCodeHeaderLines(joinCode string) []string {
 	title := "🔑 JOIN CODE"
-	cmd := fmt.Sprintf("📥 thru join %s --out <dir>", joinCode)
+	cmd := fmt.Sprintf("📥 Receiver: run `thru join %s --out <dir>`", joinCode)
 	lines := []string{title, joinCode, cmd}
 	width := 0
 	for _, line := range lines {
