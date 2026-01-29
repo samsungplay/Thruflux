@@ -792,6 +792,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		ResumeStatsFn: func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32) {
 			progressState.RecordResume(relpath, skippedChunks, totalChunks, verifiedChunk, totalBytes, chunkSize)
 		},
+		PlannedSkipFn: func(relpath string, plannedSkipped, totalChunks uint32, totalBytes int64, chunkSize uint32) {
+			progressState.ApplyPlannedSkip(relpath, plannedSkipped, totalChunks, totalBytes, chunkSize)
+		},
 		FileDoneFn: func(relpath string, ok bool) {
 			progressState.MarkVerified(relpath, ok)
 			if total := progressCollector.Total(relpath); total > 0 {
@@ -1293,11 +1296,28 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 		return
 	}
 	p.resumedFiles++
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) ApplyPlannedSkip(relpath string, plannedSkipped, totalChunks uint32, totalBytes int64, chunkSize uint32) {
+	if relpath == "" {
+		return
+	}
+	p.mu.Lock()
+	p.currentFile = relpath
+	if p.appliedSkip[relpath] {
+		p.mu.Unlock()
+		return
+	}
+	if plannedSkipped == 0 || totalChunks == 0 {
+		p.mu.Unlock()
+		return
+	}
 	if totalBytes > 0 {
 		p.totals[relpath] = totalBytes
-		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize})
+		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: plannedSkipped, totalChunks: totalChunks, chunkSize: chunkSize})
 	} else {
-		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize}
+		p.pendingSkip[relpath] = resumeSkip{skippedChunks: plannedSkipped, totalChunks: totalChunks, chunkSize: chunkSize}
 	}
 	p.mu.Unlock()
 }

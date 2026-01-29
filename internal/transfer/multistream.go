@@ -40,6 +40,7 @@ type Options struct {
 	ProgressDeltaFn  ProgressDeltaFn
 	TransferStatsFn  TransferStatsFn
 	ResumeStatsFn    ResumeStatsFn
+	PlannedSkipFn    PlannedSkipFn
 	FileDoneFn       FileDoneFn
 	ParamSource      func() RuntimeParams
 	OnFileStart      func(relpath string, size int64, params RuntimeParams)
@@ -50,6 +51,9 @@ type TransferStatsFn func(activeFiles, completedFiles int, remainingBytes int64)
 
 // ResumeStatsFn reports resume statistics per file.
 type ResumeStatsFn func(relpath string, skippedChunks, totalChunks uint32, verifiedChunk uint32, totalBytes int64, chunkSize uint32)
+
+// PlannedSkipFn reports sender-planned skipped chunks for accurate resume UI.
+type PlannedSkipFn func(relpath string, plannedSkipped, totalChunks uint32, totalBytes int64, chunkSize uint32)
 
 // FileDoneFn reports file completion (ok=false on failure).
 type FileDoneFn func(relpath string, ok bool)
@@ -974,16 +978,28 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 							signalWake()
 						}(verifiedChunk, info.LastVerifiedHash)
 					}
-					if opts.ResumeStatsFn != nil {
-						plannedSkipped := uint32(0)
-						if forceSendFrom > 0 {
-							for i := uint32(0); i < forceSendFrom; i++ {
-								if bitmap.Get(int(i)) {
-									plannedSkipped++
-								}
+					plannedSkipped := uint32(0)
+					if forceSendFrom > 0 {
+						for i := uint32(0); i < forceSendFrom; i++ {
+							if bitmap.Get(int(i)) {
+								plannedSkipped++
 							}
 						}
+					}
+					if opts.ResumeStatsFn != nil {
 						opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
+					}
+					controlWriteMu.Lock()
+					plannedErr := writeResumePlanned(controlStream, ResumePlanned{
+						FileID:         state.item.ID,
+						StreamID:       state.key,
+						PlannedSkipped: plannedSkipped,
+						TotalChunks:    totalChunks,
+						ChunkSize:      chunkSize,
+					})
+					controlWriteMu.Unlock()
+					if plannedErr != nil {
+						return plannedErr
 					}
 				}
 
@@ -1465,6 +1481,7 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 	}
 	stateMu := sync.Mutex{}
 	stateByStream := make(map[uint64]*recvFileState)
+	pendingPlanned := make(map[uint64]ResumePlanned)
 	sem := make(chan struct{}, parallelFiles)
 	var wg sync.WaitGroup
 	var dirMu sync.Mutex
@@ -1591,6 +1608,32 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			}
 		}
 		return info, state, nil
+	}
+
+	handleResumePlanned := func(planned ResumePlanned) error {
+		stateMu.Lock()
+		state := stateByStream[planned.StreamID]
+		stateMu.Unlock()
+		if state == nil {
+			pendingPlanned[planned.StreamID] = planned
+			return nil
+		}
+		item := itemByRelPath[state.begin.RelPath]
+		if planned.FileID != "" && item.ID != "" && planned.FileID != item.ID {
+			return fmt.Errorf("resume planned file id mismatch for %s", state.begin.RelPath)
+		}
+		if opts.PlannedSkipFn != nil {
+			totalChunks := planned.TotalChunks
+			if totalChunks == 0 {
+				totalChunks = chunkTotal(int64(state.begin.FileSize), state.begin.ChunkSize)
+			}
+			chunkSize := planned.ChunkSize
+			if chunkSize == 0 {
+				chunkSize = state.begin.ChunkSize
+			}
+			opts.PlannedSkipFn(state.begin.RelPath, planned.PlannedSkipped, totalChunks, int64(state.begin.FileSize), chunkSize)
+		}
+		return nil
 	}
 
 	// Watchdog disabled per request to avoid aborting stalled streams.
@@ -1911,6 +1954,12 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			stateMu.Lock()
 			stateByStream[begin.StreamID] = state
 			stateMu.Unlock()
+			if planned, ok := pendingPlanned[begin.StreamID]; ok {
+				delete(pendingPlanned, begin.StreamID)
+				if err := handleResumePlanned(planned); err != nil {
+					return m, err
+				}
+			}
 			select {
 			case beginQueue <- begin:
 			case <-recvCtx.Done():
@@ -1946,6 +1995,12 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			case controlWriteCh <- controlMsg{resume: resumeInfo}:
 			case <-recvCtx.Done():
 				return m, recvCtx.Err()
+			}
+
+		case controlTypeResumePlanned:
+			planned := msg.(ResumePlanned)
+			if err := handleResumePlanned(planned); err != nil {
+				return m, err
 			}
 
 		case controlTypeFileEnd:
@@ -2103,6 +2158,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	stateByKey := make(map[uint64]*recvFileStateMux)
 	stateByRelPath := make(map[string]*recvFileStateMux)
 	doneKeys := make(map[uint64]struct{})
+	pendingPlanned := make(map[uint64]ResumePlanned)
 	fileReady := newFileWaitRegistry()
 
 	var statsMu sync.Mutex
@@ -2281,6 +2337,31 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return info, nil
 	}
 
+	handleResumePlanned := func(planned ResumePlanned) error {
+		stateMu.Lock()
+		state := stateByKey[planned.StreamID]
+		stateMu.Unlock()
+		if state == nil {
+			pendingPlanned[planned.StreamID] = planned
+			return nil
+		}
+		if planned.FileID != "" && state.item.ID != "" && planned.FileID != state.item.ID {
+			return fmt.Errorf("resume planned file id mismatch for %s", state.item.RelPath)
+		}
+		if opts.PlannedSkipFn != nil {
+			totalChunks := planned.TotalChunks
+			if totalChunks == 0 {
+				totalChunks = state.totalChunks
+			}
+			chunkSize := planned.ChunkSize
+			if chunkSize == 0 {
+				chunkSize = state.chunkSize
+			}
+			opts.PlannedSkipFn(state.item.RelPath, planned.PlannedSkipped, totalChunks, int64(state.item.Size), chunkSize)
+		}
+		return nil
+	}
+
 	handleFileBegin := func(begin FileBegin) error {
 		if err := validateRelPath(begin.RelPath); err != nil {
 			return err
@@ -2360,6 +2441,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		stateByKey[key] = state
 		stateByRelPath[item.RelPath] = state
 		stateMu.Unlock()
+		if planned, ok := pendingPlanned[key]; ok {
+			delete(pendingPlanned, key)
+			if err := handleResumePlanned(planned); err != nil {
+				return err
+			}
+		}
 		fileReady.signal(key)
 
 		statsMu.Lock()
@@ -2446,6 +2533,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return handleFileBegin(ev.msg.(FileBegin))
 		case controlTypeResumeRequest:
 			return handleResumeRequest(ev.msg.(ResumeRequest))
+		case controlTypeResumePlanned:
+			return handleResumePlanned(ev.msg.(ResumePlanned))
 		case controlTypeFileEnd:
 			return handleFileEnd(ev.msg.(FileEnd))
 		case controlTypeEnd:
