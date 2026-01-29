@@ -39,8 +39,6 @@ func Run(args []string) {
 	outDir := ""
 	serverURL := ""
 	benchmark := false
-	dumb := false
-	dumbTCP := false
 	verbose := false
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
@@ -63,15 +61,6 @@ func Run(args []string) {
 		}
 		if arg == "--verbose" {
 			verbose = true
-			continue
-		}
-		if arg == "--dumb" {
-			dumb = true
-			continue
-		}
-		if arg == "--dumb-tcp" {
-			dumb = true
-			dumbTCP = true
 			continue
 		}
 		if arg == "--server-url" && i+1 < len(args) {
@@ -188,8 +177,6 @@ func Run(args []string) {
 		Benchmark:              benchmark,
 		Verbose:                verbose,
 		StartupMessage:         strings.TrimSpace(os.Getenv("THRU_STARTUP_MESSAGE")),
-		Dumb:                   dumb,
-		DumbTCP:                dumbTCP,
 		UDPReadBufferBytes:     udpReadBufferBytes,
 		UDPWriteBufferBytes:    udpWriteBufferBytes,
 		QuicConnWindowBytes:    quicConnWindowBytes,
@@ -221,8 +208,6 @@ func printReceiverUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
-	fmt.Fprintln(termio.Stderr(), "  --dumb                      raw memory stream (discarded on receive)")
-	fmt.Fprintln(termio.Stderr(), "  --dumb-tcp                  raw memory stream over TCP (discarded on receive)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")

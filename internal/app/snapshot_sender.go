@@ -13,11 +13,13 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -68,6 +70,14 @@ func runClipboardCmd(payload string, name string, args ...string) bool {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run() == nil
+}
+
+func restoreTTY(w io.Writer) {
+	if w == nil {
+		return
+	}
+	fmt.Fprint(w, "\033[?25h")
+	fmt.Fprint(w, "\033[?1049l")
 }
 
 func joinCodeHeaderLines(joinCode string) []string {
@@ -128,11 +138,6 @@ type SnapshotSenderConfig struct {
 	ReceiverTTL            time.Duration
 	TransferOpts           transfer.Options
 	Benchmark              bool
-	Dumb                   bool
-	DumbSizeBytes          int64
-	DumbName               string
-	DumbTCP                bool
-	DumbConnections        int
 	ParallelConnections    int
 	UDPReadBufferBytes     int
 	UDPWriteBufferBytes    int
@@ -156,12 +161,6 @@ type SnapshotSender struct {
 	transferOpts  transfer.Options
 	transferFn    func(context.Context, string) error
 	headerStatic  string
-	dumb          bool
-	dumbPath      string
-	dumbSizeBytes int64
-	dumbName      string
-	dumbTCP       bool
-	dumbConns     int
 	parallelConns int
 
 	peerID     string
@@ -265,7 +264,8 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(termio.Stderr(), nil))
 	}
-	if len(cfg.Paths) == 0 && !(cfg.Dumb && cfg.DumbSizeBytes > 0) {
+	defer restoreTTY(termio.StderrFile())
+	if len(cfg.Paths) == 0 {
 		return fmt.Errorf("no input paths provided")
 	}
 	if cfg.MaxReceivers <= 0 {
@@ -273,9 +273,6 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 	if cfg.ReceiverTTL <= 0 {
 		cfg.ReceiverTTL = 10 * time.Minute
-	}
-	if cfg.DumbConnections < 1 {
-		cfg.DumbConnections = 1
 	}
 	if cfg.ParallelConnections < 1 {
 		cfg.ParallelConnections = 4
@@ -296,45 +293,15 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.QuicMaxIncomingStreams = 256
 	}
 
-	var (
-		m        manifest.Manifest
-		resolver func(string) string
-		err      error
-	)
-	if cfg.Dumb && cfg.DumbSizeBytes > 0 {
-		name := cfg.DumbName
-		if name == "" {
-			name = "mem.bin"
-		}
-		m = manifest.Manifest{
-			Root:       "dumb",
-			Items:      []manifest.FileItem{{RelPath: name, Size: cfg.DumbSizeBytes, ModTime: time.Now().Unix(), IsDir: false}},
-			TotalBytes: cfg.DumbSizeBytes,
-			FileCount:  1,
-		}
-	} else {
-		stopScan := startScanStatus()
-		m, err = manifest.ScanPaths(cfg.Paths)
-		stopScan(err)
-		if err != nil {
-			return fmt.Errorf("failed to scan paths: %w", err)
-		}
-		if cfg.Dumb {
-			if len(cfg.Paths) != 1 {
-				return fmt.Errorf("dumb mode requires exactly one file path")
-			}
-			info, err := os.Stat(cfg.Paths[0])
-			if err != nil {
-				return fmt.Errorf("failed to stat path: %w", err)
-			}
-			if info.IsDir() {
-				return fmt.Errorf("dumb mode requires a file, not a directory")
-			}
-		}
-		resolver, err = buildPathResolver(cfg.Paths)
-		if err != nil {
-			return err
-		}
+	stopScan := startScanStatus()
+	m, err := manifest.ScanPaths(cfg.Paths)
+	stopScan(err)
+	if err != nil {
+		return fmt.Errorf("failed to scan paths: %w", err)
+	}
+	resolver, err := buildPathResolver(cfg.Paths)
+	if err != nil {
+		return err
 	}
 	manifestID, err := hashManifestJSON(m)
 	if err != nil {
@@ -392,17 +359,6 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		transferOpts: cfg.TransferOpts,
 		headerStatic: headerStatic,
 		benchmark:    cfg.Benchmark,
-		dumb:         cfg.Dumb,
-		dumbPath: func() string {
-			if len(cfg.Paths) > 0 {
-				return cfg.Paths[0]
-			}
-			return ""
-		}(),
-		dumbSizeBytes:          cfg.DumbSizeBytes,
-		dumbName:               cfg.DumbName,
-		dumbTCP:                cfg.DumbTCP,
-		dumbConns:              cfg.DumbConnections,
 		parallelConns:          cfg.ParallelConnections,
 		verbose:                cfg.Verbose,
 		peerID:                 peerID,
@@ -446,6 +402,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	defer uiStop()
 
 	go s.cleanupLoop(ctx)
+	go s.watchInterrupt()
 	go s.watchHardQuit()
 
 	err = conn.ReadLoop(ctx, func(env protocol.Envelope) {
@@ -519,7 +476,7 @@ func (s *SnapshotSender) handleEnvelope(ctx context.Context, env protocol.Envelo
 		s.mu.Unlock()
 		s.emitChange()
 
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeDumbQUICDone:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		s.forwardSignal(env)
 	}
 }
@@ -742,9 +699,6 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 }
 
 func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) error {
-	if s.dumbTCP {
-		return s.runDumbTCPTransfer(ctx, peerID)
-	}
 	signalCh := s.getSignalCh(peerID)
 	if signalCh == nil {
 		return fmt.Errorf("no signal channel for %s", peerID)
@@ -921,57 +875,9 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	authCancel()
 
-	if s.dumb {
-		name := s.dumbName
-		if name == "" {
-			name = filepath.Base(s.dumbPath)
-		}
-		size := s.dumbSizeBytes
-		if size == 0 {
-			info, err := os.Stat(s.dumbPath)
-			if err != nil {
-				return fmt.Errorf("failed to stat path: %w", err)
-			}
-			size = info.Size()
-		}
-		if s.dumbConns <= 1 {
-			s.setSenderConnCount(peerID, 1)
-			return sendDumbData(ctx, transferConn, name, size)
-		}
-		if err := sendSignal(protocol.TypeDumbQUICMulti, protocol.DumbQUICMulti{Connections: s.dumbConns}); err != nil {
-			return fmt.Errorf("failed to send dumb quic multi: %w", err)
-		}
-		remoteAddr, err := resolveUDPAddr(quicConn.RemoteAddr())
-		if err != nil {
-			return err
-		}
-		var extra []dumbExtraConn
-		if turnConn {
-			extra, err = s.dialExtraConnsWithTransport(ctx, peerID, prober.Transport(), remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
-		} else {
-			extra, err = s.dialExtraConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
-		}
-		if err != nil {
-			return err
-		}
-		conns := make([]transfer.Conn, 0, 1+len(extra))
-		conns = append(conns, transferConn)
-		for _, c := range extra {
-			conns = append(conns, c.conn)
-		}
-		s.setSenderConnCount(peerID, len(conns))
-		if err := sendDumbDataMulti(ctx, conns, name, size); err != nil {
-			return err
-		}
-		if err := s.waitForDumbQUICDone(ctx, peerID, 10*time.Second); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	targetConns := s.effectiveParallelConnections(peerID)
 	conns := []transfer.Conn{transferConn}
-	var extra []dumbExtraConn
+	var extra []extraConn
 	if targetConns > 1 {
 		remoteAddr, err := resolveUDPAddr(quicConn.RemoteAddr())
 		if err != nil {
@@ -1093,38 +999,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	return nil
 }
 
-func (s *SnapshotSender) waitForDumbQUICDone(ctx context.Context, peerID string, timeout time.Duration) error {
-	signalCh := s.getSignalCh(peerID)
-	if signalCh == nil {
-		return fmt.Errorf("no signal channel for %s", peerID)
-	}
-	waitCtx := ctx
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-	for {
-		select {
-		case <-waitCtx.Done():
-			return fmt.Errorf("timeout waiting for dumb completion")
-		case env := <-signalCh:
-			if env.Type != protocol.TypeDumbQUICDone {
-				continue
-			}
-			var msg protocol.DumbQUICDone
-			if err := env.DecodePayload(&msg); err != nil {
-				return err
-			}
-			if msg.Parts <= 0 {
-				return nil
-			}
-			return nil
-		}
-	}
-}
-
-type dumbExtraConn struct {
+type extraConn struct {
 	conn  transfer.Conn
 	close func()
 }
@@ -1153,7 +1028,7 @@ func listenUDPForRemote(remote *net.UDPAddr) (*net.UDPConn, error) {
 	return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0, Zone: remote.Zone})
 }
 
-func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
+func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]extraConn, error) {
 	if extra <= 0 {
 		return nil, nil
 	}
@@ -1161,7 +1036,7 @@ func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remo
 		return nil, fmt.Errorf("remote address is nil")
 	}
 
-	conns := make([]dumbExtraConn, 0, extra)
+	conns := make([]extraConn, 0, extra)
 	var lastErr error
 	for i := 0; i < extra; i++ {
 		udpConn, err := listenUDPForRemote(remote)
@@ -1197,7 +1072,7 @@ func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remo
 		conn := tconn
 		qc := quicConn
 		uc := udpConn
-		conns = append(conns, dumbExtraConn{
+		conns = append(conns, extraConn{
 			conn: conn,
 			close: func() {
 				conn.Close()
@@ -1212,7 +1087,7 @@ func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remo
 	return conns, lastErr
 }
 
-func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID string, transport *quic.Transport, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
+func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID string, transport *quic.Transport, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]extraConn, error) {
 	if extra <= 0 {
 		return nil, nil
 	}
@@ -1223,7 +1098,7 @@ func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID
 		return nil, fmt.Errorf("remote address is nil")
 	}
 
-	conns := make([]dumbExtraConn, 0, extra)
+	conns := make([]extraConn, 0, extra)
 	var lastErr error
 	for i := 0; i < extra; i++ {
 		quicConn, err := transport.Dial(ctx, remote, tlsConf, quicCfg)
@@ -1248,7 +1123,7 @@ func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID
 		authCancel()
 		conn := tconn
 		qc := quicConn
-		conns = append(conns, dumbExtraConn{
+		conns = append(conns, extraConn{
 			conn: conn,
 			close: func() {
 				conn.Close()
@@ -1260,51 +1135,6 @@ func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID
 		return conns, lastErr
 	}
 	return conns, lastErr
-}
-
-func (s *SnapshotSender) runDumbTCPTransfer(ctx context.Context, peerID string) error {
-	sendSignal := func(msgType string, payload any) error {
-		env, err := protocol.NewEnvelope(msgType, protocol.NewMsgID(), payload)
-		if err != nil {
-			return err
-		}
-		env.SessionID = s.sessionID
-		env.From = s.peerID
-		env.To = peerID
-		return s.conn.Send(env)
-	}
-
-	listener, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		return fmt.Errorf("failed to listen tcp: %w", err)
-	}
-	defer listener.Close()
-
-	port := listener.Addr().(*net.TCPAddr).Port
-	addrs := dumbTCPListenAddrs(port)
-	if err := sendSignal(protocol.TypeDumbTCPListen, protocol.DumbTCPListen{Addrs: addrs}); err != nil {
-		return fmt.Errorf("failed to send tcp listen addrs: %w", err)
-	}
-
-	conn, err := acceptWithContext(ctx, listener)
-	if err != nil {
-		return fmt.Errorf("failed to accept tcp: %w", err)
-	}
-	defer conn.Close()
-
-	name := s.dumbName
-	if name == "" {
-		name = filepath.Base(s.dumbPath)
-	}
-	size := s.dumbSizeBytes
-	if size == 0 {
-		info, err := os.Stat(s.dumbPath)
-		if err != nil {
-			return fmt.Errorf("failed to stat path: %w", err)
-		}
-		size = info.Size()
-	}
-	return sendDumbDataWriter(conn, []byte(name), size)
 }
 
 func (s *SnapshotSender) sendManifestOffer(peerID string) {
@@ -1410,7 +1240,7 @@ func (s *SnapshotSender) forwardSignal(env protocol.Envelope) {
 		return
 	}
 	switch env.Type {
-	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate, protocol.TypeDumbQUICDone:
+	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		select {
 		case ch <- env:
 		default:
@@ -1511,9 +1341,22 @@ func (s *SnapshotSender) hardStop() {
 	}
 	if s.exitFn != nil {
 		transfer.FlushAllFlushers()
-		fmt.Fprint(termio.Stderr(), "\033[?25h")
+		restoreTTY(termio.StderrFile())
 		s.exitFn(0)
 	}
+}
+
+func (s *SnapshotSender) watchInterrupt() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigChan
+	s.logger.Error("received signal, exiting", "signal", sig.String())
+	transfer.FlushAllFlushers()
+	restoreTTY(termio.StderrFile())
+	if s.exitFn != nil {
+		s.exitFn(1)
+	}
+	os.Exit(1)
 }
 
 func (s *SnapshotSender) emitChange() {

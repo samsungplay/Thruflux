@@ -131,18 +131,3 @@ type TransferStatus struct {
 	ReceiverPeerID string `json:"receiver_peer_id,omitempty"`
 	Status         string `json:"status"`
 }
-
-// DumbTCPListen provides TCP listen addresses for dumb mode.
-type DumbTCPListen struct {
-	Addrs []string `json:"addrs"`
-}
-
-// DumbQUICMulti requests multiple QUIC connections for dumb mode.
-type DumbQUICMulti struct {
-	Connections int `json:"connections"`
-}
-
-// DumbQUICDone indicates dumb QUIC transfer completion.
-type DumbQUICDone struct {
-	Parts int `json:"parts"`
-}

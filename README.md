@@ -123,14 +123,14 @@ thru host <paths...> [flags]
 | `--turn-server`                                           | Comma‑separated TURN URLs (default none). Supports `turn:` and `turns:` schemes.                                              |
 | `--test-turn`                                             | Only use TURN relay candidates (no direct probing).                                                                           |
 | `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`).                                                                        |
-| `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `100`).                                                                                    |
+| `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `256`).                                                                                    |
 | `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
 | `--total-connections`                                     | Total QUIC connections (default `4`).                                                                                         |
 | `--total-streams`                                         | Total concurrent transfer streams (default `12`, `1..32`).                                                                     |
-| `--dumb`                                                  | Raw memory stream; pass a single size like `1G` (or a file path for sizing).                                                   |
-| `--dumb-tcp`                                              | Raw memory stream over TCP (LAN/port‑forward).                                                                                 |
-| `--dumb-connections`                                      | Dumb mode: parallel QUIC connections (`1..32`).                                                                                |
+| `--udp-read-buffer-bytes`                                 | UDP read buffer size (default `8388608`).                                                                                      |
+| `--udp-write-buffer-bytes`                                | UDP write buffer size (default `8388608`).                                                                                     |
 | `--benchmark`                                             | Print throughput stats.                                                                                                       |
+| `--verbose`                                               | Enable verbose UI/logging.                                                                                                    |
 | `--version`, `-v`                                         | Print the Thruflux CLI version.                                                                                               |
 | `--help`, `-h`                                            | Show usage and flag descriptions.                                                                                             |
 
@@ -148,6 +148,8 @@ thru join <join-code> [flags]
 | `--test-turn`                                                                           | Only use TURN relay candidates (no direct probing).    |
 | `--quic-conn-window-bytes`, `--quic-stream-window-bytes`, `--quic-max-incoming-streams` | QUIC tuning knobs.                                     |
 | `--benchmark`                                                                           | Print throughput stats.                                |
+| `--verbose`                                                                             | Enable verbose UI/logging.                             |
+| `--udp-read-buffer-bytes` / `--udp-write-buffer-bytes`                                   | UDP buffer sizes (default `8388608`).                  |
 | `--version`, `-v`                                                                       | Print the Thruflux CLI version.                        |
 | `--help`, `-h`                                                                          | Show usage and flag descriptions.                      |
 

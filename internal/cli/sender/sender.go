@@ -41,12 +41,7 @@ func Run(args []string) {
 	serverURL := ""
 	maxReceivers := 4
 	benchmark := false
-	dumb := false
-	dumbTCP := false
 	verbose := false
-	var dumbSizeBytes int64
-	dumbName := ""
-	dumbConnections := 1
 	totalConnections := 4
 	udpReadBufferBytes := 8 * 1024 * 1024
 	udpWriteBufferBytes := 8 * 1024 * 1024
@@ -77,26 +72,6 @@ func Run(args []string) {
 		}
 		if arg == "--verbose" {
 			verbose = true
-			continue
-		}
-		if arg == "--dumb" {
-			dumb = true
-			continue
-		}
-		if arg == "--dumb-tcp" {
-			dumb = true
-			dumbTCP = true
-			continue
-		}
-		if arg == "--dumb-connections" && i+1 < len(args) {
-			i++
-			value := args[i]
-			parsed, err := strconv.Atoi(value)
-			if err != nil || parsed < 1 || parsed > 32 {
-				fmt.Fprintln(termio.Stderr(), "invalid --dumb-connections value")
-				os.Exit(2)
-			}
-			dumbConnections = parsed
 			continue
 		}
 		if arg == "--total-connections" && i+1 < len(args) {
@@ -212,23 +187,8 @@ func Run(args []string) {
 		}
 		paths = append(paths, arg)
 	}
-	if dumb && len(paths) == 1 {
-		if size, ok := parseSizeToken(paths[0]); ok {
-			dumbSizeBytes = size
-			dumbName = "mem.bin"
-			paths = nil
-		}
-	}
-	if len(paths) == 0 && !dumb {
+	if len(paths) == 0 {
 		printSenderUsage()
-		os.Exit(2)
-	}
-	if dumbConnections != 1 && !dumb {
-		fmt.Fprintln(termio.Stderr(), "--dumb-connections requires --dumb")
-		os.Exit(2)
-	}
-	if dumbTCP && dumbConnections != 1 {
-		fmt.Fprintln(termio.Stderr(), "--dumb-connections is not supported with --dumb-tcp")
 		os.Exit(2)
 	}
 
@@ -252,11 +212,6 @@ func Run(args []string) {
 		Benchmark:              benchmark,
 		Verbose:                verbose,
 		StartupMessage:         strings.TrimSpace(os.Getenv("THRU_STARTUP_MESSAGE")),
-		Dumb:                   dumb,
-		DumbTCP:                dumbTCP,
-		DumbSizeBytes:          dumbSizeBytes,
-		DumbName:               dumbName,
-		DumbConnections:        dumbConnections,
 		ParallelConnections:    totalConnections,
 		UDPReadBufferBytes:     udpReadBufferBytes,
 		UDPWriteBufferBytes:    udpWriteBufferBytes,
@@ -291,9 +246,6 @@ func printSenderUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
-	fmt.Fprintln(termio.Stderr(), "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
-	fmt.Fprintln(termio.Stderr(), "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
-	fmt.Fprintln(termio.Stderr(), "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")
 	fmt.Fprintln(termio.Stderr(), "  --total-connections N       total QUIC connections (default 4)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
@@ -324,37 +276,6 @@ func splitServers(raw string) []string {
 		out = append(out, part)
 	}
 	return out
-}
-
-func parseSizeToken(raw string) (int64, bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return 0, false
-	}
-	s = strings.ToUpper(s)
-	mult := int64(1)
-	switch {
-	case strings.HasSuffix(s, "K"):
-		mult = 1024
-		s = strings.TrimSuffix(s, "K")
-	case strings.HasSuffix(s, "M"):
-		mult = 1024 * 1024
-		s = strings.TrimSuffix(s, "M")
-	case strings.HasSuffix(s, "G"):
-		mult = 1024 * 1024 * 1024
-		s = strings.TrimSuffix(s, "G")
-	case strings.HasSuffix(s, "T"):
-		mult = 1024 * 1024 * 1024 * 1024
-		s = strings.TrimSuffix(s, "T")
-	}
-	if s == "" {
-		return 0, false
-	}
-	value, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || value <= 0 {
-		return 0, false
-	}
-	return value * mult, true
 }
 
 func buildWebSocketURL(serverURL, joinCode, peerID, role string) (string, error) {

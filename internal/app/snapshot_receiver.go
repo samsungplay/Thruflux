@@ -34,8 +34,6 @@ type SnapshotReceiverConfig struct {
 	JoinCode               string
 	OutDir                 string
 	Benchmark              bool
-	Dumb                   bool
-	DumbTCP                bool
 	ParallelConnections    int
 	ParallelStreams        int
 	UDPReadBufferBytes     int
@@ -84,10 +82,8 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		return fmt.Errorf("failed to resolve output dir: %w", err)
 	}
 	cfg.OutDir = absOut
-	if !cfg.Dumb {
-		if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
-			return fmt.Errorf("failed to create output dir: %w", err)
-		}
+	if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
 	}
 
 	peerID := randomPeerID()
@@ -110,8 +106,6 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		outDir:                 cfg.OutDir,
 		benchmark:              cfg.Benchmark,
 		verbose:                cfg.Verbose,
-		dumb:                   cfg.Dumb,
-		dumbTCP:                cfg.DumbTCP,
 		parallelConnections:    cfg.ParallelConnections,
 		parallelStreams:        cfg.ParallelStreams,
 		udpReadBufferBytes:     cfg.UDPReadBufferBytes,
@@ -127,7 +121,6 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
-		dumbQuicConnections:    1,
 	}
 	go s.watchInterrupt()
 
@@ -153,10 +146,6 @@ type snapshotReceiver struct {
 	joinCode               string
 	outDir                 string
 	benchmark              bool
-	dumb                   bool
-	dumbTCP                bool
-	dumbQuicMu             sync.Mutex
-	dumbQuicConnections    int
 	parallelConnections    int
 	parallelStreams        int
 	udpReadBufferBytes     int
@@ -282,47 +271,12 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 				fmt.Fprintf(termio.Stdout(), "Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
 			}
 		}
-	case protocol.TypeDumbTCPListen:
-		select {
-		case r.signalCh <- env:
-		default:
-		}
-	case protocol.TypeDumbQUICMulti:
-		var msg protocol.DumbQUICMulti
-		if err := env.DecodePayload(&msg); err != nil {
-			r.logger.Error("failed to decode dumb_quic_multi", "error", err)
-			return
-		}
-		r.setDumbQuicConnections(msg.Connections)
-		select {
-		case r.signalCh <- env:
-		default:
-		}
 	case protocol.TypeIceCredentials, protocol.TypeIceCandidates, protocol.TypeIceCandidate:
 		select {
 		case r.signalCh <- env:
 		default:
 		}
 	}
-}
-
-func (r *snapshotReceiver) setDumbQuicConnections(n int) {
-	if n < 1 {
-		n = 1
-	}
-	r.dumbQuicMu.Lock()
-	r.dumbQuicConnections = n
-	r.dumbQuicMu.Unlock()
-}
-
-func (r *snapshotReceiver) getDumbQuicConnections() int {
-	r.dumbQuicMu.Lock()
-	n := r.dumbQuicConnections
-	r.dumbQuicMu.Unlock()
-	if n < 1 {
-		return 1
-	}
-	return n
 }
 
 func (r *snapshotReceiver) setTurnServersIfEmpty(servers []string) bool {
@@ -366,17 +320,6 @@ func (r *snapshotReceiver) sendAccept(manifestID string) {
 	}
 }
 
-func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
-	env, err := protocol.NewEnvelope(protocol.TypeDumbQUICDone, protocol.NewMsgID(), protocol.DumbQUICDone{Parts: parts})
-	if err != nil {
-		return err
-	}
-	env.SessionID = r.sessionID
-	env.From = r.peerID
-	env.To = r.senderID
-	return r.conn.Send(env)
-}
-
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	startupLine := ""
@@ -410,6 +353,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
+		restoreTTY(termio.StderrFile())
 		if code == 0 {
 			fmt.Fprintln(termio.StderrFile(), "\033[32m✓ transfer complete\033[0m")
 		}
@@ -467,15 +411,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		env.From = r.peerID
 		env.To = r.senderID
 		_ = r.conn.Send(env)
-	}
-
-	var lastProgress int64
-	if r.dumbTCP {
-		if err := r.runDumbTCPTransfer(baseCtx, progressState, &lastProgress); err != nil {
-			fail(err)
-		}
-		progressState.ForceComplete()
-		exitWith(0)
 	}
 
 	var (
@@ -685,42 +620,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		fail(err)
 	}
 	authCancel()
-
-	if r.dumb {
-		expectedConns := r.getDumbQuicConnections()
-		if expectedConns <= 1 {
-			expectedConns = r.waitForDumbQuicConnections(baseCtx, r.signalCh, 2*time.Second)
-		}
-		if expectedConns < 1 {
-			expectedConns = 1
-		}
-
-		var dumbConns []transfer.Conn
-		dumbConns = append(dumbConns, transferConn)
-		if expectedConns > 1 {
-			extraConns, err := r.acceptExtraConns(baseCtx, acceptTransport, expectedConns-1)
-			if err != nil {
-				fail(err)
-			}
-			dumbConns = append(dumbConns, extraConns...)
-		}
-		progressState.SetConnCount(len(dumbConns))
-
-		dumbCollector := newProgressCollector()
-		dumbStop := startProgressTicker(baseCtx, dumbCollector, func(relpath string, bytesReceived int64, total int64) {
-			progressState.Update(relpath, bytesReceived, total)
-		})
-		if err := recvDumbDiscardMulti(baseCtx, dumbConns, func(relpath string, bytesReceived int64, total int64) {
-			dumbCollector.Update(relpath, bytesReceived, total)
-		}); err != nil {
-			dumbStop()
-			fail(err)
-		}
-		dumbStop()
-		_ = r.sendDumbQUICDone(len(dumbConns))
-		progressState.ForceComplete()
-		exitWith(0)
-	}
 
 	effectiveConnections := r.parallelConnections
 	if effectiveConnections < 1 {
@@ -1007,74 +906,6 @@ func formatBytes(n int64) string {
 	return fmt.Sprintf("%.2f %s", value, suffixes[exp-1])
 }
 
-func (r *snapshotReceiver) runDumbTCPTransfer(ctx context.Context, progressState *receiverProgress, lastProgress *int64) error {
-	var addrs []string
-	timeout := time.NewTimer(15 * time.Second)
-	defer timeout.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timeout.C:
-			return fmt.Errorf("timeout waiting for dumb tcp listen")
-		case env := <-r.signalCh:
-			if env.Type != protocol.TypeDumbTCPListen {
-				continue
-			}
-			var msg protocol.DumbTCPListen
-			if err := env.DecodePayload(&msg); err != nil {
-				return err
-			}
-			addrs = msg.Addrs
-			goto dial
-		}
-	}
-
-dial:
-	if len(addrs) == 0 {
-		return fmt.Errorf("no tcp addresses received")
-	}
-	conn, err := dialAddrs(ctx, addrs)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	_, err = recvDumbDiscardReader(conn, func(relpath string, bytesReceived int64, total int64) {
-		if !shouldUpdateProgress(lastProgress) {
-			return
-		}
-		progressState.Update(relpath, bytesReceived, total)
-	})
-	return err
-}
-
-func (r *snapshotReceiver) waitForDumbQuicConnections(ctx context.Context, signalCh <-chan protocol.Envelope, timeout time.Duration) int {
-	current := r.getDumbQuicConnections()
-	if current > 1 || timeout <= 0 {
-		return current
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return r.getDumbQuicConnections()
-		case <-timer.C:
-			return r.getDumbQuicConnections()
-		case env := <-signalCh:
-			if env.Type == protocol.TypeDumbQUICMulti {
-				var msg protocol.DumbQUICMulti
-				if err := env.DecodePayload(&msg); err == nil {
-					r.setDumbQuicConnections(msg.Connections)
-				}
-				return r.getDumbQuicConnections()
-			}
-		}
-	}
-}
-
 func (r *snapshotReceiver) acceptExtraConns(ctx context.Context, transport *transferquic.QUICTransport, extra int) ([]transfer.Conn, error) {
 	if extra <= 0 {
 		return nil, nil
@@ -1108,41 +939,6 @@ func (r *snapshotReceiver) acceptExtraConns(ctx context.Context, transport *tran
 		return conns, lastErr
 	}
 	return conns, lastErr
-}
-
-func recvDumbDiscardMulti(ctx context.Context, conns []transfer.Conn, progressFn func(string, int64, int64)) error {
-	if len(conns) == 0 {
-		return fmt.Errorf("no connections available")
-	}
-	if len(conns) == 1 {
-		_, err := recvDumbDiscard(ctx, conns[0], progressFn)
-		return err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	errCh := make(chan error, len(conns))
-	var wg sync.WaitGroup
-	for _, conn := range conns {
-		wg.Add(1)
-		go func(c transfer.Conn) {
-			defer wg.Done()
-			defer c.Close()
-			if _, err := recvDumbDiscard(ctx, c, progressFn); err != nil {
-				errCh <- err
-				cancel()
-			}
-		}(conn)
-	}
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type receiverProgress struct {
@@ -1561,7 +1357,13 @@ func (r *snapshotReceiver) watchInterrupt() {
 	sig := <-sigChan
 	r.logger.Error("received signal, exiting", "signal", sig.String())
 	transfer.FlushAllFlushers()
-	fmt.Fprint(termio.StderrFile(), "\033[?25h")
+	r.cleanupMu.Lock()
+	cleanup := r.uiCleanup
+	r.cleanupMu.Unlock()
+	if cleanup != nil {
+		cleanup()
+	}
+	restoreTTY(termio.StderrFile())
 	fmt.Fprintf(termio.StderrFile(), "received signal, exiting\n")
 	os.Exit(1)
 }
