@@ -272,6 +272,7 @@ func Run(args []string) {
 		},
 	}); err != nil {
 		logger.Error("snapshot sender failed", "error", err)
+		fmt.Fprintf(termio.StderrFile(), "snapshot sender failed: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -202,6 +202,7 @@ func Run(args []string) {
 		TurnOnly:               turnOnly,
 	}); err != nil {
 		logger.Error("snapshot receiver failed", "error", err)
+		fmt.Fprintf(termio.StderrFile(), "snapshot receiver failed: %v\n", err)
 		os.Exit(1)
 	}
 }
