@@ -410,6 +410,9 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
+		if code == 0 {
+			fmt.Fprintln(termio.StderrFile(), "\033[32m✓ transfer complete\033[0m")
+		}
 		if code != 0 {
 			view := progressState.View()
 			stats := view.Stats
