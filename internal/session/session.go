@@ -114,20 +114,19 @@ func generateSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-// generateJoinCode generates a random 8-character join code.
-// Uses uppercase A-Z and 0-9, excluding ambiguous characters: O, 0, I, 1.
+// generateJoinCode generates a random 20-character join code.
+// Uses Crockford Base32 alphabet (uppercase), excluding ambiguous characters: I, L, O, U.
 func generateJoinCode() string {
-	// Characters: A-Z excluding I and O, and 2-9 excluding 0 and 1
-	chars := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	code := make([]byte, 8)
-	b := make([]byte, 8)
+	chars := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	code := make([]byte, 20)
+	b := make([]byte, 20)
 
 	if _, err := rand.Read(b); err != nil {
 		// Fallback if rand fails
-		return "ABCDEFGH"
+		return strings.Repeat("0", 20)
 	}
 
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 20; i++ {
 		code[i] = chars[b[i]%byte(len(chars))]
 	}
 

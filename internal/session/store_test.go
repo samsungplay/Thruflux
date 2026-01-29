@@ -35,16 +35,16 @@ func TestStore_Create(t *testing.T) {
 			t.Errorf("Session ID length = %d, want 32", len(id))
 		}
 
-		// Verify join code format (8 chars, uppercase A-Z0-9, no ambiguous)
-		if len(code) != 8 {
-			t.Errorf("Join code length = %d, want 8", len(code))
+		// Verify join code format (20 chars, Crockford Base32)
+		if len(code) != 20 {
+			t.Errorf("Join code length = %d, want 20", len(code))
 		}
 
 		for _, char := range code {
-			if char == 'O' || char == '0' || char == 'I' || char == '1' {
+			if char == 'I' || char == 'L' || char == 'O' || char == 'U' {
 				t.Errorf("Join code contains ambiguous character: %c in %s", char, code)
 			}
-			if !((char >= 'A' && char <= 'Z') || (char >= '2' && char <= '9')) {
+			if !((char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')) {
 				t.Errorf("Join code contains invalid character: %c in %s", char, code)
 			}
 		}

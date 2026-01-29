@@ -70,6 +70,35 @@ func runClipboardCmd(payload string, name string, args ...string) bool {
 	return cmd.Run() == nil
 }
 
+func joinCodeHeaderLines(joinCode string) []string {
+	if len(joinCode) == 20 {
+		joinCode = joinCode[:5] + "-" + joinCode[5:10] + "-" + joinCode[10:15] + "-" + joinCode[15:]
+	}
+	title := "JOIN CODE"
+	cmd := fmt.Sprintf("thru join %s --out <dir>", joinCode)
+	lines := []string{title, joinCode, cmd}
+	width := 0
+	for _, line := range lines {
+		if len(line) > width {
+			width = len(line)
+		}
+	}
+	border := "+" + strings.Repeat("-", width+2) + "+"
+	pad := func(s string) string {
+		if len(s) >= width {
+			return s
+		}
+		return s + strings.Repeat(" ", width-len(s))
+	}
+	out := make([]string, 0, 2+len(lines))
+	out = append(out, border)
+	for _, line := range lines {
+		out = append(out, fmt.Sprintf("| %s |", pad(line)))
+	}
+	out = append(out, border)
+	return out
+}
+
 // ReceiverState tracks the state of a receiver peer.
 type ReceiverState struct {
 	PeerID              string
@@ -316,10 +345,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 
 	uiTTY := progress.IsTTY(termio.Stderr())
 	copied := copyJoinCodeToClipboard(joinCode)
-	headerLines := []string{
-		fmt.Sprintf("=== Join Code: %s ===", joinCode),
-		fmt.Sprintf("Receivers should run: thru join %s --out <dir>", joinCode),
-	}
+	headerLines := joinCodeHeaderLines(joinCode)
 	if strings.TrimSpace(cfg.StartupMessage) != "" && uiTTY {
 		headerLines = append([]string{fmt.Sprintf(">>.. %s", cfg.StartupMessage)}, headerLines...)
 	}
