@@ -222,15 +222,54 @@ thru join <join-code> [flags]
    sudo systemctl enable --now thruserv
    ```
 
-6. **Point clients to your server**
+5. **Point clients to your server**
    - Host: `thru host … --server-url https://your.domain`
    - Join: `thru join ABCDEFGH --server-url https://your.domain`
 
-7. **(Optional) Enable built-in TURN relay support using coturn REST credentials**
+6. **(Optional) Enable built-in, auto-provisioned TURN relay support using coturn REST credentials**
 
-   This step enables automatic TURN fallback so clients can still connect when direct peer-to-peer UDP paths fail (e.g. strict NATs, firewalls).
+   This step enables automatic TURN fallback so clients can still connect when direct peer-to-peer UDP paths fail without specifying --turn-server flag by themselves (e.g. strict NATs, firewalls).
 
    - Configure **coturn** with `use-auth-secret` and the same `static-auth-secret` that will be shared with `thruserv`.
+   - Example coturn server config (for more info, check out the [coturn][https://github.com/coturn/coturn] repository) :
+   ```
+   # ===== Core =====
+   listening-port=3478
+   tls-listening-port=5349
+   listening-ip=0.0.0.0
+
+   # Public mapping
+   external-ip=YOUR_PUBLICL_IP
+   relay-ip=YOUR_PUBLIC_IP
+
+   # Identity (realm must match what your backend uses in TURN creds)
+   realm=yourdomain.com
+   server-name=stun.yourdomain.com
+
+   # ===== Auth (TURN REST / ephemeral) =====
+   fingerprint
+   lt-cred-mech
+   use-auth-secret
+   static-auth-secret=SOME_SAFE_SECRET
+   stale-nonce
+
+   # ===== Lifetimes / anti-abuse =====
+   max-allocate-lifetime=600
+   total-quota=2000
+   user-quota=50
+   no-loopback-peers
+   no-multicast-peers
+
+   # Prefer UDP TURN (enable TCP/TLS only if you need corporate networks)
+   no-tcp-relay
+
+   # ===== Logging =====
+   log-file=/var/log/turn.log
+   simple-log
+   # Relay port range (lock it down)
+   min-port=49152
+   max-port=65535
+   ```
    - Start `thruserv` with TURN options enabled. This allows it to **mint time-limited TURN credentials** and distribute them to clients automatically:
      ```
      thruserv \
