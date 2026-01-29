@@ -250,6 +250,7 @@ func Run(args []string) {
 		ReceiverTTL:            10 * time.Minute,
 		Benchmark:              benchmark,
 		Verbose:                verbose,
+		StartupMessage:         strings.TrimSpace(os.Getenv("THRU_STARTUP_MESSAGE")),
 		Dumb:                   dumb,
 		DumbTCP:                dumbTCP,
 		DumbSizeBytes:          dumbSizeBytes,

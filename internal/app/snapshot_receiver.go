@@ -45,6 +45,7 @@ type SnapshotReceiverConfig struct {
 	TurnServers            []string
 	TurnOnly               bool
 	Verbose                bool
+	StartupMessage         string
 }
 
 // RunSnapshotReceiver runs the snapshot receiver flow.
@@ -120,6 +121,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		turnServers:            cfg.TurnServers,
 		turnOnly:               cfg.TurnOnly,
 		resumeEnabled:          true,
+		startupMessage:         cfg.StartupMessage,
 		signalCh:               make(chan protocol.Envelope, 64),
 		transfer:               make(chan protocol.TransferStart, 1),
 		sessionID:              "",
@@ -167,6 +169,7 @@ type snapshotReceiver struct {
 	verbose                bool
 	resumeEnabled          bool
 	manifestPrompted       bool
+	startupMessage         string
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -374,7 +377,11 @@ func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
 
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
-	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
+	startupLine := ""
+	if strings.TrimSpace(r.startupMessage) != "" && progress.IsTTY(os.Stderr) {
+		startupLine = fmt.Sprintf(">>.. %s", r.startupMessage)
+	}
+	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark, startupLine)
 	if r.benchmark {
 		benchCtx, benchCancel := context.WithCancel(baseCtx)
 		r.startReceiverBenchLoop(benchCtx, progressState)
@@ -1103,6 +1110,7 @@ type receiverProgress struct {
 	snapshotID       string
 	outDir           string
 	probes           map[string]ice.ProbeState
+	startupLine      string
 	mu               sync.Mutex
 }
 
@@ -1112,7 +1120,7 @@ type resumeSkip struct {
 	chunkSize     uint32
 }
 
-func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string, benchmark bool) *receiverProgress {
+func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, outDir string, benchmark bool, startupLine string) *receiverProgress {
 	meter := progress.NewMeter()
 	meter.Start(totalBytes)
 	state := &receiverProgress{
@@ -1134,6 +1142,7 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		snapshotID:       snapshotID,
 		outDir:           outDir,
 		probes:           make(map[string]ice.ProbeState),
+		startupLine:      startupLine,
 	}
 	if benchmark {
 		state.benchmark = true
@@ -1367,6 +1376,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	outDir := p.outDir
 	resumedFiles := p.resumedFiles
 	connCount := p.connCount
+	startupLine := p.startupLine
 	probes := make(map[string]string)
 	for k, v := range p.probes {
 		probes[k] = v.String()
@@ -1375,6 +1385,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
 		OutDir:         outDir,
+		StartupLine:    startupLine,
 		IceStage:       stage,
 		TransportLines: transportLines,
 		Stats:          p.meter.Snapshot(),
@@ -1425,6 +1436,7 @@ func (r *snapshotReceiver) watchInterrupt() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	sig := <-sigChan
 	r.logger.Error("received signal, exiting", "signal", sig.String())
+	fmt.Fprint(os.Stderr, "\033[?25h")
 	os.Exit(1)
 }
 

@@ -80,13 +80,23 @@ func main() {
 	switch cmdName {
 	case "host":
 		if shouldPrintStartupMessage(args[1:]) {
-			printStartupMessage()
+			msg := pickStartupMessage()
+			if isTTY(os.Stderr) {
+				_ = os.Setenv("THRU_STARTUP_MESSAGE", msg)
+			} else {
+				fmt.Printf(">>.. %s\n", msg)
+			}
 		}
 		sender.Run(args[1:])
 		return
 	case "join":
 		if shouldPrintStartupMessage(args[1:]) {
-			printStartupMessage()
+			msg := pickStartupMessage()
+			if isTTY(os.Stderr) {
+				_ = os.Setenv("THRU_STARTUP_MESSAGE", msg)
+			} else {
+				fmt.Printf(">>.. %s\n", msg)
+			}
 		}
 		receiver.Run(args[1:])
 		return
@@ -143,12 +153,11 @@ func shouldPrintStartupMessage(args []string) bool {
 	return true
 }
 
-func printStartupMessage() {
+func pickStartupMessage() string {
 	if len(startupMessages) == 0 {
-		return
+		return ""
 	}
-	msg := startupMessages[rng.Intn(len(startupMessages))]
-	fmt.Printf(">>.. %s\n", msg)
+	return startupMessages[rng.Intn(len(startupMessages))]
 }
 
 func printShareSummary(paths []string) {
@@ -172,4 +181,15 @@ func printShareSummary(paths []string) {
 
 func printBanner() {
 	fmt.Print(banner)
+}
+
+func isTTY(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }

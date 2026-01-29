@@ -186,6 +186,7 @@ func Run(args []string) {
 		OutDir:                 outDir,
 		Benchmark:              benchmark,
 		Verbose:                verbose,
+		StartupMessage:         strings.TrimSpace(os.Getenv("THRU_STARTUP_MESSAGE")),
 		Dumb:                   dumb,
 		DumbTCP:                dumbTCP,
 		UDPReadBufferBytes:     udpReadBufferBytes,

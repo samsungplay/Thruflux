@@ -101,6 +101,7 @@ type SnapshotSenderConfig struct {
 	TurnServers            []string
 	TurnOnly               bool
 	Verbose                bool
+	StartupMessage         string
 }
 
 // SnapshotSender orchestrates snapshot transfer scheduling.
@@ -112,6 +113,7 @@ type SnapshotSender struct {
 	receiverTTL   time.Duration
 	transferOpts  transfer.Options
 	transferFn    func(context.Context, string) error
+	headerStatic  string
 	dumb          bool
 	dumbPath      string
 	dumbSizeBytes int64
@@ -310,17 +312,27 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 
-	fmt.Printf("\n=== Join Code: %s ===\n", joinCode)
-	if copyJoinCodeToClipboard(joinCode) {
-		fmt.Fprintln(os.Stdout, "Join code copied to clipboard.")
+	uiTTY := progress.IsTTY(os.Stderr)
+	copied := copyJoinCodeToClipboard(joinCode)
+	headerLines := []string{
+		fmt.Sprintf("=== Join Code: %s ===", joinCode),
+		fmt.Sprintf("Receivers should run: thru join %s --out <dir>", joinCode),
 	}
-	fmt.Printf("Receivers should run: thru join %s --out <dir>\n\n", joinCode)
+	if strings.TrimSpace(cfg.StartupMessage) != "" && uiTTY {
+		headerLines = append([]string{fmt.Sprintf(">>.. %s", cfg.StartupMessage)}, headerLines...)
+	}
+	if copied {
+		headerLines = append(headerLines, "Join code copied to clipboard.")
+	}
 	if len(cfg.Paths) > 0 {
-		fmt.Fprintln(os.Stdout, "Sharing the following paths:")
+		headerLines = append(headerLines, "Sharing the following paths:")
 		for _, path := range cfg.Paths {
-			fmt.Fprintf(os.Stdout, "  - %s\n", path)
+			headerLines = append(headerLines, fmt.Sprintf("  - %s", path))
 		}
-		fmt.Fprintln(os.Stdout)
+	}
+	headerStatic := strings.Join(headerLines, "\n")
+	if !uiTTY {
+		fmt.Fprintln(os.Stdout, headerStatic)
 	}
 
 	wsURL, err := buildWebSocketURL(cfg.ServerURL, joinCode, peerID, "sender", cfg.MaxReceivers)
@@ -339,6 +351,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		maxRecv:      cfg.MaxReceivers,
 		receiverTTL:  cfg.ReceiverTTL,
 		transferOpts: cfg.TransferOpts,
+		headerStatic: headerStatic,
 		benchmark:    cfg.Benchmark,
 		dumb:         cfg.Dumb,
 		dumbPath: func() string {
@@ -382,7 +395,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	s.closeConn = func() { conn.Close() }
 	s.onChange = s.logSnapshotState
 	s.logSnapshotState()
-	s.tuneTTY = progress.IsTTY(os.Stdout)
+	s.tuneTTY = uiTTY
 	s.initParams()
 	s.initTransport()
 
@@ -1371,6 +1384,7 @@ func (s *SnapshotSender) hardStop() {
 		s.closeConn()
 	}
 	if s.exitFn != nil {
+		fmt.Fprint(os.Stderr, "\033[?25h")
 		s.exitFn(0)
 	}
 }
@@ -1898,9 +1912,12 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		})
 	}
 	s.mu.Lock()
-	header := ""
+	header := s.headerStatic
 	if s.verbose {
-		header = s.snapshotLine
+		if header != "" {
+			header += "\n"
+		}
+		header += s.snapshotLine
 	}
 	s.mu.Unlock()
 

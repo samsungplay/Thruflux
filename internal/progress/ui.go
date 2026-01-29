@@ -15,6 +15,7 @@ import (
 type ReceiverView struct {
 	SnapshotID     string
 	OutDir         string
+	StartupLine    string
 	IceStage       string
 	TransportLines []string
 	Stats          Stats
@@ -87,6 +88,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		ticker.Stop()
 		ticker = time.NewTicker(1 * time.Second)
 	} else {
+		fmt.Fprint(w, "\033[?1049h")
 		fmt.Fprint(w, "\033[?25l")
 	}
 	lastLines := 0
@@ -111,6 +113,10 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 				cleared = true
 			}
 			lines := 0
+			if v.StartupLine != "" {
+				fmt.Fprintln(w, colorize(v.StartupLine, colorCyan, isTTY))
+				lines++
+			}
 			if v.OutDir != "" {
 				fmt.Fprintf(w, "saving to %s\n", v.OutDir)
 				lines++
@@ -138,6 +144,9 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 			}
 			lastLines = lines
 		} else {
+			if v.StartupLine != "" {
+				fmt.Fprintln(w, v.StartupLine)
+			}
 			if v.Benchmark {
 				fmt.Fprintf(w, "BENCH inst=%s ewma=%s avg=%s peak=%s elapsed=%s eta=%s\n",
 					formatBenchRate(v.Bench.InstMBps),
@@ -175,6 +184,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		renderOnce()
 		if isTTY {
 			fmt.Fprint(w, "\033[?25h")
+			fmt.Fprint(w, "\033[?1049l")
 		}
 	}
 }
@@ -189,6 +199,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 		ticker.Stop()
 		ticker = time.NewTicker(1 * time.Second)
 	} else {
+		fmt.Fprint(w, "\033[?1049h")
 		fmt.Fprint(w, "\033[?25l")
 	}
 	lastLines := 0
@@ -312,6 +323,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 		renderOnce()
 		if isTTY {
 			fmt.Fprint(w, "\033[?25h")
+			fmt.Fprint(w, "\033[?1049l")
 		}
 	}
 }
