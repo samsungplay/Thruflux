@@ -951,6 +951,13 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		requestedStreams = recvStreams
 	}
 	totalStreams, _ := computeParallelBudget(s.manifest.FileCount, requestedStreams, len(conns), len(conns) > 1)
+	maxStreams := s.quicMaxIncomingStreams * len(conns)
+	if maxStreams < 1 {
+		maxStreams = 1
+	}
+	if totalStreams > maxStreams {
+		totalStreams = maxStreams
+	}
 	s.setParams(perfParams{
 		ChunkSize:           int(s.transferOpts.ChunkSize),
 		ParallelStreams:     totalStreams,

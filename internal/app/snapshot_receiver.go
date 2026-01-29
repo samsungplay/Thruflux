@@ -761,6 +761,13 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}()
 
 	totalStreams, _ := computeParallelBudget(r.fileTotal, r.parallelStreams, len(conns), len(conns) > 1)
+	maxStreams := r.quicMaxIncomingStreams * len(conns)
+	if maxStreams < 1 {
+		maxStreams = 1
+	}
+	if totalStreams > maxStreams {
+		totalStreams = maxStreams
+	}
 
 	var lastStats int64
 	recvCtx, recvCancel := context.WithCancel(baseCtx)

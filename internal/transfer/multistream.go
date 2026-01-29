@@ -933,11 +933,8 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					if forceSendFrom > totalChunks {
 						forceSendFrom = totalChunks
 					}
-					if hashUnknown && totalChunks > 0 {
+					if hashUnknown && totalChunks > 0 && resumeVerifyTail > 0 && verifiedChunk < totalChunks {
 						tail := resumeVerifyTail
-						if tail == 0 {
-							tail = 1
-						}
 						minForce := uint32(0)
 						if totalChunks > tail {
 							minForce = totalChunks - tail
@@ -1571,7 +1568,11 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		}
 		state.sidecar = sidecar
 		info.Bitmap = sidecar.MarshalBitmap()
-		if highest, ok := sidecar.HighestComplete(); ok {
+		completedChunks := uint32(sidecar.bitmap.CountSet())
+		allComplete := totalChunks > 0 && completedChunks >= totalChunks
+		if allComplete {
+			info.LastVerifiedChunk = totalChunks
+		} else if highest, ok := sidecar.HighestComplete(); ok {
 			info.LastVerifiedChunk = uint32(highest)
 			if begin.HashAlg != HashAlgNone {
 				hashValue, ok, err := hashFileChunkWithTimeout(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg, defaultResumeHashTimeout)
@@ -2286,7 +2287,11 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			state.sidecar = loaded
 		}
 		info.Bitmap = state.sidecar.MarshalBitmap()
-		if highest, ok := state.sidecar.HighestComplete(); ok {
+		completedChunks := uint32(state.sidecar.bitmap.CountSet())
+		allComplete := state.totalChunks > 0 && completedChunks >= state.totalChunks
+		if allComplete {
+			info.LastVerifiedChunk = state.totalChunks
+		} else if highest, ok := state.sidecar.HighestComplete(); ok {
 			info.LastVerifiedChunk = uint32(highest)
 			if state.hashAlg != HashAlgNone {
 				hashValue, ok, err := hashFileChunkWithTimeout(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg, defaultResumeHashTimeout)
