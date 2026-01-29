@@ -21,6 +21,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/logging"
 	"github.com/sheerbytes/sheerbytes/internal/peers"
 	"github.com/sheerbytes/sheerbytes/internal/session"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
 
@@ -38,14 +39,14 @@ func main() {
 		return
 	}
 	if hasVersionFlag(os.Args[1:]) {
-		fmt.Println(serverVersion)
+		fmt.Fprintln(termio.Stdout(), serverVersion)
 		return
 	}
 	cfg := config.ParseServerConfig()
 	logger := logging.New("thruserv", "error")
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	fmt.Printf("starting server addr=%s\n", addr)
+	fmt.Fprintf(termio.Stdout(), "starting server addr=%s\n", addr)
 
 	// Create session store with configured TTL
 	store := session.NewStore(cfg.SessionTimeout)
@@ -106,7 +107,7 @@ func main() {
 				expiry.schedule(sess.ID, ttl, func() {
 					hub.CloseSession(sess.ID)
 					store.Delete(sess.ID)
-					fmt.Printf("session expired session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
+					fmt.Fprintf(termio.Stdout(), "session expired session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
 				})
 			}
 		}
@@ -126,7 +127,7 @@ func main() {
 			logger.Error("failed to encode response", "error", err)
 		}
 
-		fmt.Printf("session created session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
+		fmt.Fprintf(termio.Stdout(), "session created session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -445,7 +446,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 		}()
 	}
 
-	fmt.Printf("peer connected session_id=%s peer_id=%s role=%s conn_id=%s\n", sess.ID, peerID, role, connID)
+	fmt.Fprintf(termio.Stdout(), "peer connected session_id=%s peer_id=%s role=%s conn_id=%s\n", sess.ID, peerID, role, connID)
 
 	// Send current peer list to the newly joined peer
 	currentPeers := hub.List(sess.ID)
@@ -511,9 +512,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, store *session.Stor
 		peerLeftEnv.From = "server"
 
 		hub.Broadcast(sess.ID, peerLeftEnv)
-		fmt.Printf("peer disconnected session_id=%s peer_id=%s\n", sess.ID, peerID)
+		fmt.Fprintf(termio.Stdout(), "peer disconnected session_id=%s peer_id=%s\n", sess.ID, peerID)
 		if role == "sender" {
-			fmt.Printf("session deleted session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
+			fmt.Fprintf(termio.Stdout(), "session deleted session_id=%s join_code=%s\n", sess.ID, sess.JoinCode)
 			expiry.cancel(sess.ID)
 			store.Delete(sess.ID)
 		}
@@ -612,24 +613,24 @@ func sendError(w http.ResponseWriter, code int, message string) {
 }
 
 func printServerUsage() {
-	fmt.Fprintln(os.Stderr, "usage: thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N]")
-	fmt.Fprintln(os.Stderr, "  --port N                     server port (default 8080)")
-	fmt.Fprintln(os.Stderr, "  --max-sessions N             max concurrent sessions (default 1000)")
-	fmt.Fprintln(os.Stderr, "  --max-receivers-per-sender N max receivers per sender (default 10)")
-	fmt.Fprintln(os.Stderr, "  --max-message-bytes N        max websocket message size (default 65536)")
-	fmt.Fprintln(os.Stderr, "  --ws-connects-per-min N      max websocket connects per minute per IP (default 30)")
-	fmt.Fprintln(os.Stderr, "  --ws-connects-burst N        burst websocket connects per IP (default 10)")
-	fmt.Fprintln(os.Stderr, "  --ws-msgs-per-sec N          max websocket messages per second per connection (default 50)")
-	fmt.Fprintln(os.Stderr, "  --ws-msgs-burst N            burst websocket messages per connection (default 100)")
-	fmt.Fprintln(os.Stderr, "  --session-creates-per-min N  max session creates per minute per IP (default 10)")
-	fmt.Fprintln(os.Stderr, "  --session-creates-burst N    burst session creates per IP (default 5)")
-	fmt.Fprintln(os.Stderr, "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
-	fmt.Fprintln(os.Stderr, "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
-	fmt.Fprintln(os.Stderr, "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
-	fmt.Fprintln(os.Stderr, "  --turn-server URLS           TURN server URLs (repeatable, comma-separated)")
-	fmt.Fprintln(os.Stderr, "                              example: --turn-server turns:stun.bytepipe.app:5349?servername=stun.bytepipe.app")
-	fmt.Fprintln(os.Stderr, "  --turn-static-auth-secret S  TURN REST static auth secret (coturn use-auth-secret)")
-	fmt.Fprintln(os.Stderr, "  --turn-cred-ttl DURATION      TURN credential TTL (default 1h)")
+	fmt.Fprintln(termio.Stderr(), "usage: thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N]")
+	fmt.Fprintln(termio.Stderr(), "  --port N                     server port (default 8080)")
+	fmt.Fprintln(termio.Stderr(), "  --max-sessions N             max concurrent sessions (default 1000)")
+	fmt.Fprintln(termio.Stderr(), "  --max-receivers-per-sender N max receivers per sender (default 10)")
+	fmt.Fprintln(termio.Stderr(), "  --max-message-bytes N        max websocket message size (default 65536)")
+	fmt.Fprintln(termio.Stderr(), "  --ws-connects-per-min N      max websocket connects per minute per IP (default 30)")
+	fmt.Fprintln(termio.Stderr(), "  --ws-connects-burst N        burst websocket connects per IP (default 10)")
+	fmt.Fprintln(termio.Stderr(), "  --ws-msgs-per-sec N          max websocket messages per second per connection (default 50)")
+	fmt.Fprintln(termio.Stderr(), "  --ws-msgs-burst N            burst websocket messages per connection (default 100)")
+	fmt.Fprintln(termio.Stderr(), "  --session-creates-per-min N  max session creates per minute per IP (default 10)")
+	fmt.Fprintln(termio.Stderr(), "  --session-creates-burst N    burst session creates per minute per IP (default 5)")
+	fmt.Fprintln(termio.Stderr(), "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
+	fmt.Fprintln(termio.Stderr(), "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
+	fmt.Fprintln(termio.Stderr(), "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
+	fmt.Fprintln(termio.Stderr(), "  --turn-server URLS           TURN server URLs (repeatable, comma-separated)")
+	fmt.Fprintln(termio.Stderr(), "                              example: --turn-server turns:stun.bytepipe.app:5349?servername=stun.bytepipe.app")
+	fmt.Fprintln(termio.Stderr(), "  --turn-static-auth-secret S  TURN REST static auth secret (coturn use-auth-secret)")
+	fmt.Fprintln(termio.Stderr(), "  --turn-cred-ttl DURATION      TURN credential TTL (default 1h)")
 }
 
 func hasHelpFlag(args []string) bool {

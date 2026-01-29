@@ -14,6 +14,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/app"
 	"github.com/sheerbytes/sheerbytes/internal/appstate"
 	"github.com/sheerbytes/sheerbytes/internal/logging"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
@@ -64,7 +65,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 1 {
-				fmt.Fprintln(os.Stderr, "invalid --max-receivers value")
+				fmt.Fprintln(termio.Stderr(), "invalid --max-receivers value")
 				os.Exit(2)
 			}
 			maxReceivers = parsed
@@ -92,7 +93,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 1 || parsed > 32 {
-				fmt.Fprintln(os.Stderr, "invalid --dumb-connections value")
+				fmt.Fprintln(termio.Stderr(), "invalid --dumb-connections value")
 				os.Exit(2)
 			}
 			dumbConnections = parsed
@@ -103,7 +104,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 1 || parsed > 16 {
-				fmt.Fprintln(os.Stderr, "invalid --total-connections value")
+				fmt.Fprintln(termio.Stderr(), "invalid --total-connections value")
 				os.Exit(2)
 			}
 			totalConnections = parsed
@@ -133,7 +134,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --udp-read-buffer-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --udp-read-buffer-bytes value")
 				os.Exit(2)
 			}
 			udpReadBufferBytes = parsed
@@ -144,7 +145,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --udp-write-buffer-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --udp-write-buffer-bytes value")
 				os.Exit(2)
 			}
 			udpWriteBufferBytes = parsed
@@ -155,7 +156,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-conn-window-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-conn-window-bytes value")
 				os.Exit(2)
 			}
 			quicConnWindowBytes = parsed
@@ -166,7 +167,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-stream-window-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-stream-window-bytes value")
 				os.Exit(2)
 			}
 			quicStreamWindowBytes = parsed
@@ -177,7 +178,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-max-incoming-streams value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-max-incoming-streams value")
 				os.Exit(2)
 			}
 			quicMaxIncomingStreams = parsed
@@ -190,14 +191,14 @@ func Run(args []string) {
 			case "--chunk-size":
 				parsed, err := strconv.ParseUint(value, 10, 64)
 				if err != nil || parsed == 0 {
-					fmt.Fprintln(os.Stderr, "invalid --chunk-size value")
+					fmt.Fprintln(termio.Stderr(), "invalid --chunk-size value")
 					os.Exit(2)
 				}
 				chunkSize = parsed
 			case "--total-streams":
 				parsed, err := strconv.Atoi(value)
 				if err != nil || parsed < 1 || parsed > 32 {
-					fmt.Fprintln(os.Stderr, "invalid --total-streams value")
+					fmt.Fprintln(termio.Stderr(), "invalid --total-streams value")
 					os.Exit(2)
 				}
 				totalStreams = parsed
@@ -205,7 +206,7 @@ func Run(args []string) {
 			continue
 		}
 		if strings.HasPrefix(arg, "--") {
-			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			fmt.Fprintf(termio.Stderr(), "unknown flag: %s\n", arg)
 			printSenderUsage()
 			os.Exit(2)
 		}
@@ -223,11 +224,11 @@ func Run(args []string) {
 		os.Exit(2)
 	}
 	if dumbConnections != 1 && !dumb {
-		fmt.Fprintln(os.Stderr, "--dumb-connections requires --dumb")
+		fmt.Fprintln(termio.Stderr(), "--dumb-connections requires --dumb")
 		os.Exit(2)
 	}
 	if dumbTCP && dumbConnections != 1 {
-		fmt.Fprintln(os.Stderr, "--dumb-connections is not supported with --dumb-tcp")
+		fmt.Fprintln(termio.Stderr(), "--dumb-connections is not supported with --dumb-tcp")
 		os.Exit(2)
 	}
 
@@ -276,30 +277,30 @@ func Run(args []string) {
 }
 
 func printSenderUsage() {
-	fmt.Fprintln(os.Stderr, "usage: thru host <paths...> [--max-receivers N] [--server-url URL] [--benchmark]")
-	fmt.Fprintln(os.Stderr, "  --max-receivers N           max concurrent receivers (default 4)")
-	fmt.Fprintln(os.Stderr, "  --server-url URL            signaling server URL (default https://bytepipe.app)")
-	fmt.Fprintf(os.Stderr, "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(senderDefaultStunServers, ","))
-	fmt.Fprintln(os.Stderr, "                              example: --stun-server stun:stun.l.google.com:19302")
-	fmt.Fprintln(os.Stderr, "  --turn-server URLS          TURN server URLs (comma-separated, default none; server may provide)")
-	fmt.Fprintln(os.Stderr, "                              example: --turn-server turn:username:password@turn.example.com:3478")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?servername=turn.example.com")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
-	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
-	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
-	fmt.Fprintln(os.Stderr, "  --verbose                   enable verbose UI/logging")
-	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
-	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
-	fmt.Fprintln(os.Stderr, "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")
-	fmt.Fprintln(os.Stderr, "  --total-connections N       total QUIC connections (default 4)")
-	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
-	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
-	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
-	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
-	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
-	fmt.Fprintln(os.Stderr, "  --chunk-size N              chunk size in bytes (default 0=auto)")
-	fmt.Fprintln(os.Stderr, "  --total-streams N           total concurrent transfer streams (1..32)")
+	fmt.Fprintln(termio.Stderr(), "usage: thru host <paths...> [--max-receivers N] [--server-url URL] [--benchmark]")
+	fmt.Fprintln(termio.Stderr(), "  --max-receivers N           max concurrent receivers (default 4)")
+	fmt.Fprintln(termio.Stderr(), "  --server-url URL            signaling server URL (default https://bytepipe.app)")
+	fmt.Fprintf(termio.Stderr(), "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(senderDefaultStunServers, ","))
+	fmt.Fprintln(termio.Stderr(), "                              example: --stun-server stun:stun.l.google.com:19302")
+	fmt.Fprintln(termio.Stderr(), "  --turn-server URLS          TURN server URLs (comma-separated, default none; server may provide)")
+	fmt.Fprintln(termio.Stderr(), "                              example: --turn-server turn:username:password@turn.example.com:3478")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349?servername=turn.example.com")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
+	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
+	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
+	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
+	fmt.Fprintln(termio.Stderr(), "  --dumb                      raw memory stream; pass a single size like 1G (or a file path for sizing)")
+	fmt.Fprintln(termio.Stderr(), "  --dumb-tcp                  raw memory stream over TCP (LAN/port-forward)")
+	fmt.Fprintln(termio.Stderr(), "  --dumb-connections N        dumb mode: parallel QUIC connections (1..32)")
+	fmt.Fprintln(termio.Stderr(), "  --total-connections N       total QUIC connections (default 4)")
+	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
+	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
+	fmt.Fprintln(termio.Stderr(), "  --chunk-size N              chunk size in bytes (default 0=auto)")
+	fmt.Fprintln(termio.Stderr(), "  --total-streams N           total concurrent transfer streams (1..32)")
 }
 
 func hasHelpFlag(args []string) bool {

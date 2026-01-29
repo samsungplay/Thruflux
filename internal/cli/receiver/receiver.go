@@ -12,6 +12,7 @@ import (
 
 	"github.com/sheerbytes/sheerbytes/internal/app"
 	"github.com/sheerbytes/sheerbytes/internal/logging"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
@@ -97,7 +98,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --udp-read-buffer-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --udp-read-buffer-bytes value")
 				os.Exit(2)
 			}
 			udpReadBufferBytes = parsed
@@ -108,7 +109,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --udp-write-buffer-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --udp-write-buffer-bytes value")
 				os.Exit(2)
 			}
 			udpWriteBufferBytes = parsed
@@ -119,7 +120,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-conn-window-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-conn-window-bytes value")
 				os.Exit(2)
 			}
 			quicConnWindowBytes = parsed
@@ -130,7 +131,7 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-stream-window-bytes value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-stream-window-bytes value")
 				os.Exit(2)
 			}
 			quicStreamWindowBytes = parsed
@@ -141,14 +142,14 @@ func Run(args []string) {
 			value := args[i]
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed <= 0 {
-				fmt.Fprintln(os.Stderr, "invalid --quic-max-incoming-streams value")
+				fmt.Fprintln(termio.Stderr(), "invalid --quic-max-incoming-streams value")
 				os.Exit(2)
 			}
 			quicMaxIncomingStreams = parsed
 			continue
 		}
 		if strings.HasPrefix(arg, "--") {
-			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			fmt.Fprintf(termio.Stderr(), "unknown flag: %s\n", arg)
 			printReceiverUsage()
 			os.Exit(2)
 		}
@@ -156,7 +157,7 @@ func Run(args []string) {
 			joinCode = arg
 			continue
 		}
-		fmt.Fprintln(os.Stderr, "unexpected extra argument")
+		fmt.Fprintln(termio.Stderr(), "unexpected extra argument")
 		printReceiverUsage()
 		os.Exit(2)
 	}
@@ -206,26 +207,26 @@ func Run(args []string) {
 }
 
 func printReceiverUsage() {
-	fmt.Fprintln(os.Stderr, "usage: thru join <join-code> [--out DIR] [--server-url URL] [--benchmark]")
-	fmt.Fprintln(os.Stderr, "  --out DIR                   output directory (default .)")
-	fmt.Fprintln(os.Stderr, "  --server-url URL            signaling server URL (default https://bytepipe.app)")
-	fmt.Fprintf(os.Stderr, "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(receiverDefaultStunServers, ","))
-	fmt.Fprintln(os.Stderr, "                              example: --stun-server stun:stun.l.google.com:19302")
-	fmt.Fprintln(os.Stderr, "  --turn-server URLS          TURN server URLs (comma-separated, default none; server may provide)")
-	fmt.Fprintln(os.Stderr, "                              example: --turn-server turn:username:password@turn.example.com:3478")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?servername=turn.example.com")
-	fmt.Fprintln(os.Stderr, "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
-	fmt.Fprintln(os.Stderr, "  --test-turn                 only use TURN relay candidates (no direct probing)")
-	fmt.Fprintln(os.Stderr, "  --benchmark                 enable benchmark stats")
-	fmt.Fprintln(os.Stderr, "  --verbose                   enable verbose UI/logging")
-	fmt.Fprintln(os.Stderr, "  --dumb                      raw memory stream (discarded on receive)")
-	fmt.Fprintln(os.Stderr, "  --dumb-tcp                  raw memory stream over TCP (discarded on receive)")
-	fmt.Fprintln(os.Stderr, "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
-	fmt.Fprintln(os.Stderr, "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
-	fmt.Fprintln(os.Stderr, "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
-	fmt.Fprintln(os.Stderr, "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
-	fmt.Fprintln(os.Stderr, "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
+	fmt.Fprintln(termio.Stderr(), "usage: thru join <join-code> [--out DIR] [--server-url URL] [--benchmark]")
+	fmt.Fprintln(termio.Stderr(), "  --out DIR                   output directory (default .)")
+	fmt.Fprintln(termio.Stderr(), "  --server-url URL            signaling server URL (default https://bytepipe.app)")
+	fmt.Fprintf(termio.Stderr(), "  --stun-server URLS          STUN server URLs (comma-separated, default %s)\n", strings.Join(receiverDefaultStunServers, ","))
+	fmt.Fprintln(termio.Stderr(), "                              example: --stun-server stun:stun.l.google.com:19302")
+	fmt.Fprintln(termio.Stderr(), "  --turn-server URLS          TURN server URLs (comma-separated, default none; server may provide)")
+	fmt.Fprintln(termio.Stderr(), "                              example: --turn-server turn:username:password@turn.example.com:3478")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349?servername=turn.example.com")
+	fmt.Fprintln(termio.Stderr(), "                                       --turn-server turns:username:password@turn.example.com:5349?insecure=1  (debug only)")
+	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
+	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
+	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
+	fmt.Fprintln(termio.Stderr(), "  --dumb                      raw memory stream (discarded on receive)")
+	fmt.Fprintln(termio.Stderr(), "  --dumb-tcp                  raw memory stream over TCP (discarded on receive)")
+	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
+	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
 }
 
 func hasHelpFlag(args []string) bool {

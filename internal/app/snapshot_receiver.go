@@ -19,6 +19,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
 	"github.com/sheerbytes/sheerbytes/internal/transport"
@@ -51,7 +52,7 @@ type SnapshotReceiverConfig struct {
 // RunSnapshotReceiver runs the snapshot receiver flow.
 func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotReceiverConfig) error {
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logger = slog.New(slog.NewTextHandler(termio.Stderr(), nil))
 	}
 	if cfg.JoinCode == "" {
 		return fmt.Errorf("join code required")
@@ -219,7 +220,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 				os.Exit(1)
 			}
 			if !accepted {
-				fmt.Fprintln(os.Stderr, "Transfer declined.")
+				fmt.Fprintln(termio.Stderr(), "Transfer declined.")
 				os.Exit(1)
 			}
 			if hasResumeData(r.outDir, offer.Summary.RootName) {
@@ -229,9 +230,8 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 					os.Exit(1)
 				}
 				if !resume {
-					r.resumeEnabled = false
 					if err := clearResumeData(r.outDir, offer.Summary.RootName); err != nil && r.verbose {
-						fmt.Fprintf(os.Stderr, "Failed to clear resume data: %v\n", err)
+						fmt.Fprintf(termio.Stderr(), "Failed to clear resume data: %v\n", err)
 					}
 				}
 			}
@@ -250,7 +250,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 			if cleanup != nil {
 				cleanup()
 			}
-			fmt.Fprintf(os.Stderr, "\nSender disconnected (peer left).\n")
+			fmt.Fprintf(termio.Stderr(), "\nSender disconnected (peer left).\n")
 			os.Exit(1)
 		}
 	case protocol.TypeTransferStart:
@@ -275,9 +275,9 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 		}
 		if r.verbose {
 			if queued.Position > 0 {
-				fmt.Printf("Queued for transfer (position %d, active=%d/%d)\n", queued.Position, queued.Active, queued.Max)
+				fmt.Fprintf(termio.Stdout(), "Queued for transfer (position %d, active=%d/%d)\n", queued.Position, queued.Active, queued.Max)
 			} else {
-				fmt.Printf("Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
+				fmt.Fprintf(termio.Stdout(), "Queued for transfer (active=%d/%d)\n", queued.Active, queued.Max)
 			}
 		}
 	case protocol.TypeDumbTCPListen:
@@ -378,7 +378,7 @@ func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	startupLine := ""
-	if strings.TrimSpace(r.startupMessage) != "" && progress.IsTTY(os.Stderr) {
+	if strings.TrimSpace(r.startupMessage) != "" && progress.IsTTY(termio.Stderr()) {
 		startupLine = fmt.Sprintf(">>.. %s", r.startupMessage)
 	}
 	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark, startupLine)
@@ -387,7 +387,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		r.startReceiverBenchLoop(benchCtx, progressState)
 		defer benchCancel()
 	}
-	stopUI := progress.RenderReceiver(baseCtx, os.Stderr, progressState.View, r.verbose)
+	stopUI := progress.RenderReceiver(baseCtx, termio.Stderr(), progressState.View, r.verbose)
 	var stopUIOnce sync.Once
 	stopUIFn := func() {
 		stopUIOnce.Do(stopUI)
@@ -410,7 +410,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.SetIceStage(fmt.Sprintf("FAILED (code=%d)", code))
 
 			r.logger.Error("receiver exiting", "code", code, "ice_stage", view.IceStage, "route", view.Route, "current_file", view.CurrentFile, "bytes_done", stats.BytesDone, "bytes_total", stats.Total, "session_id", r.sessionID, "sender_id", r.senderID)
-			fmt.Fprintf(os.Stderr, "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
+			fmt.Fprintf(termio.Stderr(), "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
 		}
 		os.Exit(code)
 	}
@@ -440,7 +440,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				cleanup()
 			}
 			if r.verbose {
-				fmt.Fprintf(os.Stderr, "dumb tcp transfer failed: %v\n", err)
+				fmt.Fprintf(termio.Stderr(), "dumb tcp transfer failed: %v\n", err)
 			}
 			r.logger.Error("dumb tcp transfer failed", "error", err)
 			exitWith(1)
@@ -500,11 +500,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	transportSummary := formatTransportSummary(udpTune, quicTune)
 	transportLines := []string{formatUDPTuneLine(udpTune), formatQuicTuneLine(quicTune)}
 	progressState.SetTransportLines(append([]string{transportSummary}, transportLines...))
-	if !progress.IsTTY(os.Stdout) {
+	if !progress.IsTTY(termio.Stdout()) {
 		if r.verbose {
-			fmt.Fprintln(os.Stdout, transportSummary)
+			fmt.Fprintln(termio.Stdout(), transportSummary)
 			for _, line := range transportLines {
-				fmt.Fprintln(os.Stdout, line)
+				fmt.Fprintln(termio.Stdout(), line)
 			}
 		}
 	}
@@ -632,7 +632,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	defer transferConn.Close()
 	if r.verbose {
-		fmt.Fprintf(os.Stderr, "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
+		fmt.Fprintf(termio.Stderr(), "QUIC transfer connection established (session=%s sender=%s route=%s)\n", r.sessionID, r.senderID, transferConn.RemoteAddr())
 	}
 
 	authCtx, authCancel := context.WithTimeout(baseCtx, 10*time.Second)
@@ -644,8 +644,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
-		fmt.Fprintf(os.Stderr, "transport auth failed: %v\n", err)
-		fmt.Fprintf(os.Stdout, "transport auth failed: %v\n", err)
+		fmt.Fprintf(termio.Stderr(), "transport auth failed: %v\n", err)
+		fmt.Fprintf(termio.Stdout(), "transport auth failed: %v\n", err)
 		r.logger.Error("transport auth failed", "error", err)
 		exitWith(1)
 	}
@@ -672,7 +672,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 					cleanup()
 				}
 				if r.verbose {
-					fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+					fmt.Fprintf(termio.Stderr(), "dumb transfer failed: %v\n", err)
 				}
 				r.logger.Error("dumb transfer failed", "error", err)
 				exitWith(1)
@@ -696,7 +696,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				cleanup()
 			}
 			if r.verbose {
-				fmt.Fprintf(os.Stderr, "dumb transfer failed: %v\n", err)
+				fmt.Fprintf(termio.Stderr(), "dumb transfer failed: %v\n", err)
 			}
 			r.logger.Error("dumb transfer failed", "error", err)
 			exitWith(1)
@@ -732,7 +732,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
-		fmt.Fprintf(os.Stderr, "transfer failed: no connections available\n")
+		fmt.Fprintf(termio.Stderr(), "transfer failed: no connections available\n")
 		exitWith(1)
 	}
 	progressState.SetConnCount(len(conns))
@@ -800,8 +800,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			if cleanup != nil {
 				cleanup()
 			}
-			fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
-			fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
+			fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
+			fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
 			r.logger.Error("transfer failed", "error", err)
 			exitWith(1)
 		}
@@ -816,8 +816,8 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
-		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
-		fmt.Fprintf(os.Stdout, "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", err)
 		r.logger.Error("transfer failed", "error", err)
 		exitWith(1)
 	}
@@ -836,12 +836,12 @@ func printIncomingSummary(summary protocol.ManifestSummary) {
 	if strings.TrimSpace(root) == "" {
 		root = "(root)"
 	}
-	fmt.Printf("Incoming transfer: %s (%d files, %d folders, %s)\n", root, summary.FileCount, summary.FolderCount, formatBytes(summary.TotalBytes))
+	fmt.Fprintf(termio.Stdout(), "Incoming transfer: %s (%d files, %d folders, %s)\n", root, summary.FileCount, summary.FolderCount, formatBytes(summary.TotalBytes))
 }
 
 func promptAccept(reader *bufio.Reader) (bool, error) {
 	for {
-		fmt.Print("Accept transfer? [y/N]: ")
+		fmt.Fprint(termio.Stdout(), "Accept transfer? [y/N]: ")
 		line, err := readLine(reader)
 		if err != nil {
 			return false, err
@@ -859,7 +859,7 @@ func promptAccept(reader *bufio.Reader) (bool, error) {
 
 func promptResumeOrOverwrite(reader *bufio.Reader) (bool, error) {
 	for {
-		fmt.Print("Resume existing data? [Y]es / [O]verwrite: ")
+		fmt.Fprint(termio.Stdout(), "Resume existing data? [Y]es / [O]verwrite: ")
 		line, err := readLine(reader)
 		if err != nil {
 			return true, err
@@ -1437,7 +1437,7 @@ func (r *snapshotReceiver) watchInterrupt() {
 	sig := <-sigChan
 	r.logger.Error("received signal, exiting", "signal", sig.String())
 	transfer.FlushAllFlushers()
-	fmt.Fprint(os.Stderr, "\033[?25h")
+	fmt.Fprint(termio.Stderr(), "\033[?25h")
 	os.Exit(1)
 }
 
@@ -1469,5 +1469,5 @@ func (r *snapshotReceiver) printReceiverBenchSummary(progressState *receiverProg
 	}
 	summary := benchInst.Final(now, benchBytes, totalBytes)
 	tuned := "unknown"
-	fmt.Fprintln(os.Stdout, benchSummaryLineReceiver(summary, route, tuned))
+	fmt.Fprintln(termio.Stdout(), benchSummaryLineReceiver(summary, route, tuned))
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/ice"
 	"github.com/sheerbytes/sheerbytes/internal/progress"
 	"github.com/sheerbytes/sheerbytes/internal/quictransport"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/internal/transfer"
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
 	"github.com/sheerbytes/sheerbytes/internal/transport"
@@ -177,14 +178,14 @@ type transferSlot struct {
 }
 
 func startScanStatus() func(error) {
-	if !progress.IsTTY(os.Stdout) && !progress.IsTTY(os.Stderr) {
-		fmt.Fprintln(os.Stderr, "Scanning files...")
+	if !progress.IsTTY(termio.Stdout()) && !progress.IsTTY(termio.Stderr()) {
+		fmt.Fprintln(termio.Stderr(), "Scanning files...")
 		return func(err error) {
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "Scan failed.")
+				fmt.Fprintln(termio.Stderr(), "Scan failed.")
 				return
 			}
-			fmt.Fprintln(os.Stderr, "Scan complete.")
+			fmt.Fprintln(termio.Stderr(), "Scan complete.")
 		}
 	}
 
@@ -201,7 +202,7 @@ func startScanStatus() func(error) {
 				return
 			case <-ticker.C:
 				elapsed := time.Since(start).Truncate(100 * time.Millisecond)
-				fmt.Fprintf(os.Stderr, "\rScanning files... %c %s", spinner[idx%len(spinner)], elapsed)
+				fmt.Fprintf(termio.Stderr(), "\rScanning files... %c %s", spinner[idx%len(spinner)], elapsed)
 				idx++
 			}
 		}
@@ -211,17 +212,17 @@ func startScanStatus() func(error) {
 		close(done)
 		elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\rScan failed after %s.\n", elapsed)
+			fmt.Fprintf(termio.Stderr(), "\rScan failed after %s.\n", elapsed)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "\rScan complete in %s.\n", elapsed)
+		fmt.Fprintf(termio.Stderr(), "\rScan complete in %s.\n", elapsed)
 	}
 }
 
 // RunSnapshotSender runs the snapshot sender flow.
 func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSenderConfig) error {
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logger = slog.New(slog.NewTextHandler(termio.Stderr(), nil))
 	}
 	if len(cfg.Paths) == 0 && !(cfg.Dumb && cfg.DumbSizeBytes > 0) {
 		return fmt.Errorf("no input paths provided")
@@ -312,7 +313,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 
-	uiTTY := progress.IsTTY(os.Stderr)
+	uiTTY := progress.IsTTY(termio.Stderr())
 	copied := copyJoinCodeToClipboard(joinCode)
 	headerLines := []string{
 		fmt.Sprintf("=== Join Code: %s ===", joinCode),
@@ -332,7 +333,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 	}
 	headerStatic := strings.Join(headerLines, "\n")
 	if !uiTTY {
-		fmt.Fprintln(os.Stdout, headerStatic)
+		fmt.Fprintln(termio.Stdout(), headerStatic)
 	}
 
 	wsURL, err := buildWebSocketURL(cfg.ServerURL, joinCode, peerID, "sender", cfg.MaxReceivers)
@@ -403,7 +404,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		s.startBenchmarkLoop(ctx)
 	}
 
-	uiStop := progress.RenderSender(ctx, os.Stderr, s.senderView, s.verbose)
+	uiStop := progress.RenderSender(ctx, termio.Stderr(), s.senderView, s.verbose)
 	defer uiStop()
 
 	go s.cleanupLoop(ctx)
@@ -671,7 +672,7 @@ func (s *SnapshotSender) runTransfer(ctx context.Context, peerID string) {
 	s.sendQueuedUpdates(queuedMsgs)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "transfer failed: %v\n", err)
+		fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", err)
 		s.logger.Error("transfer failed", "peer_id", peerID, "error", err)
 	} else {
 		s.ForceComplete(peerID)
@@ -834,7 +835,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	iceLog("connect_ok")
 	if s.verbose {
-		fmt.Fprintf(os.Stderr, "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
+		fmt.Fprintf(termio.Stderr(), "QUIC connection established via probing (peer=%s session=%s)\n", peerID, s.sessionID)
 	}
 	// Log route
 	s.setSenderRoute(peerID, fmt.Sprintf("local=%s remote=%s", quicConn.LocalAddr(), quicConn.RemoteAddr()))
@@ -852,7 +853,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	defer transferConn.Close()
 	if s.verbose {
-		fmt.Fprintf(os.Stderr, "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
+		fmt.Fprintf(termio.Stderr(), "transfer connection ready (peer=%s session=%s)\n", peerID, s.sessionID)
 	}
 
 	authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1386,7 +1387,7 @@ func (s *SnapshotSender) hardStop() {
 	}
 	if s.exitFn != nil {
 		transfer.FlushAllFlushers()
-		fmt.Fprint(os.Stderr, "\033[?25h")
+		fmt.Fprint(termio.Stderr(), "\033[?25h")
 		s.exitFn(0)
 	}
 }
@@ -1557,9 +1558,9 @@ func (s *SnapshotSender) setTransportLines(summary string, lines []string) {
 	s.transportSummary = summary
 	s.transportLines = append([]string(nil), lines...)
 	if s.verbose && !s.tuneTTY && !s.transportLogged && summary != "" {
-		fmt.Fprintln(os.Stdout, summary)
+		fmt.Fprintln(termio.Stdout(), summary)
 		for _, line := range lines {
-			fmt.Fprintln(os.Stdout, line)
+			fmt.Fprintln(termio.Stdout(), line)
 		}
 		s.transportLogged = true
 	}
@@ -2000,7 +2001,7 @@ func (s *SnapshotSender) maybePrintBenchSummary() {
 	}
 
 	for _, line := range receiverSummaries {
-		fmt.Fprintln(os.Stdout, line)
+		fmt.Fprintln(termio.Stdout(), line)
 	}
 	s.benchSummaryLogged = true
 }

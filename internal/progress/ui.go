@@ -67,15 +67,31 @@ func colorize(s string, color string, enabled bool) string {
 }
 
 func IsTTY(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
+	if w == nil {
 		return false
 	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
+	if f, ok := w.(*os.File); ok {
+		info, err := f.Stat()
+		if err != nil {
+			return false
+		}
+		return (info.Mode() & os.ModeCharDevice) != 0
 	}
-	return (info.Mode() & os.ModeCharDevice) != 0
+	type fileProvider interface {
+		File() *os.File
+	}
+	if fp, ok := w.(fileProvider); ok {
+		f := fp.File()
+		if f == nil {
+			return false
+		}
+		info, err := f.Stat()
+		if err != nil {
+			return false
+		}
+		return (info.Mode() & os.ModeCharDevice) != 0
+	}
+	return false
 }
 
 func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, verbose bool) func() {

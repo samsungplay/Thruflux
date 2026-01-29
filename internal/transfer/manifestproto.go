@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 )
 
@@ -107,7 +108,7 @@ func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte
 	select {
 	case getReadPool().jobs <- job:
 	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(os.Stderr, "sender read queue timeout after 10m: offset=%d len=%d\n", offset, len(buf))
+		fmt.Fprintf(termio.Stderr(), "sender read queue timeout after 10m: offset=%d len=%d\n", offset, len(buf))
 		os.Exit(1)
 		return 0, fmt.Errorf("sender read queue timeout after 10m")
 	case <-ctx.Done():
@@ -117,7 +118,7 @@ func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte
 	case res := <-resultCh:
 		return res.n, res.err
 	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(os.Stderr, "sender read timeout after 10m: offset=%d len=%d\n", offset, len(buf))
+		fmt.Fprintf(termio.Stderr(), "sender read timeout after 10m: offset=%d len=%d\n", offset, len(buf))
 		os.Exit(1)
 		return 0, fmt.Errorf("sender read timeout after 10m")
 	case <-ctx.Done():
@@ -168,7 +169,7 @@ func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath stri
 		}
 		return nil
 	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(os.Stderr, "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		fmt.Fprintf(termio.Stderr(), "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
 		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
@@ -238,7 +239,7 @@ func readFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath
 		}
 		return nil
 	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(os.Stderr, "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		fmt.Fprintf(termio.Stderr(), "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
 		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
@@ -293,7 +294,7 @@ func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath str
 		}
 		return nil
 	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(os.Stderr, "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		fmt.Fprintf(termio.Stderr(), "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
 		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
@@ -363,7 +364,7 @@ func writeFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPat
 		}
 		return nil
 	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(os.Stderr, "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
+		fmt.Fprintf(termio.Stderr(), "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
 		os.Exit(1)
 		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
 	case <-ctx.Done():
@@ -397,7 +398,7 @@ func writeAtWithTimeout(ctx context.Context, f *os.File, buf []byte, offset int6
 		}
 		return nil
 	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(os.Stderr, "receiver write timeout after 10m: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
+		fmt.Fprintf(termio.Stderr(), "receiver write timeout after 10m: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
 		os.Exit(1)
 		return fmt.Errorf("receiver write timeout after 10m")
 	case <-ctx.Done():

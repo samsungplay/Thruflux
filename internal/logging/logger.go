@@ -3,6 +3,8 @@ package logging
 import (
 	"log/slog"
 	"os"
+
+	"github.com/sheerbytes/sheerbytes/internal/termio"
 )
 
 // New creates a new structured logger with text output.
@@ -12,7 +14,7 @@ func New(app string, level string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level: parseLevel(level),
 	}
-	handler := slog.NewTextHandler(os.Stdout, opts)
+	handler := slog.NewTextHandler(termio.Stdout(), opts)
 	logger := slog.New(handler)
 
 	// Add default attributes: app and pid
