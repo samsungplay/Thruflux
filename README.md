@@ -7,6 +7,10 @@ It uses a lightweight signaling server (thruserv) for discovery and ICE negotiat
 
 https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 
+
+## Benchmark (Speed Comparison with other popular tools)
+Coming soon, I'm working on it!
+
 ## Why Thruflux?
 
 The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux makes high-performance, large-scale file sharing fast, simple, and freely available to everyone.
