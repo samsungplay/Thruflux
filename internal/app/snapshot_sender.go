@@ -76,16 +76,17 @@ func joinCodeHeaderLines(joinCode string) []string {
 	lines := []string{title, joinCode, cmd}
 	width := 0
 	for _, line := range lines {
-		if len(line) > width {
-			width = len(line)
+		if w := displayWidth(line); w > width {
+			width = w
 		}
 	}
 	border := "+" + strings.Repeat("-", width+2) + "+"
 	pad := func(s string) string {
-		if len(s) >= width {
+		w := displayWidth(s)
+		if w >= width {
 			return s
 		}
-		return s + strings.Repeat(" ", width-len(s))
+		return s + strings.Repeat(" ", width-w)
 	}
 	out := make([]string, 0, 2+len(lines))
 	out = append(out, border)
@@ -94,6 +95,19 @@ func joinCodeHeaderLines(joinCode string) []string {
 	}
 	out = append(out, border)
 	return out
+}
+
+func displayWidth(s string) int {
+	width := 0
+	for _, r := range s {
+		if r <= 0x7f {
+			width++
+		} else {
+			// Treat non-ASCII as width 2 for box alignment.
+			width += 2
+		}
+	}
+	return width
 }
 
 // ReceiverState tracks the state of a receiver peer.
