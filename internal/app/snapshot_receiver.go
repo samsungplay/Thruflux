@@ -1436,6 +1436,7 @@ func (r *snapshotReceiver) watchInterrupt() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	sig := <-sigChan
 	r.logger.Error("received signal, exiting", "signal", sig.String())
+	transfer.FlushAllFlushers()
 	fmt.Fprint(os.Stderr, "\033[?25h")
 	os.Exit(1)
 }

@@ -1358,6 +1358,7 @@ func (s *SnapshotSender) watchHardQuit() {
 			return
 		}
 		if strings.TrimSpace(line) == "q" {
+			transfer.FlushAllFlushers()
 			s.hardStop()
 			return
 		}
@@ -1384,6 +1385,7 @@ func (s *SnapshotSender) hardStop() {
 		s.closeConn()
 	}
 	if s.exitFn != nil {
+		transfer.FlushAllFlushers()
 		fmt.Fprint(os.Stderr, "\033[?25h")
 		s.exitFn(0)
 	}

@@ -1535,6 +1535,7 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 					fileAgg.mu.Unlock()
 					return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
 				}
+				globalSidecarFlushRegistry.add(loaded)
 				fileAgg.sidecar = loaded
 				sidecar = loaded
 			}
@@ -1549,6 +1550,7 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to load sidecar: %w", err)
 			}
+			globalSidecarFlushRegistry.add(loaded)
 			sidecar = loaded
 		}
 		state.sidecar = sidecar
@@ -2178,6 +2180,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 					errMsg = fmt.Sprintf("failed to flush sidecar: %v", err)
 				}
 			}
+			globalSidecarFlushRegistry.remove(state.sidecar)
 		}
 
 		if opts.FileDoneFn != nil {
@@ -2240,6 +2243,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			if err != nil {
 				return nil, fmt.Errorf("failed to load sidecar: %w", err)
 			}
+			globalSidecarFlushRegistry.add(loaded)
 			state.sidecar = loaded
 		}
 		info.Bitmap = state.sidecar.MarshalBitmap()
@@ -2335,6 +2339,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				_ = f.Close()
 				return fmt.Errorf("failed to load sidecar: %w", err)
 			}
+			globalSidecarFlushRegistry.add(loaded)
 			state.sidecar = loaded
 			skipped := uint32(loaded.bitmap.CountSet())
 			if skipped > totalChunks {

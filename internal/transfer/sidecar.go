@@ -30,6 +30,46 @@ type Sidecar struct {
 	mu          sync.Mutex
 }
 
+type sidecarFlushRegistry struct {
+	mu      sync.Mutex
+	active  map[*Sidecar]struct{}
+}
+
+func (r *sidecarFlushRegistry) add(sc *Sidecar) {
+	if sc == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.active == nil {
+		r.active = make(map[*Sidecar]struct{})
+	}
+	r.active[sc] = struct{}{}
+	r.mu.Unlock()
+}
+
+func (r *sidecarFlushRegistry) remove(sc *Sidecar) {
+	if sc == nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.active, sc)
+	r.mu.Unlock()
+}
+
+func (r *sidecarFlushRegistry) flushAll() {
+	r.mu.Lock()
+	list := make([]*Sidecar, 0, len(r.active))
+	for sc := range r.active {
+		list = append(list, sc)
+	}
+	r.mu.Unlock()
+	for _, sc := range list {
+		_ = sc.Flush()
+	}
+}
+
+var globalSidecarFlushRegistry sidecarFlushRegistry
+
 // SidecarPath returns the sidecar path for an item ID.
 func SidecarPath(outDir, root, fileID string) string {
 	if fileID == "" {
@@ -317,4 +357,10 @@ func (s *Sidecar) Flush() error {
 	}
 	s.dirty = false
 	return nil
+}
+
+// FlushAllFlushers flushes all sidecars associated with active receivers.
+// This is a best-effort sync to improve resume reliability on abort.
+func FlushAllFlushers() {
+	globalSidecarFlushRegistry.flushAll()
 }
