@@ -57,7 +57,7 @@ func Run(args []string) {
 	turnServers := make([]string, 0)
 	turnOnly := false
 	var chunkSize uint64
-	totalStreams := 8
+	totalStreams := 12
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--max-receivers" && i+1 < len(args) {
@@ -300,7 +300,7 @@ func printSenderUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
 	fmt.Fprintln(termio.Stderr(), "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
 	fmt.Fprintln(termio.Stderr(), "  --chunk-size N              chunk size in bytes (default 0=auto)")
-	fmt.Fprintln(termio.Stderr(), "  --total-streams N           total concurrent transfer streams (1..32)")
+	fmt.Fprintln(termio.Stderr(), "  --total-streams N           total concurrent transfer streams (default 12, 1..32)")
 }
 
 func hasHelpFlag(args []string) bool {

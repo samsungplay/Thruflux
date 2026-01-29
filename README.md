@@ -1,7 +1,5 @@
 # Thruflux
-**Project and default server are under heavy maintenance, things will NOT work at the moment. But it will be back up soon (within 1 day of the latest README commit) so watch out!** 
-
-**Update: Many experiments ongoing to push throughput further, and so far it's showing very good signs, up to ~x2.5 faster than before! Please wait until next release, it's coming soon :)**
+**Status:** Thruflux is under active development. Hosted signaling/TURN capacity is shared and can be rate‑limited. For guaranteed performance, consider self‑hosting.
 
 Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) handles discovery and ICE negotiation, while the unified `thru` CLI lets you host or join in seconds. Data flows directly over QUIC between peers for fast, resilient transfers.
 
@@ -126,7 +124,11 @@ thru host <paths...> [flags]
 | `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`).                                                                        |
 | `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `100`).                                                                                    |
 | `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
-| `--parallel-files`                                        | Concurrent file transfers (1..8).                                                                                             |
+| `--total-connections`                                     | Total QUIC connections (default `4`).                                                                                         |
+| `--total-streams`                                         | Total concurrent transfer streams (default `12`, `1..32`).                                                                     |
+| `--dumb`                                                  | Raw memory stream; pass a single size like `1G` (or a file path for sizing).                                                   |
+| `--dumb-tcp`                                              | Raw memory stream over TCP (LAN/port‑forward).                                                                                 |
+| `--dumb-connections`                                      | Dumb mode: parallel QUIC connections (`1..32`).                                                                                |
 | `--benchmark`                                             | Print throughput stats.                                                                                                       |
 | `--version`, `-v`                                         | Print the Thruflux CLI version.                                                                                               |
 | `--help`, `-h`                                            | Show usage and flag descriptions.                                                                                             |

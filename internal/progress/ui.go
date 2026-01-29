@@ -19,6 +19,7 @@ type ReceiverView struct {
 	IceStage       string
 	TransportLines []string
 	Stats          Stats
+	Relayed        bool
 	Resumed        int
 	Bench          bench.Snapshot
 	Benchmark      bool
@@ -39,6 +40,7 @@ type SenderRow struct {
 	Bench     bench.Snapshot
 	Route     string
 	Stage     string
+	Relayed   bool
 	FileDone  int
 	FileTotal int
 	Resumed   int
@@ -137,7 +139,15 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 				}
 				lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
 			}
-			fmt.Fprintf(w, "%s\n", colorize(formatReceiverLine(v), colorGreen, isTTY))
+			line := formatReceiverLine(v)
+			if !verbose {
+				if v.Relayed {
+					line += "  relay"
+				} else {
+					line += "  direct"
+				}
+			}
+			fmt.Fprintf(w, "%s\n", colorize(line, colorGreen, isTTY))
 			lines++
 			currentFile := v.CurrentFile
 			if currentFile == "" {
@@ -223,13 +233,18 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 			lines := 0
 			lines += writeHeader(w, v.Header, isTTY)
 			if v.Benchmark {
-				headers := []string{"peer", "status", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "elapsed", "ETA"}
-				widths := []int{10, 12, 9, 7, 5, 12, 12, 12, 12, 9, 9}
+				headers := []string{"peer", "status", "link", "files", "resumed", "%", "inst", "ewma", "avg", "peak", "elapsed", "ETA"}
+				widths := []int{10, 12, 7, 9, 7, 5, 12, 12, 12, 12, 9, 9}
 				rows := make([][]string, 0, len(v.Rows))
 				for _, row := range v.Rows {
+					link := "direct"
+					if row.Relayed {
+						link = "relay"
+					}
 					rows = append(rows, []string{
 						row.Peer,
 						row.Status,
+						link,
 						formatFileCount(row.FileDone, row.FileTotal),
 						formatCount(int64(row.Resumed)),
 						fmt.Sprintf("%.1f", row.Stats.Percent),
@@ -248,13 +263,18 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 					}
 				}
 			} else {
-				headers := []string{"peer", "status", "files", "resumed", "%", "rate", "ETA"}
-				widths := []int{10, 12, 9, 7, 5, 9, 9}
+				headers := []string{"peer", "status", "link", "files", "resumed", "%", "rate", "ETA"}
+				widths := []int{10, 12, 7, 9, 7, 5, 9, 9}
 				rows := make([][]string, 0, len(v.Rows))
 				for _, row := range v.Rows {
+					link := "direct"
+					if row.Relayed {
+						link = "relay"
+					}
 					rows = append(rows, []string{
 						row.Peer,
 						row.Status,
+						link,
 						formatFileCount(row.FileDone, row.FileTotal),
 						formatCount(int64(row.Resumed)),
 						fmt.Sprintf("%.1f", row.Stats.Percent),

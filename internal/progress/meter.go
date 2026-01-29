@@ -69,6 +69,12 @@ func (m *Meter) Add(n int) {
 	}
 	now := m.now()
 	m.done += int64(n)
+	if m.total > 0 && m.done > m.total {
+		m.done = m.total
+	}
+	if m.lastDone > m.done {
+		m.lastDone = m.done
+	}
 	deltaBytes := m.done - m.lastDone
 	deltaTime := now.Sub(m.lastAt).Seconds()
 	if deltaTime > 0 {
@@ -94,6 +100,12 @@ func (m *Meter) Advance(n int) {
 	defer m.mu.Unlock()
 	m.done += int64(n)
 	m.lastDone += int64(n)
+	if m.total > 0 && m.done > m.total {
+		m.done = m.total
+	}
+	if m.lastDone > m.done {
+		m.lastDone = m.done
+	}
 }
 
 // SetTotal updates the total bytes.
@@ -122,6 +134,9 @@ func (m *Meter) Snapshot() Stats {
 		Total:     m.total,
 		RateBps:   m.rateBps,
 		StartedAt: m.startedAt,
+	}
+	if stats.Total > 0 && stats.BytesDone > stats.Total {
+		stats.BytesDone = stats.Total
 	}
 	if m.total > 0 {
 		stats.Percent = float64(m.done) / float64(m.total) * 100

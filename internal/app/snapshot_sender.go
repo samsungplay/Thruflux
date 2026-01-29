@@ -841,6 +841,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	}
 	// Log route
 	s.setSenderRoute(peerID, fmt.Sprintf("local=%s remote=%s", quicConn.LocalAddr(), quicConn.RemoteAddr()))
+	s.setSenderRelayed(peerID, turnConn)
 
 	s.setTransferCloser(peerID, func() {
 		_ = quicConn.CloseWithError(0, "")
@@ -1645,6 +1646,7 @@ type senderProgress struct {
 	perFile       map[string]int64
 	totals        map[string]int64
 	route         string
+	relayed       bool
 	stage         string
 	probes        map[string]ice.ProbeState
 	appliedSkip   map[string]bool
@@ -1837,6 +1839,18 @@ func (s *SnapshotSender) setSenderRoute(peerID string, route string) {
 	state.mu.Unlock()
 }
 
+func (s *SnapshotSender) setSenderRelayed(peerID string, relayed bool) {
+	s.progressMu.Lock()
+	state := s.progress[peerID]
+	s.progressMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.relayed = relayed
+	state.mu.Unlock()
+}
+
 func (s *SnapshotSender) setSenderStage(peerID string, stage string) {
 	s.progressMu.Lock()
 	state := s.progress[peerID]
@@ -1937,6 +1951,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 		var fileTotal int
 		var resumedFiles int
 		var connCount int
+		var relayed bool
 		status := statuses[peerID]
 		s.progressMu.Lock()
 		state := s.progress[peerID]
@@ -1946,6 +1961,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			state.mu.Lock()
 			route = state.route
 			stage = state.stage
+			relayed = state.relayed
 			if len(state.probes) > 0 {
 				probes = make(map[string]string, len(state.probes))
 				for k, v := range state.probes {
@@ -1973,6 +1989,7 @@ func (s *SnapshotSender) senderView() progress.SenderView {
 			Resumed:   resumedFiles,
 			Probes:    probes,
 			ConnCount: connCount,
+			Relayed:   relayed,
 		})
 	}
 	s.mu.Lock()
@@ -2075,7 +2092,7 @@ func (s *SnapshotSender) ForceComplete(peerID string) {
 		return
 	}
 	stats := state.meter.Snapshot()
-	remaining := s.manifest.TotalBytes - stats.BytesDone
+	remaining := stats.Total - stats.BytesDone
 	if remaining <= 0 {
 		return
 	}

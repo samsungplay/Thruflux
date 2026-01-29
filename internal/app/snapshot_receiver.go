@@ -641,6 +641,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	if transferConn != nil {
 		progressState.SetRoute(fmt.Sprintf("route %s", transferConn.RemoteAddr()))
 	}
+	progressState.SetRelayed(turnConn)
 
 	acceptTransport := quicTransport
 	if turnConn && turnTransport != nil {
@@ -1111,6 +1112,7 @@ type receiverProgress struct {
 	fileDone         int
 	fileTotal        int
 	route            string
+	relayed          bool
 	iceStage         string
 	transportLines   []string
 	benchmark        bool
@@ -1211,12 +1213,23 @@ func (p *receiverProgress) UpdateStats(active, completed int) {
 func (p *receiverProgress) ForceComplete() {
 	p.mu.Lock()
 	p.fileDone = p.fileTotal
+	stats := p.meter.Snapshot()
+	remaining := stats.Total - stats.BytesDone
 	p.mu.Unlock()
+	if remaining > 0 {
+		p.meter.Advance(int(remaining))
+	}
 }
 
 func (p *receiverProgress) SetRoute(route string) {
 	p.mu.Lock()
 	p.route = route
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetRelayed(relayed bool) {
+	p.mu.Lock()
+	p.relayed = relayed
 	p.mu.Unlock()
 }
 
@@ -1385,6 +1398,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	done := p.fileDone
 	total := p.fileTotal
 	route := p.route
+	relayed := p.relayed
 	stage := p.iceStage
 	transportLines := append([]string(nil), p.transportLines...)
 	benchSnap := p.benchSnap
@@ -1406,6 +1420,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		IceStage:       stage,
 		TransportLines: transportLines,
 		Stats:          p.meter.Snapshot(),
+		Relayed:        relayed,
 		Bench:          benchSnap,
 		Benchmark:      benchmark,
 		Resumed:        resumedFiles,
