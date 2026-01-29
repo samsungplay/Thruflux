@@ -411,11 +411,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 			progressState.SetIceStage(fmt.Sprintf("FAILED (code=%d)", code))
 
 			if lastErr != nil {
-				fmt.Fprintf(termio.Stderr(), "transfer failed: %v\n", lastErr)
-				fmt.Fprintf(termio.Stdout(), "transfer failed: %v\n", lastErr)
+				fmt.Fprintf(termio.StderrFile(), "transfer failed: %v\n", lastErr)
+				fmt.Fprintf(termio.StdoutFile(), "transfer failed: %v\n", lastErr)
 			}
 			r.logger.Error("receiver exiting", "code", code, "ice_stage", view.IceStage, "route", view.Route, "current_file", view.CurrentFile, "bytes_done", stats.BytesDone, "bytes_total", stats.Total, "session_id", r.sessionID, "sender_id", r.senderID)
-			fmt.Fprintf(termio.Stderr(), "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
+			fmt.Fprintf(termio.StderrFile(), "receiver exit=%d ice=%s route=%s file=%s bytes=%d/%d session=%s sender=%s\n", code, view.IceStage, view.Route, view.CurrentFile, stats.BytesDone, stats.Total, r.sessionID, r.senderID)
 		}
 		os.Exit(code)
 	}
