@@ -125,13 +125,6 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		sessionID:              "",
 		dumbQuicConnections:    1,
 	}
-	s.progressState = newReceiverProgress(0, 0, "", s.outDir, s.benchmark)
-	uiStop := progress.RenderReceiver(ctx, os.Stderr, s.receiverView, s.verbose)
-	var uiStopOnce sync.Once
-	safeStop := func() { uiStopOnce.Do(uiStop) }
-	s.uiCleanup = safeStop
-	defer safeStop()
-
 	go s.watchInterrupt()
 
 	readErr := conn.ReadLoop(ctx, func(env protocol.Envelope) {
@@ -174,8 +167,6 @@ type snapshotReceiver struct {
 	verbose                bool
 	resumeEnabled          bool
 	manifestPrompted       bool
-	progressMu             sync.Mutex
-	progressState          *receiverProgress
 	senderID               string
 	manifest               string
 	sessionID              string
@@ -381,31 +372,23 @@ func (r *snapshotReceiver) sendDumbQUICDone(parts int) error {
 	return r.conn.Send(env)
 }
 
-func (r *snapshotReceiver) setProgressState(state *receiverProgress) {
-	r.progressMu.Lock()
-	r.progressState = state
-	r.progressMu.Unlock()
-}
-
-func (r *snapshotReceiver) receiverView() progress.ReceiverView {
-	r.progressMu.Lock()
-	state := r.progressState
-	r.progressMu.Unlock()
-	if state == nil {
-		return progress.ReceiverView{OutDir: r.outDir}
-	}
-	return state.View()
-}
-
 func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	baseCtx := context.Background()
 	progressState := newReceiverProgress(r.totalBytes, r.fileTotal, start.ManifestID, r.outDir, r.benchmark)
-	r.setProgressState(progressState)
 	if r.benchmark {
 		benchCtx, benchCancel := context.WithCancel(baseCtx)
 		r.startReceiverBenchLoop(benchCtx, progressState)
 		defer benchCancel()
 	}
+	stopUI := progress.RenderReceiver(baseCtx, os.Stderr, progressState.View, r.verbose)
+	var stopUIOnce sync.Once
+	stopUIFn := func() {
+		stopUIOnce.Do(stopUI)
+	}
+	r.cleanupMu.Lock()
+	r.uiCleanup = stopUIFn
+	r.cleanupMu.Unlock()
+	defer stopUIFn()
 	exitWith := func(code int) {
 		r.cleanupMu.Lock()
 		cleanup := r.uiCleanup

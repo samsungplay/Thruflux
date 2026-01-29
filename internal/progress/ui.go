@@ -90,6 +90,7 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		fmt.Fprint(w, "\033[?25l")
 	}
 	lastLines := 0
+	cleared := false
 
 	renderOnce := func() {
 		renderMu.Lock()
@@ -105,6 +106,9 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 			if lastLines > 0 {
 				fmt.Fprintf(w, "\033[%dA", lastLines)
 				fmt.Fprint(w, "\033[J")
+			} else if !cleared {
+				fmt.Fprint(w, "\033[H\033[J")
+				cleared = true
 			}
 			lines := 0
 			if v.OutDir != "" {
@@ -188,6 +192,7 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 		fmt.Fprint(w, "\033[?25l")
 	}
 	lastLines := 0
+	cleared := false
 
 	renderOnce := func() {
 		renderMu.Lock()
@@ -203,6 +208,9 @@ func RenderSender(ctx context.Context, w io.Writer, view func() SenderView, verb
 			if lastLines > 0 {
 				fmt.Fprintf(w, "\033[%dA", lastLines)
 				fmt.Fprint(w, "\033[J")
+			} else if !cleared {
+				fmt.Fprint(w, "\033[H\033[J")
+				cleared = true
 			}
 			lines := 0
 			lines += writeHeader(w, v.Header, isTTY)
