@@ -476,7 +476,7 @@ func formatETA(d time.Duration) string {
 }
 
 func formatBenchLine(snap bench.Snapshot) string {
-	return fmt.Sprintf("Bench: inst=%.0fMB/s ewma=%.0fMB/s avg=%.0fMB/s peak1s=%.0fMB/s elapsed=%s ETA=%s",
+	return fmt.Sprintf("Bench: inst=%.1fMB/s ewma=%.1fMB/s avg=%.1fMB/s peak1s=%.1fMB/s elapsed=%s ETA=%s",
 		snap.InstMBps,
 		snap.EwmaMBps,
 		snap.AvgMBps,
@@ -498,11 +498,11 @@ func formatElapsed(d time.Duration) string {
 }
 
 func formatBenchRate(mbps float64) string {
-	return fmt.Sprintf("%.0fMB/s", mbps)
+	return fmt.Sprintf("%.1fMB/s", mbps)
 }
 
 func formatBenchRate2(mbps float64) string {
-	return fmt.Sprintf("%.2fMB/s", mbps)
+	return fmt.Sprintf("%.1fMB/s", mbps)
 }
 
 func formatFileCount(done, total int) string {

@@ -89,10 +89,17 @@ func (c *progressCollector) Total(relpath string) int64 {
 }
 
 func startProgressTicker(ctx context.Context, collector *progressCollector, apply func(relpath string, bytes int64, total int64)) func() {
+	return startProgressTickerWithInterval(ctx, collector, progressUpdateInterval, apply)
+}
+
+func startProgressTickerWithInterval(ctx context.Context, collector *progressCollector, interval time.Duration, apply func(relpath string, bytes int64, total int64)) func() {
 	if collector == nil {
 		return func() {}
 	}
-	ticker := time.NewTicker(progressUpdateInterval)
+	if interval <= 0 {
+		interval = progressUpdateInterval
+	}
+	ticker := time.NewTicker(interval)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

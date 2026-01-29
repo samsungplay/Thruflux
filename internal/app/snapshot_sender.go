@@ -951,7 +951,7 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 	defer transferCancel()
 
 	progressCollector := newProgressCollector()
-	progressStop := startProgressTicker(transferCtx, progressCollector, func(relpath string, bytesSent int64, total int64) {
+	progressStop := startProgressTickerWithInterval(transferCtx, progressCollector, 250*time.Millisecond, func(relpath string, bytesSent int64, total int64) {
 		s.updateSenderProgress(progressState, relpath, bytesSent, total)
 	})
 	defer progressStop()
