@@ -252,7 +252,7 @@ func RunSnapshotSender(ctx context.Context, logger *slog.Logger, cfg SnapshotSen
 		cfg.QuicStreamWindowBytes = 64 * 1024 * 1024
 	}
 	if cfg.QuicMaxIncomingStreams <= 0 {
-		cfg.QuicMaxIncomingStreams = 100
+		cfg.QuicMaxIncomingStreams = 256
 	}
 
 	var (

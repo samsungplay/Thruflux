@@ -73,7 +73,7 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 		cfg.QuicStreamWindowBytes = 64 * 1024 * 1024
 	}
 	if cfg.QuicMaxIncomingStreams <= 0 {
-		cfg.QuicMaxIncomingStreams = 100
+		cfg.QuicMaxIncomingStreams = 256
 	}
 	if cfg.ParallelConnections < 1 {
 		cfg.ParallelConnections = 4

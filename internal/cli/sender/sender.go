@@ -52,7 +52,7 @@ func Run(args []string) {
 	udpWriteBufferBytes := 8 * 1024 * 1024
 	quicConnWindowBytes := 512 * 1024 * 1024
 	quicStreamWindowBytes := 64 * 1024 * 1024
-	quicMaxIncomingStreams := 100
+	quicMaxIncomingStreams := 256
 	stunServers := make([]string, 0)
 	turnServers := make([]string, 0)
 	turnOnly := false
@@ -298,7 +298,7 @@ func printSenderUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --quic-conn-window-bytes N  QUIC connection window (default 536870912)")
 	fmt.Fprintln(termio.Stderr(), "  --quic-stream-window-bytes N QUIC stream window (default 67108864)")
-	fmt.Fprintln(termio.Stderr(), "  --quic-max-incoming-streams N max QUIC incoming streams (default 100)")
+	fmt.Fprintln(termio.Stderr(), "  --quic-max-incoming-streams N max QUIC incoming streams (default 256)")
 	fmt.Fprintln(termio.Stderr(), "  --chunk-size N              chunk size in bytes (default 0=auto)")
 	fmt.Fprintln(termio.Stderr(), "  --total-streams N           total concurrent transfer streams (default 12, 1..32)")
 }
