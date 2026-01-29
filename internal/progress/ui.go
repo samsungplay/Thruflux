@@ -21,8 +21,6 @@ type ReceiverView struct {
 	Stats          Stats
 	Relayed        bool
 	Resumed        int
-	PlannedSkipped uint32
-	PlannedTotal   uint32
 	Bench          bench.Snapshot
 	Benchmark      bool
 	CurrentFile    string
@@ -140,10 +138,6 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 					}
 				}
 				lines += renderConnSection(w, "receiver", v.IceStage, v.Route, v.Probes, v.ConnCount, isTTY)
-				if v.PlannedTotal > 0 {
-					fmt.Fprintf(w, "%s\n", colorize(fmt.Sprintf("resume plan: %d/%d", v.PlannedSkipped, v.PlannedTotal), colorCyan, isTTY))
-					lines++
-				}
 			}
 			line := formatReceiverLine(v)
 			if !verbose {

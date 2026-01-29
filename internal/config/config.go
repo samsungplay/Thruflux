@@ -140,7 +140,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		ResumeVerify:     "last",
 		HashAlg:          "crc32c",
 		Destination:      "",
-		ResumeVerifyTail: 1,
+		ResumeVerifyTail: 0,
 	}
 
 	// Flags override defaults
@@ -202,7 +202,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	if cfg.HashAlg == "" {
 		cfg.HashAlg = "crc32c"
 	}
-	cfg.ResumeVerifyTail = 1
+	cfg.ResumeVerifyTail = 0
 
 	// If paths were provided, use them; otherwise keep default ["."]
 	if len(paths) > 0 {

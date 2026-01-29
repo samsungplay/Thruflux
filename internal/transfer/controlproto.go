@@ -20,7 +20,6 @@ const (
 	controlTypeResumeRequest  = byte(0x15)
 	controlTypeCreditBatch    = byte(0x16)
 	controlTypeDataStreams    = byte(0x17)
-	controlTypeResumePlanned  = byte(0x18)
 	controlTypeEnd            = byte(0xFF)
 )
 
@@ -68,14 +67,6 @@ type FileResumeInfo struct {
 type ResumeRequest struct {
 	FileID   string
 	StreamID uint64
-}
-
-type ResumePlanned struct {
-	FileID         string
-	StreamID       uint64
-	PlannedSkipped uint32
-	TotalChunks    uint32
-	ChunkSize      uint32
 }
 
 type DataStreams struct {
@@ -492,69 +483,6 @@ func readResumeRequest(s Stream) (ResumeRequest, error) {
 	return msg, nil
 }
 
-func writeResumePlanned(s Stream, msg ResumePlanned) error {
-	if err := writeFullControl(s, []byte{controlTypeResumePlanned}, "resume planned type"); err != nil {
-		return fmt.Errorf("failed to write ResumePlanned type: %w", err)
-	}
-	fileIDBytes := []byte(msg.FileID)
-	fileIDLen := uint16(len(fileIDBytes))
-	if err := writeUint16Control(s, fileIDLen, "file id length"); err != nil {
-		return fmt.Errorf("failed to write file id length: %w", err)
-	}
-	if err := writeFullControl(s, fileIDBytes, "file id"); err != nil {
-		return fmt.Errorf("failed to write file id: %w", err)
-	}
-	if err := writeUint64Control(s, msg.StreamID, "stream id"); err != nil {
-		return fmt.Errorf("failed to write stream id: %w", err)
-	}
-	if err := writeUint32Control(s, msg.PlannedSkipped, "planned skipped"); err != nil {
-		return fmt.Errorf("failed to write planned skipped: %w", err)
-	}
-	if err := writeUint32Control(s, msg.TotalChunks, "total chunks"); err != nil {
-		return fmt.Errorf("failed to write total chunks: %w", err)
-	}
-	if err := writeUint32Control(s, msg.ChunkSize, "chunk size"); err != nil {
-		return fmt.Errorf("failed to write chunk size: %w", err)
-	}
-	return nil
-}
-
-func readResumePlanned(s Stream) (ResumePlanned, error) {
-	var msg ResumePlanned
-	fileIDLen, err := readUint16Control(s, "file id length")
-	if err != nil {
-		return msg, fmt.Errorf("failed to read file id length: %w", err)
-	}
-	if fileIDLen > 0 {
-		fileID := make([]byte, fileIDLen)
-		if err := readFullControl(s, fileID, "file id"); err != nil {
-			return msg, fmt.Errorf("failed to read file id: %w", err)
-		}
-		msg.FileID = string(fileID)
-	}
-	streamID, err := readUint64Control(s, "stream id")
-	if err != nil {
-		return msg, fmt.Errorf("failed to read stream id: %w", err)
-	}
-	msg.StreamID = streamID
-	plannedSkipped, err := readUint32Control(s, "planned skipped")
-	if err != nil {
-		return msg, fmt.Errorf("failed to read planned skipped: %w", err)
-	}
-	msg.PlannedSkipped = plannedSkipped
-	totalChunks, err := readUint32Control(s, "total chunks")
-	if err != nil {
-		return msg, fmt.Errorf("failed to read total chunks: %w", err)
-	}
-	msg.TotalChunks = totalChunks
-	chunkSize, err := readUint32Control(s, "chunk size")
-	if err != nil {
-		return msg, fmt.Errorf("failed to read chunk size: %w", err)
-	}
-	msg.ChunkSize = chunkSize
-	return msg, nil
-}
-
 func writeDataStreams(s Stream, msg DataStreams) error {
 	if err := writeFullControl(s, []byte{controlTypeDataStreams}, "data streams type"); err != nil {
 		return fmt.Errorf("failed to write DataStreams type: %w", err)
@@ -608,9 +536,6 @@ func readControlMessage(s Stream) (byte, any, error) {
 	case controlTypeResumeRequest:
 		msg, err := readResumeRequest(s)
 		return controlTypeResumeRequest, msg, err
-	case controlTypeResumePlanned:
-		msg, err := readResumePlanned(s)
-		return controlTypeResumePlanned, msg, err
 	case controlTypeDataStreams:
 		msg, err := readDataStreams(s)
 		return controlTypeDataStreams, msg, err
