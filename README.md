@@ -155,7 +155,7 @@ thru join <join-code> [flags]
 
 ## Self‑hosting guide (Ubuntu) 🐧
 
-1. **Prepare the machine**
+1. **Install Go**
 
    ```bash
    sudo apt update && sudo apt upgrade -y
@@ -190,20 +190,30 @@ thru join <join-code> [flags]
      ```
    - Reload: `sudo systemctl reload caddy`.
 
-4. **Run `thruserv` as a systemd service**
+4. **Run `thruserv` as a systemd service (Example path : /etc/systemd/system/thruserv.service)**
 
    ```
    [Unit]
-   Description=Thruflux signaling server
+   Description=Thruflux Output Service
+   # Ensure the network is up before starting the service
    After=network.target
+   # Only start if the executable exists
+   ConditionPathExists=/path/to/thruserv_dir
 
    [Service]
-   ExecStart=/usr/local/bin/thruserv --port 8080
+   Type=simple
+   User=yourusername  
+   Group=yourusername
+   # The folder where your app expects to find local files (configs, assets, etc.)
+   WorkingDirectory=/path/to/thruserv_dir
+   # The absolute path to the binary
+   ExecStart=/path/to/thruserv_dir/thruserv  
+   # Restart the service automatically if it crashes
    Restart=on-failure
-   User=thruflux
-   WorkingDirectory=/opt/thruflux
+   RestartSec=10
 
    [Install]
+   # Start this service when the system reaches a normal multi-user state
    WantedBy=multi-user.target
    ```
 
@@ -212,21 +222,25 @@ thru join <join-code> [flags]
    sudo systemctl enable --now thruserv
    ```
 
-5. **Point clients to your server**
+6. **Point clients to your server**
    - Host: `thru host … --server-url https://your.domain`
    - Join: `thru join ABCDEFGH --server-url https://your.domain`
 
-6. **(Optional) Enable default TURN relay via coturn REST credentials**
-   - Ensure coturn is configured with `use-auth-secret` and the same `static-auth-secret` you will pass to `thruserv`.
-   - Start `thruserv` with TURN flags so it can mint time‑limited creds and send them to clients automatically:
+7. **(Optional) Enable built-in TURN relay support using coturn REST credentials**
+
+   This step enables automatic TURN fallback so clients can still connect when direct peer-to-peer UDP paths fail (e.g. strict NATs, firewalls).
+
+   - Configure **coturn** with `use-auth-secret` and the same `static-auth-secret` that will be shared with `thruserv`.
+   - Start `thruserv` with TURN options enabled. This allows it to **mint time-limited TURN credentials** and distribute them to clients automatically:
      ```
-     /usr/local/bin/thruserv \
+     thruserv \
        --port 8080 \
        --turn-server turn:stun.bytepipe.app:3478 \
        --turn-static-auth-secret <your-static-auth-secret> \
        --turn-cred-ttl 1h
      ```
-   - Clients don’t need `--turn-server` unless you want to override the server‑provided TURN.
+   - Clients do **not** need to specify `--turn-server` manually unless you want to override the TURN server provided by `thruserv`.
+
 
 ## Contributing 🤝
 
@@ -257,6 +271,6 @@ thru host ./data --turn-server "turns://user:pass@turn.example.com:5349?insecure
 ```
 
 Notes:
-
+- If thruserv is configured to provide TURN access via time-limited REST credentials (via --turn-server and --turn-static-auth-secret), clients do not need to specify a TURN server
 - `turn:` and `turn://` are equivalent; `turns:` / `turns://` enables TLS for the TURN control channel.
 - If you use `turns://`, the hostname in the URL must match the TURN server TLS certificate (unless `insecure=1` is set).
