@@ -15,7 +15,7 @@ Coming soon, I'm working on it!
 
 The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
 
-It is designed to **work out of the box.**:
+It is designed to **work out of the box**:
 - **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
 - **STUN defaults** so most users can connect immediately without extra setup.
 - **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
