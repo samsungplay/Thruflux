@@ -1,5 +1,5 @@
 # Thruflux
-**Status:** Thruflux is under active development. Hosted signaling/TURN capacity is shared and can be rate‑limited. For guaranteed performance, consider self‑hosting.
+**Status:** Thruflux is under heavy maintenance at the moment; Things will NOT work. Please wait for next release (v0.2.0) as huge improvements are coming.
 
 Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) handles discovery and ICE negotiation, while the unified `thru` CLI lets you host or join in seconds. Data flows directly over QUIC between peers for fast, resilient transfers.
 
