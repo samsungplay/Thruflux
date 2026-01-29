@@ -332,17 +332,19 @@ type sendFileState struct {
 	readyOnce   sync.Once
 	bytesSent   int64
 
-	mu            sync.Mutex
-	nextChunk     uint32
-	inFlight      int
-	scheduleDone  bool
-	endSent       bool
-	verifyPending bool
-	resendPending bool
-	resendChunk   uint32
-	readyErr      error
-	plan          *resumePlan
-	file          *os.File
+	mu                      sync.Mutex
+	nextChunk               uint32
+	inFlight                int
+	scheduleDone            bool
+	endSent                 bool
+	verifyPending           bool
+	resendPending           bool
+	resendChunk             uint32
+	plannedSkipped          uint32
+	plannedIncludesVerified bool
+	readyErr                error
+	plan                    *resumePlan
+	file                    *os.File
 }
 
 func (s *sendFileState) setReady(err error) {
@@ -954,9 +956,24 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 						totalChunks:   totalChunks,
 						verifiedChunk: verifiedChunk,
 					}
+					plannedSkipped := uint32(0)
+					if forceSendFrom > 0 {
+						for i := uint32(0); i < forceSendFrom; i++ {
+							if bitmap.Get(int(i)) {
+								plannedSkipped++
+							}
+						}
+					}
+					includesVerified := false
+					if forceSendFrom > 0 && verifiedChunk < forceSendFrom && bitmap.Get(int(verifiedChunk)) {
+						includesVerified = true
+					}
+
 					if verifyNeeded {
 						state.mu.Lock()
 						state.verifyPending = true
+						state.plannedSkipped = plannedSkipped
+						state.plannedIncludesVerified = includesVerified
 						state.mu.Unlock()
 						go func(vChunk uint32, vHash uint64) {
 							senderHash, err := hashFileChunk(state.filePath, vChunk, chunkSize, state.item.Size, hashAlg)
@@ -972,34 +989,50 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 							if senderHash != vHash {
 								state.resendChunk = vChunk
 								state.resendPending = true
+								if state.plannedIncludesVerified && state.plannedSkipped > 0 {
+									state.plannedSkipped--
+									state.plannedIncludesVerified = false
+								}
 							}
+							finalPlanned := state.plannedSkipped
 							state.verifyPending = false
 							state.mu.Unlock()
+							if opts.ResumeStatsFn != nil {
+								opts.ResumeStatsFn(state.item.RelPath, finalPlanned, totalChunks, verifiedChunk, state.item.Size, chunkSize)
+							}
+							controlWriteMu.Lock()
+							plannedErr := writeResumePlanned(controlStream, ResumePlanned{
+								FileID:         state.item.ID,
+								StreamID:       state.key,
+								PlannedSkipped: finalPlanned,
+								TotalChunks:    totalChunks,
+								ChunkSize:      chunkSize,
+							})
+							controlWriteMu.Unlock()
+							if plannedErr != nil {
+								state.mu.Lock()
+								state.readyErr = plannedErr
+								state.mu.Unlock()
+								setErr(plannedErr)
+							}
 							signalWake()
 						}(verifiedChunk, info.LastVerifiedHash)
-					}
-					plannedSkipped := uint32(0)
-					if forceSendFrom > 0 {
-						for i := uint32(0); i < forceSendFrom; i++ {
-							if bitmap.Get(int(i)) {
-								plannedSkipped++
-							}
+					} else {
+						if opts.ResumeStatsFn != nil {
+							opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
 						}
-					}
-					if opts.ResumeStatsFn != nil {
-						opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
-					}
-					controlWriteMu.Lock()
-					plannedErr := writeResumePlanned(controlStream, ResumePlanned{
-						FileID:         state.item.ID,
-						StreamID:       state.key,
-						PlannedSkipped: plannedSkipped,
-						TotalChunks:    totalChunks,
-						ChunkSize:      chunkSize,
-					})
-					controlWriteMu.Unlock()
-					if plannedErr != nil {
-						return plannedErr
+						controlWriteMu.Lock()
+						plannedErr := writeResumePlanned(controlStream, ResumePlanned{
+							FileID:         state.item.ID,
+							StreamID:       state.key,
+							PlannedSkipped: plannedSkipped,
+							TotalChunks:    totalChunks,
+							ChunkSize:      chunkSize,
+						})
+						controlWriteMu.Unlock()
+						if plannedErr != nil {
+							return plannedErr
+						}
 					}
 				}
 
