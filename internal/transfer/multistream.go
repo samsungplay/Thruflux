@@ -916,6 +916,9 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					verifyNeeded := verifyMode != "none" && verifiedChunk < totalChunks && hashAlg != HashAlgNone && !hashUnknown
 
 					allComplete := totalChunks > 0 && completedChunks >= totalChunks
+					if allComplete {
+						verifyNeeded = false
+					}
 					if !allComplete {
 						tail := resumeVerifyTail
 						if tail > 0 && forceSendFrom > 0 {
