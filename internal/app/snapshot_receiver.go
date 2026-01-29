@@ -536,7 +536,15 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	iceLog("waiting_for_connection")
 
 	// Bidirectional Probing: Dial sender candidates while accepting
-	dialResCh := make(chan transfer.Conn, 1)
+	type dialResult struct {
+		conn transfer.Conn
+		turn bool
+	}
+	type acceptResult struct {
+		conn transfer.Conn
+		turn bool
+	}
+	dialResCh := make(chan dialResult, 1)
 	probeCtx, probeCancel := context.WithCancel(baseCtx)
 	defer probeCancel()
 
@@ -569,14 +577,15 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 					}
 
 					// We use ProbeAndDial (which expects ClientConfig)
-					quicConn, err := prober.ProbeAndDial(probeCtx, cands.Candidates, quictransport.ClientConfig(), quicCfg, func(upd ice.ProbeUpdate) {
+					res, err := prober.ProbeAndDial(probeCtx, cands.Candidates, quictransport.ClientConfig(), quicCfg, func(upd ice.ProbeUpdate) {
 						progressState.SetProbeStatus(upd.Addr, upd.State)
 					})
 					if err == nil {
+						quicConn := res.Conn
 						tconn, derr := transferquic.NewDialer(quicConn, r.logger).Dial(probeCtx, r.senderID)
 						if derr == nil {
 							select {
-							case dialResCh <- tconn:
+							case dialResCh <- dialResult{conn: tconn, turn: res.Turn}:
 								r.logger.Info("outgoing dial won the race", "addr", quicConn.RemoteAddr())
 							default:
 								tconn.Close()
@@ -590,12 +599,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		}
 	}()
 
-	acceptResCh := make(chan transfer.Conn, 1)
+	acceptResCh := make(chan acceptResult, 1)
 	acceptOnce := func(t *transferquic.QUICTransport, turn bool) {
 		conn, err := t.Accept(probeCtx)
 		if err == nil {
 			select {
-			case acceptResCh <- conn:
+			case acceptResCh <- acceptResult{conn: conn, turn: turn}:
 				r.logger.Info("incoming accept won the race", "addr", conn.RemoteAddr())
 				if turn {
 					progressState.SetProbeStatus("turn:"+conn.RemoteAddr().String(), ice.ProbeStateWon)
@@ -613,14 +622,17 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	var transferConn transfer.Conn
+	turnConn := false
 	select {
 	case <-baseCtx.Done():
 		exitWith(1)
 	case tc := <-dialResCh:
-		transferConn = tc
+		transferConn = tc.conn
+		turnConn = tc.turn
 		iceLog("connect_ok (dial)")
 	case tc := <-acceptResCh:
-		transferConn = tc
+		transferConn = tc.conn
+		turnConn = tc.turn
 		iceLog("connect_ok (accept)")
 	}
 	probeCancel() // Stop other attempts
@@ -628,6 +640,11 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	// Log route
 	if transferConn != nil {
 		progressState.SetRoute(fmt.Sprintf("route %s", transferConn.RemoteAddr()))
+	}
+
+	acceptTransport := quicTransport
+	if turnConn && turnTransport != nil {
+		acceptTransport = turnTransport
 	}
 
 	defer transferConn.Close()
@@ -663,7 +680,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		var dumbConns []transfer.Conn
 		dumbConns = append(dumbConns, transferConn)
 		if expectedConns > 1 {
-			extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, expectedConns-1)
+			extraConns, err := r.acceptExtraConns(baseCtx, acceptTransport, expectedConns-1)
 			if err != nil {
 				r.cleanupMu.Lock()
 				cleanup := r.uiCleanup
@@ -718,7 +735,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	conns := []transfer.Conn{transferConn}
 	var extra []transfer.Conn
 	if effectiveConnections > 1 {
-		extraConns, err := r.acceptExtraConns(baseCtx, quicTransport, effectiveConnections-1)
+		extraConns, err := r.acceptExtraConns(baseCtx, acceptTransport, effectiveConnections-1)
 		if err != nil {
 			r.logger.Warn("failed to accept extra connections", "error", err)
 		}

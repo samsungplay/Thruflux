@@ -825,12 +825,14 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 
 	tlsConf := quictransport.ClientConfig()
 
-	quicConn, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, func(upd ice.ProbeUpdate) {
+	res, err := prober.ProbeAndDial(ctx, remoteCands, tlsConf, quicCfg, func(upd ice.ProbeUpdate) {
 		s.setSenderProbeStatus(peerID, upd.Addr, upd.State)
 	})
 	if err != nil {
 		return fmt.Errorf("probing failed: %w", err)
 	}
+	quicConn := res.Conn
+	turnConn := res.Turn
 	defer quicConn.CloseWithError(0, "")
 
 	iceLog("connect_ok")
@@ -887,7 +889,12 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 		if err != nil {
 			return err
 		}
-		extra, err := s.dialExtraConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
+		var extra []dumbExtraConn
+		if turnConn {
+			extra, err = s.dialExtraConnsWithTransport(ctx, peerID, prober.Transport(), remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
+		} else {
+			extra, err = s.dialExtraConns(ctx, peerID, remoteAddr, tlsConf, quicCfg, s.dumbConns-1)
+		}
 		if err != nil {
 			return err
 		}
@@ -915,7 +922,11 @@ func (s *SnapshotSender) runICEQUICTransfer(ctx context.Context, peerID string) 
 			return err
 		}
 		dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
-		extra, err = s.dialExtraConns(dialCtx, peerID, remoteAddr, tlsConf, quicCfg, targetConns-1)
+		if turnConn {
+			extra, err = s.dialExtraConnsWithTransport(dialCtx, peerID, prober.Transport(), remoteAddr, tlsConf, quicCfg, targetConns-1)
+		} else {
+			extra, err = s.dialExtraConns(dialCtx, peerID, remoteAddr, tlsConf, quicCfg, targetConns-1)
+		}
 		dialCancel()
 		if err != nil {
 			s.logger.Warn("failed to establish extra connections", "error", err)
@@ -1129,6 +1140,56 @@ func (s *SnapshotSender) dialExtraConns(ctx context.Context, peerID string, remo
 				conn.Close()
 				qc.CloseWithError(0, "")
 				uc.Close()
+			},
+		})
+	}
+	if len(conns) == 0 && lastErr != nil {
+		return conns, lastErr
+	}
+	return conns, lastErr
+}
+
+func (s *SnapshotSender) dialExtraConnsWithTransport(ctx context.Context, peerID string, transport *quic.Transport, remote *net.UDPAddr, tlsConf *tls.Config, quicCfg *quic.Config, extra int) ([]dumbExtraConn, error) {
+	if extra <= 0 {
+		return nil, nil
+	}
+	if transport == nil {
+		return nil, fmt.Errorf("quic transport unavailable")
+	}
+	if remote == nil {
+		return nil, fmt.Errorf("remote address is nil")
+	}
+
+	conns := make([]dumbExtraConn, 0, extra)
+	var lastErr error
+	for i := 0; i < extra; i++ {
+		quicConn, err := transport.Dial(ctx, remote, tlsConf, quicCfg)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		tconn, err := transferquic.NewDialer(quicConn, s.logger).Dial(ctx, peerID)
+		if err != nil {
+			quicConn.CloseWithError(0, "dial_failed")
+			lastErr = err
+			continue
+		}
+		authCtx, authCancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := authenticateTransport(authCtx, tconn, s.joinCode, authRoleSender); err != nil {
+			authCancel()
+			tconn.Close()
+			quicConn.CloseWithError(0, "auth_failed")
+			lastErr = err
+			continue
+		}
+		authCancel()
+		conn := tconn
+		qc := quicConn
+		conns = append(conns, dumbExtraConn{
+			conn: conn,
+			close: func() {
+				conn.Close()
+				qc.CloseWithError(0, "")
 			},
 		})
 	}

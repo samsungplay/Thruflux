@@ -291,9 +291,15 @@ func stripTurnPrefix(addr string) string {
 	return strings.TrimPrefix(addr, turnCandidatePrefix)
 }
 
+type ProbeResult struct {
+	Conn *quic.Conn
+	Addr string
+	Turn bool
+}
+
 // ProbeAndDial concurrently dials the given list of remote addresses using QUIC.
 // It returns the first successfully established connection.
-func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (*quic.Conn, error) {
+func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tlsConf any, quicConf *quic.Config, onUpdate func(ProbeUpdate)) (ProbeResult, error) {
 	// Initialize Transport if not already done.
 	// We do this here (lazy init) or we could do it earlier, but STUN works better on raw UDP.
 	p.mu.Lock()
@@ -328,12 +334,12 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		}
 	}
 
-	probeWithTransport := func(cands []string, tr *quic.Transport) (*quic.Conn, error) {
+	probeWithTransport := func(cands []string, tr *quic.Transport) (ProbeResult, error) {
 		if tr == nil || len(cands) == 0 {
-			return nil, fmt.Errorf("no candidates")
+			return ProbeResult{}, fmt.Errorf("no candidates")
 		}
 
-		resultCh := make(chan *quic.Conn, 1)
+		resultCh := make(chan ProbeResult, 1)
 		var wg sync.WaitGroup
 		dialCandidate := func(addrStr string) {
 			defer wg.Done()
@@ -369,7 +375,7 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 
 			// Success!
 			select {
-			case resultCh <- conn:
+			case resultCh <- ProbeResult{Conn: conn, Addr: addrStr, Turn: IsTurnCandidate(addrStr)}:
 				p.logger.Info("probe won", "addr", addrStr)
 				if onUpdate != nil {
 					onUpdate(ProbeUpdate{Addr: addrStr, State: ProbeStateWon})
@@ -393,12 +399,12 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 		}
 
 		select {
-		case conn := <-resultCh:
-			return conn, nil
+		case res := <-resultCh:
+			return res, nil
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ProbeResult{}, ctx.Err()
 		case <-allDone:
-			return nil, fmt.Errorf("all probes failed")
+			return ProbeResult{}, fmt.Errorf("all probes failed")
 		}
 	}
 
@@ -418,15 +424,15 @@ func (p *Prober) ProbeAndDial(ctx context.Context, remoteCandidates []string, tl
 			return conn, nil
 		}
 		if directErr != nil {
-			return nil, fmt.Errorf("all probes failed: direct=%v turn=%v", directErr, err)
+			return ProbeResult{}, fmt.Errorf("all probes failed: direct=%v turn=%v", directErr, err)
 		}
-		return nil, err
+		return ProbeResult{}, err
 	}
 
 	if directErr != nil {
-		return nil, directErr
+		return ProbeResult{}, directErr
 	}
-	return nil, fmt.Errorf("all probes failed")
+	return ProbeResult{}, fmt.Errorf("all probes failed")
 }
 
 func (p *Prober) resolvePublicAddr() error {
