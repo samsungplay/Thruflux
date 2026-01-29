@@ -2136,6 +2136,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}
 	controlCh := make(chan controlEvent, controlBuf)
+	plannedCh := make(chan struct{}, 1)
+	var plannedMu sync.Mutex
+	plannedMap := make(map[uint64]ResumePlanned)
 	controlErr := make(chan error, 1)
 	go func() {
 		for {
@@ -2147,16 +2150,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				}
 				return
 			}
-			ev := controlEvent{typ: msgType, msg: msg}
 			if msgType == controlTypeResumePlanned {
+				planned := msg.(ResumePlanned)
+				plannedMu.Lock()
+				plannedMap[planned.StreamID] = planned
+				plannedMu.Unlock()
 				select {
-				case controlCh <- ev:
+				case plannedCh <- struct{}{}:
 				default:
-					// Drop planned resume updates if we're backpressured; UI-only.
 				}
-			} else {
-				controlCh <- ev
+				continue
 			}
+			controlCh <- controlEvent{typ: msgType, msg: msg}
 			if msgType == controlTypeEnd {
 				return
 			}
@@ -2705,6 +2710,20 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				return m, recvErr
 			}
 			return m, recvCtx.Err()
+		case <-plannedCh:
+			plannedMu.Lock()
+			pendingList := make([]ResumePlanned, 0, len(plannedMap))
+			for _, planned := range plannedMap {
+				pendingList = append(pendingList, planned)
+			}
+			plannedMap = make(map[uint64]ResumePlanned)
+			plannedMu.Unlock()
+			for _, planned := range pendingList {
+				if err := handleResumePlanned(planned); err != nil {
+					setRecvErr(err)
+					return m, err
+				}
+			}
 		case <-doneCh:
 			if endReceived && completedCount >= totalFiles {
 				return m, nil
