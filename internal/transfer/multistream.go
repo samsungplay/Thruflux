@@ -460,6 +460,7 @@ type recvFileStateMux struct {
 	hashAlg     byte
 	sidecar     *Sidecar
 	resumeOnce  sync.Once
+	resumeInfo  *FileResumeInfo
 
 	mu          sync.Mutex
 	file        *os.File
@@ -2412,6 +2413,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			if err != nil {
 				return err
 			}
+			state.mu.Lock()
+			state.resumeInfo = info
+			state.mu.Unlock()
 			select {
 			case controlWriteCh <- controlMsg{resume: info}:
 			case <-recvCtx.Done():
@@ -2439,9 +2443,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		if req.FileID != "" && state.item.ID != "" && req.FileID != state.item.ID {
 			return fmt.Errorf("resume request file id mismatch for %s", state.item.RelPath)
 		}
-		info, err := buildResumeInfo(state)
-		if err != nil {
-			return err
+		state.mu.Lock()
+		info := state.resumeInfo
+		state.mu.Unlock()
+		if info == nil {
+			var err error
+			info, err = buildResumeInfo(state)
+			if err != nil {
+				return err
+			}
+			state.mu.Lock()
+			state.resumeInfo = info
+			state.mu.Unlock()
 		}
 		select {
 		case controlWriteCh <- controlMsg{resume: info}:

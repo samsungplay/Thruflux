@@ -835,6 +835,20 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	if _, err := transfer.RecvManifestMultiStream(recvCtx, recvConn, r.outDir, opts); err != nil {
+		view := progressState.View()
+		stats := view.Stats
+		if isGracefulRemoteCloseError(err) &&
+			view.FileTotal > 0 &&
+			view.FileDone >= view.FileTotal &&
+			stats.Total > 0 &&
+			stats.BytesDone >= stats.Total {
+			if r.benchmark {
+				progressState.FreezeBench(time.Now())
+				r.printReceiverBenchSummary(progressState)
+			}
+			progressState.ForceComplete()
+			exitWith(0)
+		}
 		r.cleanupMu.Lock()
 		cleanup := r.uiCleanup
 		r.cleanupMu.Unlock()
@@ -854,6 +868,14 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	progressState.ForceComplete()
 	exitWith(0)
+}
+
+func isGracefulRemoteCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Application error 0x0") && strings.Contains(msg, "remote")
 }
 
 func printIncomingSummary(summary protocol.ManifestSummary) {
