@@ -2147,7 +2147,16 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				}
 				return
 			}
-			controlCh <- controlEvent{typ: msgType, msg: msg}
+			ev := controlEvent{typ: msgType, msg: msg}
+			if msgType == controlTypeResumePlanned {
+				select {
+				case controlCh <- ev:
+				default:
+					// Drop planned resume updates if we're backpressured; UI-only.
+				}
+			} else {
+				controlCh <- ev
+			}
 			if msgType == controlTypeEnd {
 				return
 			}
