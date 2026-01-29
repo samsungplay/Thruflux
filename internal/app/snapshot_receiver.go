@@ -755,8 +755,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		ParallelFiles: totalStreams,
 		OnManifestFn: func(m manifest.Manifest) {
 			if r.clearResumeOnStart {
-				if err := clearResumeDataForManifest(r.outDir, m, true); err != nil && r.verbose {
-					fmt.Fprintf(termio.StderrFile(), "Failed to clear resume data: %v\n", err)
+				progressState.SetHeaderLine("Clearing resume data for this transfer...")
+				removed, err := clearResumeDataForManifest(r.outDir, m, true)
+				if err != nil {
+					progressState.SetHeaderLine(fmt.Sprintf("Failed to clear resume data: %v", err))
+				} else {
+					progressState.SetHeaderLine(fmt.Sprintf("Cleared %d resume files.", removed))
 				}
 				r.clearResumeOnStart = false
 			}
@@ -915,8 +919,9 @@ func clearResumeData(outDir, root string) error {
 	return firstErr
 }
 
-func clearResumeDataForManifest(outDir string, m manifest.Manifest, noRootDir bool) error {
+func clearResumeDataForManifest(outDir string, m manifest.Manifest, noRootDir bool) (int, error) {
 	var firstErr error
+	removed := 0
 	baseDir := outDir
 	rootedDir := filepath.Join(outDir, m.Root)
 	if !noRootDir {
@@ -930,17 +935,21 @@ func clearResumeDataForManifest(outDir string, m manifest.Manifest, noRootDir bo
 			continue
 		}
 		primary := transfer.SidecarPath(baseDir, "", item.ID)
-		if err := os.Remove(primary); err != nil && !os.IsNotExist(err) && firstErr == nil {
+		if err := os.Remove(primary); err == nil {
+			removed++
+		} else if !os.IsNotExist(err) && firstErr == nil {
 			firstErr = err
 		}
 		if rootedDir != baseDir {
 			fallback := transfer.SidecarPath(rootedDir, "", item.ID)
-			if err := os.Remove(fallback); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			if err := os.Remove(fallback); err == nil {
+				removed++
+			} else if !os.IsNotExist(err) && firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
-	return firstErr
+	return removed, firstErr
 }
 
 func resumeSidecarDirs(outDir, root string) []string {
@@ -1140,6 +1149,7 @@ type receiverProgress struct {
 	pendingVerify    map[string]int64
 	verifyingActive  bool
 	finalized        bool
+	headerLines      []string
 	resumedFiles     int
 	connCount        int
 	totalBytes       int64
@@ -1260,6 +1270,16 @@ func (p *receiverProgress) SetIceStage(stage string) {
 func (p *receiverProgress) SetTransportLines(lines []string) {
 	p.mu.Lock()
 	p.transportLines = append([]string(nil), lines...)
+	p.mu.Unlock()
+}
+
+func (p *receiverProgress) SetHeaderLine(line string) {
+	p.mu.Lock()
+	if strings.TrimSpace(line) == "" {
+		p.headerLines = nil
+	} else {
+		p.headerLines = []string{line}
+	}
 	p.mu.Unlock()
 }
 
@@ -1451,6 +1471,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		probes[k] = v.String()
 	}
 	finalized := p.finalized
+	headerLines := append([]string(nil), p.headerLines...)
 	p.mu.Unlock()
 	stats := p.meter.Snapshot()
 	if finalized {
@@ -1463,6 +1484,7 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
 		OutDir:         outDir,
+		HeaderLines:    headerLines,
 		StartupLine:    startupLine,
 		IceStage:       stage,
 		TransportLines: transportLines,

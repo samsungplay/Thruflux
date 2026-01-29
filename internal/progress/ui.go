@@ -15,6 +15,7 @@ import (
 type ReceiverView struct {
 	SnapshotID     string
 	OutDir         string
+	HeaderLines    []string
 	StartupLine    string
 	IceStage       string
 	TransportLines []string
@@ -122,6 +123,15 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 		if isTTY {
 			fmt.Fprint(w, "\033[H\033[J")
 			lines := 0
+			if len(v.HeaderLines) > 0 {
+				for _, line := range v.HeaderLines {
+					if line == "" {
+						continue
+					}
+					fmt.Fprintln(w, colorize(line, colorCyan, isTTY))
+					lines++
+				}
+			}
 			if v.StartupLine != "" {
 				fmt.Fprintln(w, colorize(v.StartupLine, colorCyan, isTTY))
 				lines++
@@ -160,6 +170,14 @@ func RenderReceiver(ctx context.Context, w io.Writer, view func() ReceiverView, 
 				lines++
 			}
 		} else {
+			if len(v.HeaderLines) > 0 {
+				for _, line := range v.HeaderLines {
+					if line == "" {
+						continue
+					}
+					fmt.Fprintln(w, line)
+				}
+			}
 			if v.StartupLine != "" {
 				fmt.Fprintln(w, v.StartupLine)
 			}
