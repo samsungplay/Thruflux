@@ -16,6 +16,7 @@ sheerbytes-receiver
 
 # Go build cache
 .gocache/
+.gopath/
 
 # Dependency directories
 vendor/
