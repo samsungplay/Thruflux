@@ -410,6 +410,16 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		if cleanup != nil {
 			cleanup()
 		}
+		if code == 0 {
+			view := progressState.View()
+			stats := view.Stats
+			fmt.Fprintf(termio.StderrFile(), "complete: 100%% (recv %s/%s) files %d/%d\n",
+				formatBytes(stats.BytesDone),
+				formatBytes(stats.Total),
+				view.FileDone,
+				view.FileTotal,
+			)
+		}
 		if code != 0 {
 			view := progressState.View()
 			stats := view.Stats

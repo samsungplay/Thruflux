@@ -2098,6 +2098,9 @@ func (s *SnapshotSender) ForceComplete(peerID string) {
 	if state == nil {
 		return
 	}
+	state.mu.Lock()
+	state.fileDone = state.fileTotal
+	state.mu.Unlock()
 	stats := state.meter.Snapshot()
 	remaining := stats.Total - stats.BytesDone
 	if remaining <= 0 {
