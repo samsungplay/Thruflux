@@ -1484,7 +1484,20 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		done   *FileDone
 		resume *FileResumeInfo
 	}
-	controlWriteCh := make(chan controlMsg, parallelFiles*8)
+	controlWriteCap := parallelFiles * 8
+	if remainingFiles > 0 {
+		controlWriteCap = remainingFiles * 2
+		if controlWriteCap < parallelFiles*8 {
+			controlWriteCap = parallelFiles * 8
+		}
+		if controlWriteCap < 64 {
+			controlWriteCap = 64
+		}
+		if controlWriteCap > 8192 {
+			controlWriteCap = 8192
+		}
+	}
+	controlWriteCh := make(chan controlMsg, controlWriteCap)
 	recvCtx, recvCancel := context.WithCancel(ctx)
 	defer recvCancel()
 	var recvErr error
@@ -2129,7 +2142,20 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		done   *FileDone
 		resume *FileResumeInfo
 	}
-	controlWriteCh := make(chan controlMsg, dataStreams*8)
+	controlWriteCap := dataStreams * 8
+	if totalFiles > 0 {
+		controlWriteCap = totalFiles * 2
+		if controlWriteCap < dataStreams*8 {
+			controlWriteCap = dataStreams * 8
+		}
+		if controlWriteCap < 64 {
+			controlWriteCap = 64
+		}
+		if controlWriteCap > 8192 {
+			controlWriteCap = 8192
+		}
+	}
+	controlWriteCh := make(chan controlMsg, controlWriteCap)
 	go func() {
 		for {
 			select {
