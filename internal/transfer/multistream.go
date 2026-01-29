@@ -969,6 +969,32 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 						includesVerified = true
 					}
 
+					sendPlanned := func(finalPlanned uint32) {
+						go func() {
+							if opts.ResumeStatsFn != nil {
+								opts.ResumeStatsFn(state.item.RelPath, finalPlanned, totalChunks, verifiedChunk, state.item.Size, chunkSize)
+							}
+							controlWriteMu.Lock()
+							plannedErr := writeResumePlanned(controlStream, ResumePlanned{
+								FileID:         state.item.ID,
+								StreamID:       state.key,
+								PlannedSkipped: finalPlanned,
+								TotalChunks:    totalChunks,
+								ChunkSize:      chunkSize,
+							})
+							controlWriteMu.Unlock()
+							if plannedErr != nil {
+								state.mu.Lock()
+								if state.readyErr == nil {
+									state.readyErr = plannedErr
+								}
+								state.mu.Unlock()
+								setErr(plannedErr)
+							}
+							signalWake()
+						}()
+					}
+
 					if verifyNeeded {
 						state.mu.Lock()
 						state.verifyPending = true
@@ -997,42 +1023,10 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 							finalPlanned := state.plannedSkipped
 							state.verifyPending = false
 							state.mu.Unlock()
-							if opts.ResumeStatsFn != nil {
-								opts.ResumeStatsFn(state.item.RelPath, finalPlanned, totalChunks, verifiedChunk, state.item.Size, chunkSize)
-							}
-							controlWriteMu.Lock()
-							plannedErr := writeResumePlanned(controlStream, ResumePlanned{
-								FileID:         state.item.ID,
-								StreamID:       state.key,
-								PlannedSkipped: finalPlanned,
-								TotalChunks:    totalChunks,
-								ChunkSize:      chunkSize,
-							})
-							controlWriteMu.Unlock()
-							if plannedErr != nil {
-								state.mu.Lock()
-								state.readyErr = plannedErr
-								state.mu.Unlock()
-								setErr(plannedErr)
-							}
-							signalWake()
+							sendPlanned(finalPlanned)
 						}(verifiedChunk, info.LastVerifiedHash)
 					} else {
-						if opts.ResumeStatsFn != nil {
-							opts.ResumeStatsFn(state.item.RelPath, plannedSkipped, totalChunks, verifiedChunk, state.item.Size, chunkSize)
-						}
-						controlWriteMu.Lock()
-						plannedErr := writeResumePlanned(controlStream, ResumePlanned{
-							FileID:         state.item.ID,
-							StreamID:       state.key,
-							PlannedSkipped: plannedSkipped,
-							TotalChunks:    totalChunks,
-							ChunkSize:      chunkSize,
-						})
-						controlWriteMu.Unlock()
-						if plannedErr != nil {
-							return plannedErr
-						}
+						sendPlanned(plannedSkipped)
 					}
 				}
 
