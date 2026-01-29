@@ -125,6 +125,21 @@ func (m *Meter) AddTotal(n int64) {
 	m.total += n
 }
 
+// ForceComplete clamps done to total for final UI rendering.
+func (m *Meter) ForceComplete() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.total <= 0 {
+		if m.done > 0 {
+			m.total = m.done
+		}
+		m.lastDone = m.done
+		return
+	}
+	m.done = m.total
+	m.lastDone = m.done
+}
+
 // Snapshot returns a current snapshot of progress stats.
 func (m *Meter) Snapshot() Stats {
 	m.mu.Lock()

@@ -24,6 +24,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/transferquic"
 	"github.com/sheerbytes/sheerbytes/internal/transport"
 	"github.com/sheerbytes/sheerbytes/internal/wsclient"
+	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 	"github.com/sheerbytes/sheerbytes/pkg/protocol"
 )
 
@@ -170,6 +171,7 @@ type snapshotReceiver struct {
 	verbose                bool
 	resumeEnabled          bool
 	manifestPrompted       bool
+	clearResumeOnStart     bool
 	startupMessage         string
 	senderID               string
 	manifest               string
@@ -232,9 +234,7 @@ func (r *snapshotReceiver) handleEnvelope(env protocol.Envelope) {
 					os.Exit(1)
 				}
 				if !resume {
-					if err := clearResumeData(r.outDir, offer.Summary.RootName); err != nil && r.verbose {
-						fmt.Fprintf(termio.StderrFile(), "Failed to clear resume data: %v\n", err)
-					}
+					r.clearResumeOnStart = true
 				}
 			}
 		}
@@ -409,16 +409,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		r.cleanupMu.Unlock()
 		if cleanup != nil {
 			cleanup()
-		}
-		if code == 0 {
-			view := progressState.View()
-			line := formatReceiverLineFinal(view)
-			currentFile := view.CurrentFile
-			if currentFile == "" {
-				currentFile = "-"
-			}
-			fmt.Fprintln(termio.StderrFile(), line)
-			fmt.Fprintf(termio.StderrFile(), "file: %s (%d/%d)\n", currentFile, view.FileDone, view.FileTotal)
 		}
 		if code != 0 {
 			view := progressState.View()
@@ -763,6 +753,14 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		NoRootDir:     true,
 		HashAlg:       "crc32c",
 		ParallelFiles: totalStreams,
+		OnManifestFn: func(m manifest.Manifest) {
+			if r.clearResumeOnStart {
+				if err := clearResumeDataForManifest(r.outDir, m, true); err != nil && r.verbose {
+					fmt.Fprintf(termio.StderrFile(), "Failed to clear resume data: %v\n", err)
+				}
+				r.clearResumeOnStart = false
+			}
+		},
 		ProgressFn: func(relpath string, bytesReceived int64, total int64) {
 			progressCollector.Update(relpath, bytesReceived, total)
 		},
@@ -917,6 +915,34 @@ func clearResumeData(outDir, root string) error {
 	return firstErr
 }
 
+func clearResumeDataForManifest(outDir string, m manifest.Manifest, noRootDir bool) error {
+	var firstErr error
+	baseDir := outDir
+	rootedDir := filepath.Join(outDir, m.Root)
+	if !noRootDir {
+		baseDir = rootedDir
+	}
+	for _, item := range m.Items {
+		if item.IsDir {
+			continue
+		}
+		if item.ID == "" {
+			continue
+		}
+		primary := transfer.SidecarPath(baseDir, "", item.ID)
+		if err := os.Remove(primary); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+		if rootedDir != baseDir {
+			fallback := transfer.SidecarPath(rootedDir, "", item.ID)
+			if err := os.Remove(fallback); err != nil && !os.IsNotExist(err) && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 func resumeSidecarDirs(outDir, root string) []string {
 	seen := make(map[string]struct{}, 2)
 	add := func(r string) {
@@ -947,70 +973,6 @@ func formatBytes(n int64) string {
 	}
 	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
 	return fmt.Sprintf("%.2f %s", value, suffixes[exp-1])
-}
-
-func formatReceiverLineFinal(v progress.ReceiverView) string {
-	bar := renderBarFinal(v.Stats.Percent, 20)
-	return fmt.Sprintf("%s %5.1f%%  %s  resumed=%d  ETA %s  (recv %s/%s)",
-		bar,
-		v.Stats.Percent,
-		formatRateFinal(v.Stats.RateBps),
-		v.Resumed,
-		formatETAFinal(v.Stats.ETA),
-		formatGiBFinal(v.Stats.BytesDone),
-		formatGiBFinal(v.Stats.Total),
-	)
-}
-
-func renderBarFinal(percent float64, width int) string {
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-	filled := int((percent / 100) * float64(width))
-	if filled > width {
-		filled = width
-	}
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
-}
-
-func formatRateFinal(bps float64) string {
-	const (
-		k = 1024
-		m = 1024 * k
-		g = 1024 * m
-	)
-	if bps >= g {
-		return fmt.Sprintf("%.2f GB/s", bps/float64(g))
-	}
-	if bps >= m {
-		return fmt.Sprintf("%.1f MB/s", bps/float64(m))
-	}
-	if bps >= k {
-		return fmt.Sprintf("%.0f KB/s", bps/float64(k))
-	}
-	return fmt.Sprintf("%.0f B/s", bps)
-}
-
-func formatGiBFinal(n int64) string {
-	const g = 1024 * 1024 * 1024
-	if n <= 0 {
-		return "0.00 GiB"
-	}
-	return fmt.Sprintf("%.2f GiB", float64(n)/float64(g))
-}
-
-func formatETAFinal(d time.Duration) string {
-	if d <= 0 {
-		return "--:--:--"
-	}
-	secs := int(d.Seconds())
-	h := secs / 3600
-	m := (secs % 3600) / 60
-	s := secs % 60
-	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
 func (r *snapshotReceiver) runDumbTCPTransfer(ctx context.Context, progressState *receiverProgress, lastProgress *int64) error {
@@ -1177,6 +1139,7 @@ type receiverProgress struct {
 	pendingSkipBytes map[string]int64
 	pendingVerify    map[string]int64
 	verifyingActive  bool
+	finalized        bool
 	resumedFiles     int
 	connCount        int
 	totalBytes       int64
@@ -1271,12 +1234,9 @@ func (p *receiverProgress) UpdateStats(active, completed int) {
 func (p *receiverProgress) ForceComplete() {
 	p.mu.Lock()
 	p.fileDone = p.fileTotal
-	stats := p.meter.Snapshot()
-	remaining := stats.Total - stats.BytesDone
+	p.finalized = true
 	p.mu.Unlock()
-	if remaining > 0 {
-		p.meter.Advance(int(remaining))
-	}
+	p.meter.ForceComplete()
 }
 
 func (p *receiverProgress) SetRoute(route string) {
@@ -1490,14 +1450,23 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	for k, v := range p.probes {
 		probes[k] = v.String()
 	}
+	finalized := p.finalized
 	p.mu.Unlock()
+	stats := p.meter.Snapshot()
+	if finalized {
+		if stats.Total > 0 {
+			stats.BytesDone = stats.Total
+		}
+		stats.Percent = 100
+		stats.ETA = 0
+	}
 	return progress.ReceiverView{
 		SnapshotID:     snapshotID,
 		OutDir:         outDir,
 		StartupLine:    startupLine,
 		IceStage:       stage,
 		TransportLines: transportLines,
-		Stats:          p.meter.Snapshot(),
+		Stats:          stats,
 		Relayed:        relayed,
 		Bench:          benchSnap,
 		Benchmark:      benchmark,

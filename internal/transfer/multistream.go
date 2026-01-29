@@ -43,6 +43,7 @@ type Options struct {
 	FileDoneFn       FileDoneFn
 	ParamSource      func() RuntimeParams
 	OnFileStart      func(relpath string, size int64, params RuntimeParams)
+	OnManifestFn     func(manifest.Manifest)
 }
 
 // TransferStatsFn reports active/completed file counts and remaining bytes.
@@ -2035,6 +2036,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	m, err = readControlHeader(controlStream)
 	if err != nil {
 		return m, err
+	}
+	if opts.OnManifestFn != nil {
+		opts.OnManifestFn(m)
+	}
+	if opts.OnManifestFn != nil {
+		opts.OnManifestFn(m)
 	}
 
 	rootedDir := filepath.Join(outDir, m.Root)
