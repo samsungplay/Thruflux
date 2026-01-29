@@ -1593,7 +1593,10 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		}
 		if opts.ResumeStatsFn != nil && totalChunks > 0 {
 			callResume := func() {
-				skippedChunks := uint32(sidecar.bitmap.CountSet())
+				skippedChunks := uint32(0)
+				if highest, ok := sidecar.HighestContiguous(); ok && highest >= 0 {
+					skippedChunks = uint32(highest + 1)
+				}
 				if skippedChunks > totalChunks {
 					skippedChunks = totalChunks
 				}
@@ -1604,6 +1607,21 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			} else {
 				callResume()
 			}
+			bitmapSnapshot := sidecar.MarshalBitmap()
+			go func(relpath string, total uint32, totalBytes int64, chunkSize uint32) {
+				if len(bitmapSnapshot) == 0 || total == 0 {
+					return
+				}
+				bm, err := BitmapFromBytes(bitmapSnapshot, int(total))
+				if err != nil {
+					return
+				}
+				skipped := uint32(bm.CountSet())
+				if skipped > total {
+					skipped = total
+				}
+				opts.ResumeStatsFn(relpath, skipped, total, info.LastVerifiedChunk, totalBytes, chunkSize)
+			}(begin.RelPath, totalChunks, int64(begin.FileSize), begin.ChunkSize)
 		}
 		return info, state, nil
 	}
@@ -2310,11 +2328,29 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 		if opts.ResumeStatsFn != nil && state.totalChunks > 0 {
 			state.resumeOnce.Do(func() {
-				skippedChunks := uint32(state.sidecar.bitmap.CountSet())
+				skippedChunks := uint32(0)
+				if highest, ok := state.sidecar.HighestContiguous(); ok && highest >= 0 {
+					skippedChunks = uint32(highest + 1)
+				}
 				if skippedChunks > state.totalChunks {
 					skippedChunks = state.totalChunks
 				}
 				opts.ResumeStatsFn(state.item.RelPath, skippedChunks, state.totalChunks, info.LastVerifiedChunk, int64(state.item.Size), state.chunkSize)
+				bitmapSnapshot := state.sidecar.MarshalBitmap()
+				go func(relpath string, total uint32, totalBytes int64, chunkSize uint32, verifiedChunk uint32) {
+					if len(bitmapSnapshot) == 0 || total == 0 {
+						return
+					}
+					bm, err := BitmapFromBytes(bitmapSnapshot, int(total))
+					if err != nil {
+						return
+					}
+					skipped := uint32(bm.CountSet())
+					if skipped > total {
+						skipped = total
+					}
+					opts.ResumeStatsFn(relpath, skipped, total, verifiedChunk, totalBytes, chunkSize)
+				}(state.item.RelPath, state.totalChunks, int64(state.item.Size), state.chunkSize, info.LastVerifiedChunk)
 			})
 		}
 		return info, nil

@@ -1263,6 +1263,7 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 	p.mu.Lock()
 	p.currentFile = relpath
 	if p.appliedSkip[relpath] {
+		p.updateResumeSkipLocked(relpath, skippedChunks, totalChunks, totalBytes, chunkSize)
 		p.mu.Unlock()
 		return
 	}
@@ -1278,6 +1279,25 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize}
 	}
 	p.mu.Unlock()
+}
+
+func (p *receiverProgress) updateResumeSkipLocked(relpath string, skippedChunks, totalChunks uint32, totalBytes int64, chunkSize uint32) {
+	if skippedChunks == 0 || totalChunks == 0 {
+		return
+	}
+	if totalBytes > 0 {
+		p.totals[relpath] = totalBytes
+	}
+	current := p.skipOffset[relpath]
+	skippedBytes := computeSkippedBytes(p.totals[relpath], resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize})
+	if skippedBytes > current {
+		delta := skippedBytes - current
+		p.addSkippedLocked(delta)
+		p.skipOffset[relpath] = skippedBytes
+		if p.perFile[relpath] < skippedBytes {
+			p.perFile[relpath] = skippedBytes
+		}
+	}
 }
 
 func (p *receiverProgress) applySkipLocked(relpath string, totalBytes int64, skip resumeSkip) {
