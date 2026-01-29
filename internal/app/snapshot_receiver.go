@@ -400,6 +400,10 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	defer stopUIFn()
 	var lastErr error
 	exitWith := func(code int) {
+		if code == 0 {
+			// Ensure final UI render shows 100% even if completion/verify updates lag.
+			progressState.ForceComplete()
+		}
 		r.cleanupMu.Lock()
 		cleanup := r.uiCleanup
 		r.cleanupMu.Unlock()
