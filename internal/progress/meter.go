@@ -138,11 +138,11 @@ func (m *Meter) Snapshot() Stats {
 	if stats.Total > 0 && stats.BytesDone > stats.Total {
 		stats.BytesDone = stats.Total
 	}
-	if m.total > 0 {
-		stats.Percent = float64(m.done) / float64(m.total) * 100
+	if stats.Total > 0 {
+		stats.Percent = float64(stats.BytesDone) / float64(stats.Total) * 100
 	}
-	if m.rateBps > 0 && m.total > m.done {
-		remaining := float64(m.total - m.done)
+	if m.rateBps > 0 && stats.Total > stats.BytesDone {
+		remaining := float64(stats.Total - stats.BytesDone)
 		stats.ETA = time.Duration(remaining/m.rateBps) * time.Second
 	}
 	return stats
