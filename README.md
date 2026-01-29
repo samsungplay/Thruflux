@@ -231,7 +231,7 @@ thru join <join-code> [flags]
    This step enables automatic TURN fallback so clients can still connect when direct peer-to-peer UDP paths fail without specifying --turn-server flag by themselves (e.g. strict NATs, firewalls).
 
    - Configure **coturn** with `use-auth-secret` and the same `static-auth-secret` that will be shared with `thruserv`.
-   - Example coturn server config (for more info, check out the [coturn][https://github.com/coturn/coturn] repository) :
+   - Example coturn server config (for more info, check out the [coturn](https://github.com/coturn/coturn) repository) :
    ```
    # ===== Core =====
    listening-port=3478
@@ -239,7 +239,7 @@ thru join <join-code> [flags]
    listening-ip=0.0.0.0
 
    # Public mapping
-   external-ip=YOUR_PUBLICL_IP
+   external-ip=YOUR_PUBLIC_IP
    relay-ip=YOUR_PUBLIC_IP
 
    # Identity (realm must match what your backend uses in TURN creds)
