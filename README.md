@@ -1,26 +1,30 @@
 # Thruflux
 **Status:** Thruflux is under heavy maintenance at the moment; Things will NOT work. Please wait for next release (v0.2.0) as huge improvements are coming.
 
-Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A lightweight signaling server (`thruserv`) handles discovery and ICE negotiation, while the unified `thru` CLI lets you host or join in seconds. Data flows directly over QUIC between peers for fast, resilient transfers.
+Thruflux is a **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows**.
+
+It uses a lightweight signaling server (thruserv) for discovery and ICE negotiation, while the unified thru CLI lets you host or join transfers in seconds. Data flows directly between peers over QUIC for fast, resilient, and encrypted transfers.
 
 https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 
 ## Why Thruflux?
 
-The vision is simple: make high-performance, mass file sharing easy and accessible to everyone — at no cost. Thruflux ships with free, sane defaults out of the box:
+The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux makes high-performance, large-scale file sharing fast, simple, and freely available to everyone.
 
-- **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
+It is designed to **work out of the box.**:
+- **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
 - **STUN defaults** so most users can connect immediately without extra setup.
 - **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
 
 If you need full control or higher limits, self‑host in minutes.
 
-**Heads-up**: The hosted TURN pool is provided with fair usage policy (equally divided among others sharing it). If you need guaranteed capacity, self‑host TURN (coturn works great) — the last section shows how to wire it up.
+**Heads-up**: The hosted TURN pool is shared under a fair-use policy, with bandwidth divided among active users. TURN relaying is only used on restrictive networks when direct peer-to-peer connectivity is not possible, but during periods of high usage it may reduce throughput. If you need guaranteed capacity, self-host a TURN server (coturn works great); the final section shows how to set it up.
 
 ## Key features ✅
 
 - **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
 - **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
+- **First-class multi-file and directory transfers** — this is what thruflux is built for, fully leveraging QUIC’s parallel streams for sustained high throughput.
 - **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
 - **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
 - **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
