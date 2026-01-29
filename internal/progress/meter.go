@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -75,7 +76,9 @@ func (m *Meter) Add(n int) {
 		if m.rateBps == 0 {
 			m.rateBps = inst
 		} else {
-			m.rateBps = m.alpha*inst + (1-m.alpha)*m.rateBps
+			const tauSeconds = 5.0
+			alpha := 1 - math.Exp(-deltaTime/tauSeconds)
+			m.rateBps = alpha*inst + (1-alpha)*m.rateBps
 		}
 		m.lastAt = now
 		m.lastDone = m.done
