@@ -1127,6 +1127,7 @@ type receiverProgress struct {
 	pendingVerify    map[string]int64
 	verifyingActive  bool
 	resumedFiles     int
+	planned          map[string]resumeSkip
 	connCount        int
 	totalBytes       int64
 	snapshotID       string
@@ -1157,6 +1158,7 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		skipOffset:       make(map[string]int64),
 		pendingSkipBytes: make(map[string]int64),
 		pendingVerify:    make(map[string]int64),
+		planned:          make(map[string]resumeSkip),
 		verifyingActive:  false,
 		resumedFiles:     0,
 		fileTotal:        fileTotal,
@@ -1313,6 +1315,7 @@ func (p *receiverProgress) ApplyPlannedSkip(relpath string, plannedSkipped, tota
 		p.mu.Unlock()
 		return
 	}
+	p.planned[relpath] = resumeSkip{skippedChunks: plannedSkipped, totalChunks: totalChunks, chunkSize: chunkSize}
 	if totalBytes > 0 {
 		p.totals[relpath] = totalBytes
 		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: plannedSkipped, totalChunks: totalChunks, chunkSize: chunkSize})
@@ -1428,6 +1431,14 @@ func (p *receiverProgress) View() progress.ReceiverView {
 	resumedFiles := p.resumedFiles
 	connCount := p.connCount
 	startupLine := p.startupLine
+	plannedSkip := uint32(0)
+	plannedTotal := uint32(0)
+	if current != "" {
+		if planned, ok := p.planned[current]; ok {
+			plannedSkip = planned.skippedChunks
+			plannedTotal = planned.totalChunks
+		}
+	}
 	probes := make(map[string]string)
 	for k, v := range p.probes {
 		probes[k] = v.String()
@@ -1447,6 +1458,8 @@ func (p *receiverProgress) View() progress.ReceiverView {
 		CurrentFile:    current,
 		FileDone:       done,
 		FileTotal:      total,
+		PlannedSkipped: plannedSkip,
+		PlannedTotal:   plannedTotal,
 		Route:          route,
 		Probes:         probes,
 		ConnCount:      connCount,
