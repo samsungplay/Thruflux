@@ -5,29 +5,30 @@ Thruflux is a high‑throughput, low‑latency P2P file transfer toolkit. A ligh
 
 https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 
-## Why Thruflux ✨
+## Why Thruflux?
 
-The vision is simple: make high‑performance, mass file sharing easy and accessible to everyone — at no cost. Thruflux ships with free defaults out of the box:
+The vision is simple: make high-performance, mass file sharing easy and accessible to everyone — at no cost. Thruflux ships with free, sane defaults out of the box:
 
-- **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use).
+- **Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
 - **STUN defaults** so most users can connect immediately without extra setup.
-- **Default TURN relays** for tougher networks (shared ~900 Mbps right now, expandable as usage grows).
+- **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
 
 If you need full control or higher limits, self‑host in minutes.
 
-**Heads-up**: The hosted TURN pool is shared and rate‑limited. If you need guaranteed capacity, self‑host TURN (coturn works great) — the last section shows how to wire it up.
+**Heads-up**: The hosted TURN pool is provided with fair usage policy (equally divided among others sharing it). If you need guaranteed capacity, self‑host TURN (coturn works great) — the last section shows how to wire it up.
 
 ## Key features ✅
 
-- **Aggressive UDP hole‑punching** to maximize direct connections across tough NATs.
-- **Direct QUIC transfers** for high throughput, low latency, and strong encryption.
-- **Transport-bound authentication** tied to the join code and QUIC session to resist Man-in-the-Middle attack.
-- **Multi‑receiver sessions** so one host can share with many peers at once.
-- **Resumable transfers** with last‑chunk verification for safety.
-- **Unified CLI**: `thru host` and `thru join` live in one binary.
-- **Flexible networking**: bring your own STUN/TURN, tune QUIC, and set concurrency.
-- **TURN fallback + TURNS**: relay when direct fails, with optional TLS for TURN control.
-- **Operational guardrails**: server rate‑limits and idle timeouts baked in.
+- **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
+- **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
+- **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
+- **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
+- **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
+- **Clean, intuitive CLI**: `thru host` and `thru join` — nothing extra, nothing confusing, all bundled with sane defaults.
+- **Power-user flexibility**: bring your own STUN/TURN, fine-tune QUIC parameters, and customize dozens of advanced options.
+- **Automatic TURN/TURNS fallback**, ensuring reliable connectivity across restrictive networks for a true “just works” experience.
+- **Fully self-hostable**, giving you complete control, guaranteed capacity, and private deployments when you need them.
+
 
 ## Quickstart 🚀
 
@@ -64,13 +65,13 @@ Multiple receivers can join the same code concurrently (subject to `--max-receiv
 1. **Prerequisites** – install Go (1.22+ recommended) for your platform and ensure `GOPATH/bin` is on your `PATH`.
 2. **Clone and bootstrap**
    ```bash
-   git clone <repo>
-   cd thruflux
-   go mod download
+   git clone https://github.com/samsungplay/Thruflux.git
+   cd Thruflux
+   go mod download && go mod tidy
    ```
 3. **Build the binaries**
    ```bash
-   go build ./cmd/thru ./cmd/thruserv
+   go -o /your/output/directory build ./cmd/thru ./cmd/thruserv
    ```
    On Windows the outputs will be `thru.exe` and `thruserv.exe`; on Unix-like systems they are `thru` and `thruserv`.
 4. **(Optional) Install globally**
