@@ -33,19 +33,17 @@ This section will be **updated over time** as the implementation evolves.
 
 ### Summary
 
-| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Multi-file support | Multi-receiver support | 1 GiB single file | 1000 × 1 MiB files |
+| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Multi-file support | Multi-receiver support | 1 GiB single file (min / median / max) | 1000 × 1 MiB files (min / median / max) |
 |---|---|---|---|---|---|---|---|---|
-| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ✅ | ~26 s | ~35 s |
-| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ✅ | ~83 s | ~95 s |
-| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ❌ | ~61 s | ~11 min |
-| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ❌ | ~29 s | ~40–90 s* |
-| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ❌ | ~16 s† | ~2–3 min† |
-| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ❌ | ~28 s | ~15 s |
+| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ✅ | ~23 s / ~26 s / ~33 s | ~25 s / ~35 s / ~37 s |
+| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ✅ | ~81 s / ~83 s / ~89 s | ~84 s / ~95 s / ~101 s |
+| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ❌ | ~59 s / ~61 s / ~83 s | ~10.7 min / ~11.3 min / ~11.8 min |
+| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ❌ | ~26 s / ~29 s / ~38 s | ~41 s / ~75 s / ~94 s* |
+| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ❌ | ~13 s / ~16 s / ~36 s† | ~54 s / ~2.5 min / ~3.5 min† |
+| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ❌ | ~16 s / ~28 s / ~34 s | ~14 s / ~15 s / ~21 s |
 
-\* magic-wormhole bundles directories into a ZIP archive and automatically decompresses on receive.  
-The multi-file timing reflects **bundled transfer + unzip overhead**, not native file streaming.
-
-† scp exhibits **very high run-to-run variance** due to its single TCP stream; values shown are typical medians, not best-case peaks.
+\* magic-wormhole bundles directories into a ZIP archive and automatically decompresses on receive; multi-file timings reflect bundled transfer + unzip overhead, not native file streaming.  
+† scp exhibits very high run-to-run variance due to its single TCP stream; values shown are typical ranges rather than best-case peaks.
 
 ---
 
