@@ -20,7 +20,7 @@ func computeParallelBudget(fileCount, requestedStreams, connections int, allowSt
 		totalStreams = fileCount
 	}
 	if connections > 1 && totalStreams > 1 {
-		maxTotal := connections * 4
+		maxTotal := connections * 32
 		if maxTotal < 2 {
 			maxTotal = 2
 		}
