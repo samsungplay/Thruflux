@@ -695,16 +695,29 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		return err
 	}
 
-	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(parallelStreams)}); err != nil {
-		return err
-	}
-	dataStreams := make([]Stream, parallelStreams)
+	// Open data streams before announcing the count, and apply a timeout per stream open.
+	//
+	// Without this, a single stalled connection/stream-open can deadlock the sender before
+	// any file data begins, while the receiver waits forever for the promised streams.
+	const dataStreamOpenTimeout = 10 * time.Second
+	dataStreams := make([]Stream, 0, parallelStreams)
 	for i := 0; i < parallelStreams; i++ {
-		stream, err := conn.OpenStream(ctx)
+		openCtx, cancel := context.WithTimeout(ctx, dataStreamOpenTimeout)
+		stream, err := conn.OpenStream(openCtx)
+		cancel()
 		if err != nil {
-			return fmt.Errorf("failed to open data stream: %w", err)
+			for _, s := range dataStreams {
+				_ = s.Close()
+			}
+			return fmt.Errorf("failed to open data stream %d/%d: %w", i+1, parallelStreams, err)
 		}
-		dataStreams[i] = stream
+		dataStreams = append(dataStreams, stream)
+	}
+	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(len(dataStreams))}); err != nil {
+		for _, s := range dataStreams {
+			_ = s.Close()
+		}
+		return err
 	}
 
 	doneRegistry := newFileDoneRegistry()
