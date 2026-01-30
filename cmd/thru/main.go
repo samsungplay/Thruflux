@@ -114,17 +114,17 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(termio.Stderr(), "usage: thru <command> [args]")
-	fmt.Fprintln(termio.Stderr(), "commands:")
-	fmt.Fprintln(termio.Stderr(), "  host some files for others to download")
-	fmt.Fprintln(termio.Stderr(), "  join a session and download files")
-	fmt.Fprintln(termio.Stderr(), "quick examples:")
-	fmt.Fprintln(termio.Stderr(), "  thru host <path>")
-	fmt.Fprintln(termio.Stderr(), "  thru host <path1> <path2> <path3>...")
-	fmt.Fprintln(termio.Stderr(), "  thru join <join-code> --out ./downloads")
-	fmt.Fprintln(termio.Stderr(), "to learn detailed usage:")
-	fmt.Fprintln(termio.Stderr(), "  thru host --help")
-	fmt.Fprintln(termio.Stderr(), "  thru join --help")
+	fmt.Fprintln(termio.StderrFile(), "usage: thru <command> [args]")
+	fmt.Fprintln(termio.StderrFile(), "commands:")
+	fmt.Fprintln(termio.StderrFile(), "  host some files for others to download")
+	fmt.Fprintln(termio.StderrFile(), "  join a session and download files")
+	fmt.Fprintln(termio.StderrFile(), "quick examples:")
+	fmt.Fprintln(termio.StderrFile(), "  thru host <path>")
+	fmt.Fprintln(termio.StderrFile(), "  thru host <path1> <path2> <path3>...")
+	fmt.Fprintln(termio.StderrFile(), "  thru join <join-code> --out ./downloads")
+	fmt.Fprintln(termio.StderrFile(), "to learn detailed usage:")
+	fmt.Fprintln(termio.StderrFile(), "  thru host --help")
+	fmt.Fprintln(termio.StderrFile(), "  thru join --help")
 }
 
 func hasHelpFlag(args []string) bool {
@@ -182,7 +182,7 @@ func printShareSummary(paths []string) {
 }
 
 func printBanner() {
-	fmt.Fprint(termio.Stdout(), banner)
+	fmt.Fprint(termio.StdoutFile(), banner)
 }
 
 func isTTY(f *os.File) bool {
