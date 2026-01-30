@@ -39,7 +39,7 @@ func main() {
 		return
 	}
 	if hasVersionFlag(os.Args[1:]) {
-		fmt.Fprintln(termio.StdoutFile(), serverVersion)
+		fmt.Fprintln(os.Stdout, serverVersion)
 		return
 	}
 	cfg := config.ParseServerConfig()
@@ -613,24 +613,24 @@ func sendError(w http.ResponseWriter, code int, message string) {
 }
 
 func printServerUsage() {
-	fmt.Fprintln(termio.StderrFile(), "usage: thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N]")
-	fmt.Fprintln(termio.StderrFile(), "  --port N                     server port (default 8080)")
-	fmt.Fprintln(termio.StderrFile(), "  --max-sessions N             max concurrent sessions (default 1000)")
-	fmt.Fprintln(termio.StderrFile(), "  --max-receivers-per-sender N max receivers per sender (default 10)")
-	fmt.Fprintln(termio.StderrFile(), "  --max-message-bytes N        max websocket message size (default 65536)")
-	fmt.Fprintln(termio.StderrFile(), "  --ws-connects-per-min N      max websocket connects per minute per IP (default 30)")
-	fmt.Fprintln(termio.StderrFile(), "  --ws-connects-burst N        burst websocket connects per IP (default 10)")
-	fmt.Fprintln(termio.StderrFile(), "  --ws-msgs-per-sec N          max websocket messages per second per connection (default 50)")
-	fmt.Fprintln(termio.StderrFile(), "  --ws-msgs-burst N            burst websocket messages per connection (default 100)")
-	fmt.Fprintln(termio.StderrFile(), "  --session-creates-per-min N  max session creates per minute per IP (default 10)")
-	fmt.Fprintln(termio.StderrFile(), "  --session-creates-burst N    burst session creates per minute per IP (default 5)")
-	fmt.Fprintln(termio.StderrFile(), "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
-	fmt.Fprintln(termio.StderrFile(), "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
-	fmt.Fprintln(termio.StderrFile(), "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
-	fmt.Fprintln(termio.StderrFile(), "  --turn-server URLS           TURN server URLs (repeatable, comma-separated)")
-	fmt.Fprintln(termio.StderrFile(), "                              example: --turn-server turns:stun.bytepipe.app:5349?servername=stun.bytepipe.app")
-	fmt.Fprintln(termio.StderrFile(), "  --turn-static-auth-secret S  TURN REST static auth secret (coturn use-auth-secret)")
-	fmt.Fprintln(termio.StderrFile(), "  --turn-cred-ttl DURATION      TURN credential TTL (default 1h)")
+	fmt.Fprintln(os.Stderr, "usage: thruserv [--port N] [--max-sessions N] [--max-receivers-per-sender N]")
+	fmt.Fprintln(os.Stderr, "  --port N                     server port (default 8080)")
+	fmt.Fprintln(os.Stderr, "  --max-sessions N             max concurrent sessions (default 1000)")
+	fmt.Fprintln(os.Stderr, "  --max-receivers-per-sender N max receivers per sender (default 10)")
+	fmt.Fprintln(os.Stderr, "  --max-message-bytes N        max websocket message size (default 65536)")
+	fmt.Fprintln(os.Stderr, "  --ws-connects-per-min N      max websocket connects per minute per IP (default 30)")
+	fmt.Fprintln(os.Stderr, "  --ws-connects-burst N        burst websocket connects per IP (default 10)")
+	fmt.Fprintln(os.Stderr, "  --ws-msgs-per-sec N          max websocket messages per second per connection (default 50)")
+	fmt.Fprintln(os.Stderr, "  --ws-msgs-burst N            burst websocket messages per connection (default 100)")
+	fmt.Fprintln(os.Stderr, "  --session-creates-per-min N  max session creates per minute per IP (default 10)")
+	fmt.Fprintln(os.Stderr, "  --session-creates-burst N    burst session creates per minute per IP (default 5)")
+	fmt.Fprintln(os.Stderr, "  --max-ws-connections N       max concurrent websocket connections (default 2000)")
+	fmt.Fprintln(os.Stderr, "  --ws-idle-timeout DURATION   websocket idle timeout (default 10m)")
+	fmt.Fprintln(os.Stderr, "  --session-timeout DURATION   max session lifetime (default 24h, 0 disables)")
+	fmt.Fprintln(os.Stderr, "  --turn-server URLS           TURN server URLs (repeatable, comma-separated)")
+	fmt.Fprintln(os.Stderr, "                              example: --turn-server turns:stun.bytepipe.app:5349?servername=stun.bytepipe.app")
+	fmt.Fprintln(os.Stderr, "  --turn-static-auth-secret S  TURN REST static auth secret (coturn use-auth-secret)")
+	fmt.Fprintln(os.Stderr, "  --turn-cred-ttl DURATION      TURN credential TTL (default 1h)")
 }
 
 func hasHelpFlag(args []string) bool {
