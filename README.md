@@ -12,6 +12,10 @@ https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 The table below is **not meant to be a hard proof or a definitive ranking**.  
 Its goal is to give a **rough, practical picture** of how thruflux compares to commonly used tools under realistic conditions.
 
+These results are **not intended to deride or diminish any of the tools listed**.  
+Each exists for good reasons, and more high-quality tools ultimately make the ecosystem better.  
+The goal here is simply to provide a **big-picture reference** so users can understand where thruflux fits.
+
 Performance depends heavily on network paths, routing, congestion, and system load.  
 Numbers shown are **median wall-clock times (5 runs)** on direct VPS-to-VPS transfers unless otherwise noted.
 
