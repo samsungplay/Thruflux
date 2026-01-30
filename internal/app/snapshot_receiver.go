@@ -689,7 +689,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	var snapshotMu sync.Mutex
 	snapshotTotal := 0
-	snapshotDone := 0
 
 	opts := transfer.Options{
 		Resume:        r.resumeEnabled,
@@ -742,7 +741,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		OnResumeSnapshotStart: func(total int) {
 			snapshotMu.Lock()
 			snapshotTotal = total
-			snapshotDone = 0
 			snapshotMu.Unlock()
 			if total > 0 {
 				sendTransferStatus(ReceiverStatusPreparing)
@@ -752,7 +750,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		OnResumeSnapshotProgress: func(done, total int) {
 			snapshotMu.Lock()
 			snapshotTotal = total
-			snapshotDone = done
 			snapshotMu.Unlock()
 			if total > 0 {
 				progressState.SetHeaderLine(fmt.Sprintf("Preparing resume snapshot (%d/%d)...", done, total))
