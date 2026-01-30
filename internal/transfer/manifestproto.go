@@ -1192,40 +1192,27 @@ func readRelPath(s Stream) (string, error) {
 }
 
 // validateRelPath ensures the relative path is safe:
-// - Must not contain ".." segments
+// - Must not contain "." or ".." path segments
 // - Must not be an absolute path
+// - Must not contain backslashes
 // - Must not exceed max length
 func validateRelPath(relPath string) error {
 	if len(relPath) > maxRelPathLength {
 		return ErrRelPathTooLong
 	}
-
-	// Check for path traversal attempts
-	if strings.Contains(relPath, "..") {
-		return ErrInvalidRelPath
-	}
-
-	// Check for absolute paths (on Unix, starts with /; on Windows, check for drive letters)
-	if filepath.IsAbs(relPath) {
-		return ErrInvalidRelPath
-	}
-
-	// Check for empty path
 	if relPath == "" {
 		return ErrInvalidRelPath
 	}
-
-	// Additional check: ensure no path separators that could be used for traversal
-	// We allow forward slashes (normalized from manifest) but check for backslashes
-	// that might be used for traversal on Windows
 	if strings.Contains(relPath, "\\") {
-		// Check if it's just a backslash (which would be invalid)
-		// or if it contains .. with backslashes
-		normalized := filepath.ToSlash(relPath)
-		if strings.Contains(normalized, "..") {
+		return ErrInvalidRelPath
+	}
+	if filepath.IsAbs(relPath) {
+		return ErrInvalidRelPath
+	}
+	for _, part := range strings.Split(relPath, "/") {
+		if part == "" || part == "." || part == ".." {
 			return ErrInvalidRelPath
 		}
 	}
-
 	return nil
 }
