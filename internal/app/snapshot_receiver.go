@@ -1098,9 +1098,11 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 	if total > 0 {
 		p.totals[relpath] = total
 	}
-	if capTotal > 0 && effective >= capTotal && !p.doneByBytes[relpath] {
-		p.doneByBytes[relpath] = true
-		p.doneByBytesCount++
+	if capTotal > 0 && effective >= capTotal && p.pendingVerify[relpath] == 0 {
+		if !p.doneByBytes[relpath] {
+			p.doneByBytes[relpath] = true
+			p.doneByBytesCount++
+		}
 	}
 	if skip, ok := p.pendingSkip[relpath]; ok && !p.appliedSkip[relpath] {
 		p.applySkipLocked(relpath, p.totals[relpath], skip)
@@ -1111,7 +1113,7 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 
 func (p *receiverProgress) UpdateStats(active, completed int) {
 	p.mu.Lock()
-	if p.fileTotal > 0 && completed >= p.fileTotal && p.doneByBytesCount > 0 && p.doneByBytesCount < completed {
+	if p.doneByBytesCount > 0 && p.doneByBytesCount < completed {
 		completed = p.doneByBytesCount
 	}
 	if p.fileTotal > 0 && completed > p.fileTotal {
@@ -1215,7 +1217,7 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 	if totalBytes > 0 {
 		p.totals[relpath] = totalBytes
 		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize})
-		if skippedChunks >= totalChunks && !p.doneByBytes[relpath] {
+		if skippedChunks >= totalChunks && p.pendingVerify[relpath] == 0 && !p.doneByBytes[relpath] {
 			p.doneByBytes[relpath] = true
 			p.doneByBytesCount++
 		}
@@ -1263,6 +1265,12 @@ func (p *receiverProgress) applySkipLocked(relpath string, totalBytes int64, ski
 	if verifyBytes > 0 {
 		p.pendingVerify[relpath] = verifyBytes
 		p.meter.AddTotal(verifyBytes)
+		if p.doneByBytes[relpath] {
+			p.doneByBytes[relpath] = false
+			if p.doneByBytesCount > 0 {
+				p.doneByBytesCount--
+			}
+		}
 	}
 	if skippedBytes > 0 || verifyBytes > 0 {
 		p.appliedSkip[relpath] = true
@@ -1290,6 +1298,16 @@ func (p *receiverProgress) MarkVerified(relpath string, ok bool) {
 	if pending, ok := p.pendingVerify[relpath]; ok && pending > 0 {
 		p.addSkippedLocked(pending)
 		delete(p.pendingVerify, relpath)
+	}
+	if !p.doneByBytes[relpath] {
+		total := p.totals[relpath]
+		if total == 0 && p.pendingVerify[relpath] == 0 {
+			p.doneByBytes[relpath] = true
+			p.doneByBytesCount++
+		} else if total > 0 && p.perFile[relpath] >= total && p.pendingVerify[relpath] == 0 {
+			p.doneByBytes[relpath] = true
+			p.doneByBytesCount++
+		}
 	}
 	if !p.verified[relpath] && p.verifySeen[relpath] {
 		p.verified[relpath] = true
