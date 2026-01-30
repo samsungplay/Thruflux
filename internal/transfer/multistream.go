@@ -3167,6 +3167,26 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		default:
 		}
 	}
+	waitForCompletion := func() bool {
+		if allFilesCompleted(&statsMu, &completedCount, totalFiles) {
+			return true
+		}
+		if totalFiles == 0 {
+			return true
+		}
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case <-doneCh:
+				return true
+			case <-recvCtx.Done():
+				return allFilesCompleted(&statsMu, &completedCount, totalFiles)
+			case <-timer.C:
+				return allFilesCompleted(&statsMu, &completedCount, totalFiles)
+			}
+		}
+	}
 
 	handleDataStream := func(s Stream) {
 		defer s.Close()
@@ -3270,7 +3290,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				if errors.Is(err, context.Canceled) {
 					return
 				}
-				if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, totalFiles) {
+				if isGracefulRemoteClose(err) {
+					reportDataErr(err)
 					return
 				}
 				setRecvErr(err)
@@ -3295,7 +3316,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			}
 		case err := <-controlErr:
 			if err != nil && !errors.Is(err, io.EOF) {
-				if isGracefulRemoteClose(err) && completedCount >= totalFiles {
+				if isGracefulRemoteClose(err) && waitForCompletion() {
 					return m, nil
 				}
 				return m, err
@@ -3306,7 +3327,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			return m, err
 		case err := <-dataErrCh:
 			if err != nil {
-				if isGracefulRemoteClose(err) && completedCount >= totalFiles {
+				if isGracefulRemoteClose(err) && waitForCompletion() {
 					return m, nil
 				}
 				setRecvErr(err)

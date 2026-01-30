@@ -134,7 +134,7 @@ thru host <paths...> [flags]
 | `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `256`).                                                                                    |
 | `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
 | `--total-connections`                                     | Total QUIC connections (default `4`).                                                                                         |
-| `--total-streams`                                         | Total concurrent transfer streams (default `12`, `1..32`).                                                                     |
+| `--total-streams`                                         | Total concurrent transfer streams (default `64`, `1..128`).                                                                    |
 | `--udp-read-buffer-bytes`                                 | UDP read buffer size (default `8388608`).                                                                                      |
 | `--udp-write-buffer-bytes`                                | UDP write buffer size (default `8388608`).                                                                                     |
 | `--benchmark`                                             | Print throughput stats.                                                                                                       |

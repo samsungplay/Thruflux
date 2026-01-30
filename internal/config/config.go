@@ -130,7 +130,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		SessionOnly:      false,
 		Paths:            []string{"."},
 		MultiStream:      true,
-		ParallelFiles:    8,
+		ParallelFiles:    64,
 		SmallThreshold:   4 * 1024 * 1024,
 		MediumThreshold:  64 * 1024 * 1024,
 		SmallSlotFrac:    0.25,
