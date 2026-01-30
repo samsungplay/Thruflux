@@ -81,8 +81,8 @@ func defaultReadWorkers() int {
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > 4 {
-		workers = 4
+	if workers > 16 {
+		workers = 16
 	}
 	return workers
 }
@@ -104,12 +104,12 @@ func newReadPool(workers int) *readPool {
 }
 
 func defaultWriteWorkers() int {
-	workers := runtime.GOMAXPROCS(0) * 2
-	if workers < 2 {
-		workers = 2
+	workers := runtime.GOMAXPROCS(0) * 4
+	if workers < 4 {
+		workers = 4
 	}
-	if workers > 32 {
-		workers = 32
+	if workers > 128 {
+		workers = 128
 	}
 	return workers
 }
