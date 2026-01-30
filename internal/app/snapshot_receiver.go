@@ -1018,6 +1018,8 @@ type receiverProgress struct {
 	finalized        bool
 	headerLines      []string
 	resumedFiles     int
+	doneByBytes      map[string]bool
+	doneByBytesCount int
 	connCount        int
 	totalBytes       int64
 	snapshotID       string
@@ -1050,6 +1052,7 @@ func newReceiverProgress(totalBytes int64, fileTotal int, snapshotID string, out
 		pendingVerify:    make(map[string]int64),
 		verifyingActive:  false,
 		resumedFiles:     0,
+		doneByBytes:      make(map[string]bool),
 		fileTotal:        fileTotal,
 		totalBytes:       totalBytes,
 		snapshotID:       snapshotID,
@@ -1095,6 +1098,10 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 	if total > 0 {
 		p.totals[relpath] = total
 	}
+	if capTotal > 0 && effective >= capTotal && !p.doneByBytes[relpath] {
+		p.doneByBytes[relpath] = true
+		p.doneByBytesCount++
+	}
 	if skip, ok := p.pendingSkip[relpath]; ok && !p.appliedSkip[relpath] {
 		p.applySkipLocked(relpath, p.totals[relpath], skip)
 		delete(p.pendingSkip, relpath)
@@ -1104,6 +1111,9 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 
 func (p *receiverProgress) UpdateStats(active, completed int) {
 	p.mu.Lock()
+	if p.fileTotal > 0 && completed >= p.fileTotal && p.doneByBytesCount > 0 && p.doneByBytesCount < completed {
+		completed = p.doneByBytesCount
+	}
 	if p.fileTotal > 0 && completed > p.fileTotal {
 		completed = p.fileTotal
 	}
@@ -1205,6 +1215,10 @@ func (p *receiverProgress) RecordResume(relpath string, skippedChunks, totalChun
 	if totalBytes > 0 {
 		p.totals[relpath] = totalBytes
 		p.applySkipLocked(relpath, totalBytes, resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize})
+		if skippedChunks >= totalChunks && !p.doneByBytes[relpath] {
+			p.doneByBytes[relpath] = true
+			p.doneByBytesCount++
+		}
 	} else {
 		p.pendingSkip[relpath] = resumeSkip{skippedChunks: skippedChunks, totalChunks: totalChunks, chunkSize: chunkSize}
 	}
