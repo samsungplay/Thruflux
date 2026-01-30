@@ -782,14 +782,35 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 		recvConn = multi
 	}
 
+	isTransferComplete := func(view progress.ReceiverView) bool {
+		if r.fileTotal > 0 && view.FileDone >= r.fileTotal {
+			return true
+		}
+		if r.totalBytes > 0 && view.Stats.BytesDone >= r.totalBytes {
+			return true
+		}
+		return r.fileTotal == 0 && r.totalBytes == 0
+	}
+	waitForCompletion := func() bool {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			progressCollector.Flush(func(relpath string, bytesReceived int64, total int64) {
+				progressState.Update(relpath, bytesReceived, total)
+			})
+			view := progressState.View()
+			if isTransferComplete(view) {
+				return true
+			}
+			if time.Now().After(deadline) {
+				return isTransferComplete(view)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
 	if _, err := transfer.RecvManifestMultiStream(recvCtx, recvConn, r.outDir, opts); err != nil {
 		view := progressState.View()
-		stats := view.Stats
-		if isGracefulRemoteCloseError(err) &&
-			view.FileTotal > 0 &&
-			view.FileDone >= view.FileTotal &&
-			stats.Total > 0 &&
-			stats.BytesDone >= stats.Total {
+		if isGracefulRemoteCloseError(err) && waitForCompletion() {
 			if r.benchmark {
 				progressState.FreezeBench(time.Now())
 				r.printReceiverBenchSummary(progressState)
