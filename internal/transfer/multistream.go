@@ -327,6 +327,13 @@ const (
 	dataFlagEnd        = 1 << 0
 )
 
+type recvChunkData struct {
+	index uint32
+	n     int
+	buf   []byte
+	pool  *bufpool.Pool
+}
+
 type sendFileState struct {
 	key         uint64
 	item        manifest.FileItem
@@ -468,13 +475,17 @@ type recvFileStateMux struct {
 	resumeInfo  *FileResumeInfo
 	fileCache   *fileCache
 	baseBytes   int64
+	writerOnce  sync.Once
+	writerClose sync.Once
+	writerCh    chan recvChunkData
 
-	mu          sync.Mutex
-	file        *os.File
-	remaining   uint32
-	endReceived bool
-	done        bool
-	bytesRecv   int64
+	mu           sync.Mutex
+	file         *os.File
+	remaining    uint32
+	endReceived  bool
+	done         bool
+	bytesRecv    int64
+	bytesWritten int64
 }
 
 func (s *recvFileStateMux) openFile() (*os.File, error) {
@@ -510,6 +521,20 @@ func (s *recvFileStateMux) closeFile() {
 		}
 		s.file = nil
 	}
+}
+
+func (s *recvFileStateMux) endReceivedNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.endReceived
+}
+
+func (s *recvFileStateMux) closeWriter() {
+	s.writerClose.Do(func() {
+		if s.writerCh != nil {
+			close(s.writerCh)
+		}
+	})
 }
 
 type fileCache struct {
@@ -2500,6 +2525,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if dataStreams < 1 {
 		dataStreams = 1
 	}
+	writerQueueCap := dataStreams * 4
+	if writerQueueCap < 32 {
+		writerQueueCap = 32
+	}
+	if writerQueueCap > 512 {
+		writerQueueCap = 512
+	}
 	maxOpenFiles := dataStreams * 4
 	if maxOpenFiles < 32 {
 		maxOpenFiles = 32
@@ -2684,7 +2716,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 
 		if ok {
-			writtenBytes := state.baseBytes + atomic.LoadInt64(&state.bytesRecv)
+			writtenBytes := state.baseBytes + atomic.LoadInt64(&state.bytesWritten)
 			if writtenBytes != state.item.Size {
 				ok = false
 				if errMsg == "" {
@@ -2706,6 +2738,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		case <-recvCtx.Done():
 		}
 
+		state.closeWriter()
 		state.closeFile()
 
 		stateMu.Lock()
@@ -3014,6 +3047,126 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return state, nil
 	}
 
+	dataErrCh := make(chan error, dataStreams)
+	reportDataErr := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case dataErrCh <- err:
+		default:
+		}
+	}
+
+	startWriter := func(state *recvFileStateMux) {
+		state.writerOnce.Do(func() {
+			state.writerCh = make(chan recvChunkData, writerQueueCap)
+			go func() {
+				var completedBitmap *Bitmap
+				if state.sidecar != nil && state.totalChunks > 0 {
+					if snapshot := state.sidecar.MarshalBitmap(); len(snapshot) > 0 {
+						if bm, err := BitmapFromBytes(snapshot, int(state.totalChunks)); err == nil {
+							completedBitmap = bm
+						}
+					}
+				}
+				nextIndex := uint32(0)
+				pending := make(map[uint32]recvChunkData)
+				drain := func() {
+					for _, c := range pending {
+						if c.pool != nil {
+							c.pool.Put(c.buf)
+						}
+					}
+					pending = nil
+					for {
+						select {
+						case c, ok := <-state.writerCh:
+							if !ok {
+								return
+							}
+							if c.pool != nil {
+								c.pool.Put(c.buf)
+							}
+						default:
+							return
+						}
+					}
+				}
+				flush := func() bool {
+					for {
+						chunk, ok := pending[nextIndex]
+						if !ok {
+							if completedBitmap != nil && nextIndex < state.totalChunks && completedBitmap.Get(int(nextIndex)) {
+								nextIndex++
+								continue
+							}
+							return true
+						}
+						delete(pending, nextIndex)
+						f, err := state.openFile()
+						if err != nil {
+							if chunk.pool != nil {
+								chunk.pool.Put(chunk.buf)
+							}
+							finalErr := fmt.Errorf("failed to open file %s: %w", state.item.RelPath, err)
+							setRecvErr(finalErr)
+							reportDataErr(finalErr)
+							finalizeFile(state, false, finalErr.Error())
+							drain()
+							return false
+						}
+						offset := int64(nextIndex) * int64(state.chunkSize)
+						if err := writeAtWithTimeout(recvCtx, f, chunk.buf[:chunk.n], offset, state.item.RelPath); err != nil {
+							if chunk.pool != nil {
+								chunk.pool.Put(chunk.buf)
+							}
+							setRecvErr(err)
+							reportDataErr(err)
+							finalizeFile(state, false, err.Error())
+							drain()
+							return false
+						}
+						if chunk.pool != nil {
+							chunk.pool.Put(chunk.buf)
+						}
+						if completedBitmap != nil {
+							completedBitmap.Set(int(nextIndex))
+						}
+						done, added := state.markChunkComplete(nextIndex, uint32(chunk.n))
+						if added > 0 {
+							atomic.AddInt64(&state.bytesWritten, added)
+							if opts.ProgressFn != nil {
+								newTotal := atomic.AddInt64(&state.bytesRecv, added)
+								opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
+							}
+						}
+						if done && state.endReceivedNow() {
+							finalizeFile(state, true, "")
+						}
+						nextIndex++
+					}
+				}
+				for {
+					select {
+					case <-recvCtx.Done():
+						drain()
+						return
+					case chunk, ok := <-state.writerCh:
+						if !ok {
+							drain()
+							return
+						}
+						pending[chunk.index] = chunk
+					}
+					if !flush() {
+						return
+					}
+				}
+			}()
+		})
+	}
+
 	getOrCreateState := func(key uint64, chunkSize uint32, hashAlg byte) (*recvFileStateMux, error) {
 		stateMu.Lock()
 		state := stateByKey[key]
@@ -3050,6 +3203,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		stateByKey[key] = newState
 		stateByRelPath[item.RelPath] = newState
 		stateMu.Unlock()
+		startWriter(newState)
 		fileReady.signal(key)
 
 		statsMu.Lock()
@@ -3182,16 +3336,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		}
 	}
 
-	dataErrCh := make(chan error, dataStreams)
-	reportDataErr := func(err error) {
-		if err == nil {
-			return
-		}
-		select {
-		case dataErrCh <- err:
-		default:
-		}
-	}
 	waitForCompletion := func() bool {
 		if allFilesCompleted(&statsMu, &completedCount, totalFiles) {
 			return true
@@ -3275,30 +3419,18 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				reportDataErr(err)
 				return
 			}
-			f, err := state.openFile()
-			if err != nil {
+			startWriter(state)
+			chunk := recvChunkData{
+				index: chunkIndex,
+				n:     int(chunkLen),
+				buf:   buf,
+				pool:  bufPool,
+			}
+			select {
+			case state.writerCh <- chunk:
+			case <-recvCtx.Done():
 				bufPool.Put(buf)
-				finalizeFile(state, false, err.Error())
-				reportDataErr(err)
 				return
-			}
-			offset := int64(chunkIndex) * int64(state.chunkSize)
-			if err := writeAtWithTimeout(recvCtx, f, buf[:chunkLen], offset, state.item.RelPath); err != nil {
-				bufPool.Put(buf)
-				finalizeFile(state, false, err.Error())
-				reportDataErr(err)
-				return
-			}
-			done, added := state.markChunkComplete(chunkIndex, chunkLen)
-			if added > 0 {
-				newTotal := atomic.AddInt64(&state.bytesRecv, added)
-				if opts.ProgressFn != nil {
-					opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
-				}
-			}
-			bufPool.Put(buf)
-			if done {
-				finalizeFile(state, true, "")
 			}
 		}
 	}
