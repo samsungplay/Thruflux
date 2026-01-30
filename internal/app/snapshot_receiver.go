@@ -645,9 +645,12 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 
 	effectiveConnections := r.parallelConnections
 	if effectiveConnections < 1 {
-		effectiveConnections = 1
-	}
-	if start.ParallelConnections > 0 && start.ParallelConnections < effectiveConnections {
+		if start.ParallelConnections > 0 {
+			effectiveConnections = start.ParallelConnections
+		} else {
+			effectiveConnections = 1
+		}
+	} else if start.ParallelConnections > 0 && start.ParallelConnections < effectiveConnections {
 		effectiveConnections = start.ParallelConnections
 	}
 
