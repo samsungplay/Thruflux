@@ -77,8 +77,8 @@ func RunSnapshotReceiver(ctx context.Context, logger *slog.Logger, cfg SnapshotR
 	if cfg.QuicMaxIncomingStreams <= 0 {
 		cfg.QuicMaxIncomingStreams = 256
 	}
-	if cfg.ParallelConnections < 1 {
-		cfg.ParallelConnections = 4
+	if cfg.ParallelConnections < 0 {
+		cfg.ParallelConnections = 0
 	}
 	absOut, err := filepath.Abs(cfg.OutDir)
 	if err != nil {
@@ -318,6 +318,9 @@ func (r *snapshotReceiver) currentTurnServers() []string {
 }
 
 func (r *snapshotReceiver) sendAccept(manifestID string) {
+	if r.parallelConnections < 0 {
+		r.parallelConnections = 0
+	}
 	accept := protocol.ManifestAccept{
 		ManifestID:          manifestID,
 		Mode:                "all",
