@@ -809,7 +809,6 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	}
 
 	if _, err := transfer.RecvManifestMultiStream(recvCtx, recvConn, r.outDir, opts); err != nil {
-		view := progressState.View()
 		if isGracefulRemoteCloseError(err) && waitForCompletion() {
 			if r.benchmark {
 				progressState.FreezeBench(time.Now())
