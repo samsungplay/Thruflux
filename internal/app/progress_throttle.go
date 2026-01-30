@@ -19,73 +19,102 @@ func shouldUpdateProgress(last *int64) bool {
 }
 
 type progressCollector struct {
-	mu     sync.Mutex
-	latest map[string]int64
-	totals map[string]int64
-	dirty  map[string]struct{}
+	slots sync.Map
+}
+
+type progressSlot struct {
+	bytes atomic.Int64
+	total atomic.Int64
+	dirty atomic.Bool
 }
 
 func newProgressCollector() *progressCollector {
-	return &progressCollector{
-		latest: make(map[string]int64),
-		totals: make(map[string]int64),
-		dirty:  make(map[string]struct{}),
-	}
+	return &progressCollector{}
 }
 
 func (c *progressCollector) Update(relpath string, bytes int64, total int64) {
 	if relpath == "" {
 		return
 	}
-	c.mu.Lock()
-	if prev, ok := c.latest[relpath]; !ok || bytes > prev {
-		c.latest[relpath] = bytes
+	slot := c.getSlot(relpath)
+	if slot == nil {
+		return
 	}
 	if total > 0 {
-		c.totals[relpath] = total
+		slot.total.Store(total)
 	}
-	c.dirty[relpath] = struct{}{}
-	c.mu.Unlock()
+	for {
+		prev := slot.bytes.Load()
+		if bytes <= prev {
+			break
+		}
+		if slot.bytes.CompareAndSwap(prev, bytes) {
+			break
+		}
+	}
+	slot.dirty.Store(true)
 }
 
 func (c *progressCollector) Add(relpath string, delta int64) {
 	if relpath == "" || delta == 0 {
 		return
 	}
-	c.mu.Lock()
-	c.latest[relpath] += delta
-	c.dirty[relpath] = struct{}{}
-	c.mu.Unlock()
+	slot := c.getSlot(relpath)
+	if slot == nil {
+		return
+	}
+	slot.bytes.Add(delta)
+	slot.dirty.Store(true)
 }
 
 func (c *progressCollector) Flush(apply func(relpath string, bytes int64, total int64)) {
-	c.mu.Lock()
-	if len(c.dirty) == 0 {
-		c.mu.Unlock()
-		return
-	}
-	keys := make([]string, 0, len(c.dirty))
-	for k := range c.dirty {
-		keys = append(keys, k)
-	}
-	c.dirty = make(map[string]struct{})
-	bytesByKey := make([]int64, len(keys))
-	totalByKey := make([]int64, len(keys))
-	for i, k := range keys {
-		bytesByKey[i] = c.latest[k]
-		totalByKey[i] = c.totals[k]
-	}
-	c.mu.Unlock()
-
-	for i, k := range keys {
-		apply(k, bytesByKey[i], totalByKey[i])
-	}
+	c.slots.Range(func(key, value any) bool {
+		relpath, ok := key.(string)
+		if !ok {
+			return true
+		}
+		slot, ok := value.(*progressSlot)
+		if !ok {
+			return true
+		}
+		if !slot.dirty.Swap(false) {
+			return true
+		}
+		apply(relpath, slot.bytes.Load(), slot.total.Load())
+		return true
+	})
 }
 
 func (c *progressCollector) Total(relpath string) int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.totals[relpath]
+	if relpath == "" {
+		return 0
+	}
+	value, ok := c.slots.Load(relpath)
+	if !ok {
+		return 0
+	}
+	slot, ok := value.(*progressSlot)
+	if !ok {
+		return 0
+	}
+	return slot.total.Load()
+}
+
+func (c *progressCollector) getSlot(relpath string) *progressSlot {
+	if relpath == "" {
+		return nil
+	}
+	if value, ok := c.slots.Load(relpath); ok {
+		if slot, ok := value.(*progressSlot); ok {
+			return slot
+		}
+	}
+	slot := &progressSlot{}
+	actual, _ := c.slots.LoadOrStore(relpath, slot)
+	if stored, ok := actual.(*progressSlot); ok {
+		return stored
+	}
+	return slot
 }
 
 func startProgressTicker(ctx context.Context, collector *progressCollector, apply func(relpath string, bytes int64, total int64)) func() {

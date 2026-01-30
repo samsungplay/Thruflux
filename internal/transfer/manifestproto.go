@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
-	"github.com/sheerbytes/sheerbytes/internal/termio"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
 )
 
@@ -51,13 +49,31 @@ type readResult struct {
 	err error
 }
 
+type writeJob struct {
+	file   *os.File
+	offset int64
+	buf    []byte
+	result chan writeResult
+}
+
+type writeResult struct {
+	written int
+	err     error
+}
+
 type readPool struct {
 	jobs chan readJob
 }
 
+type writePool struct {
+	jobs chan writeJob
+}
+
 var (
-	globalReadPool     *readPool
-	globalReadPoolOnce sync.Once
+	globalReadPool      *readPool
+	globalReadPoolOnce  sync.Once
+	globalWritePool     *writePool
+	globalWritePoolOnce sync.Once
 )
 
 func defaultReadWorkers() int {
@@ -87,11 +103,48 @@ func newReadPool(workers int) *readPool {
 	return pool
 }
 
+func defaultWriteWorkers() int {
+	workers := runtime.GOMAXPROCS(0) * 2
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	return workers
+}
+
+func newWritePool(workers int) *writePool {
+	if workers < 1 {
+		workers = 1
+	}
+	pool := &writePool{jobs: make(chan writeJob, workers*4)}
+	for i := 0; i < workers; i++ {
+		go func() {
+			for job := range pool.jobs {
+				written, err := job.file.WriteAt(job.buf, job.offset)
+				if err == nil && written != len(job.buf) {
+					err = fmt.Errorf("short write: wrote %d, expected %d", written, len(job.buf))
+				}
+				job.result <- writeResult{written: written, err: err}
+			}
+		}()
+	}
+	return pool
+}
+
 func getReadPool() *readPool {
 	globalReadPoolOnce.Do(func() {
 		globalReadPool = newReadPool(defaultReadWorkers())
 	})
 	return globalReadPool
+}
+
+func getWritePool() *writePool {
+	globalWritePoolOnce.Do(func() {
+		globalWritePool = newWritePool(defaultWriteWorkers())
+	})
+	return globalWritePool
 }
 
 func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte) (int, error) {
@@ -107,20 +160,12 @@ func readAtWithPool(ctx context.Context, file *os.File, offset int64, buf []byte
 	}
 	select {
 	case getReadPool().jobs <- job:
-	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(termio.Stderr(), "sender read queue timeout after 10m: offset=%d len=%d\n", offset, len(buf))
-		os.Exit(1)
-		return 0, fmt.Errorf("sender read queue timeout after 10m")
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
 	select {
 	case res := <-resultCh:
 		return res.n, res.err
-	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(termio.Stderr(), "sender read timeout after 10m: offset=%d len=%d\n", offset, len(buf))
-		os.Exit(1)
-		return 0, fmt.Errorf("sender read timeout after 10m")
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
@@ -149,32 +194,17 @@ func readFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath stri
 		}
 		return nil
 	}
-
-	type readResult struct {
-		n   int
-		err error
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	resultCh := make(chan readResult, 1)
-	go func() {
-		n, err := io.ReadFull(s, buf)
-		resultCh <- readResult{n: n, err: err}
-	}()
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
-		}
-		if res.n != len(buf) {
-			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
-		}
-		return nil
-	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(termio.Stderr(), "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
-		os.Exit(1)
-		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
-	case <-ctx.Done():
-		return ctx.Err()
+	n, err := io.ReadFull(s, buf)
+	if err != nil {
+		return err
 	}
+	if n != len(buf) {
+		return fmt.Errorf("short read: got %d want %d", n, len(buf))
+	}
+	return nil
 }
 
 func readFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath string, phase string, deltaFn ProgressDeltaFn) error {
@@ -208,43 +238,29 @@ func readFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath
 		_ = ds.SetReadDeadline(time.Time{})
 		return nil
 	}
-
-	type readResult struct {
-		n   int
-		err error
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	resultCh := make(chan readResult, 1)
-	go func() {
-		read := 0
-		for read < len(buf) {
-			n, err := s.Read(buf[read:])
-			if n > 0 {
-				read += n
-				deltaFn(relPath, int64(n))
-			}
-			if err != nil {
-				resultCh <- readResult{n: read, err: err}
-				return
-			}
+	read := 0
+	for read < len(buf) {
+		n, err := s.Read(buf[read:])
+		if n > 0 {
+			read += n
+			deltaFn(relPath, int64(n))
 		}
-		resultCh <- readResult{n: read, err: nil}
-	}()
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
+		if err != nil {
+			return err
 		}
-		if res.n != len(buf) {
-			return fmt.Errorf("short read: got %d want %d", res.n, len(buf))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		return nil
-	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(termio.Stderr(), "receiver read timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
-		os.Exit(1)
-		return fmt.Errorf("receiver read timeout after %s", streamIOTimeout)
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	if read != len(buf) {
+		return fmt.Errorf("short read: got %d want %d", read, len(buf))
+	}
+	return nil
 }
 
 func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath string, phase string) error {
@@ -274,32 +290,28 @@ func writeFullWithTimeout(ctx context.Context, s Stream, buf []byte, relPath str
 		_ = ds.SetWriteDeadline(time.Time{})
 		return nil
 	}
-
-	type writeResult struct {
-		n   int
-		err error
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	resultCh := make(chan writeResult, 1)
-	go func() {
-		n, err := s.Write(buf)
-		resultCh <- writeResult{n: n, err: err}
-	}()
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
+	written := 0
+	for written < len(buf) {
+		n, err := s.Write(buf[written:])
+		if n > 0 {
+			written += n
 		}
-		if res.n != len(buf) {
-			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
+		if err != nil {
+			return err
 		}
-		return nil
-	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(termio.Stderr(), "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
-		os.Exit(1)
-		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
-	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 	}
+	if written != len(buf) {
+		return fmt.Errorf("short write: wrote %d, expected %d", written, len(buf))
+	}
+	return nil
 }
 
 func writeFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPath string, phase string, deltaFn ProgressDeltaFn) error {
@@ -333,43 +345,29 @@ func writeFullWithTimeoutDelta(ctx context.Context, s Stream, buf []byte, relPat
 		_ = ds.SetWriteDeadline(time.Time{})
 		return nil
 	}
-
-	type writeResult struct {
-		n   int
-		err error
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	resultCh := make(chan writeResult, 1)
-	go func() {
-		written := 0
-		for written < len(buf) {
-			n, err := s.Write(buf[written:])
-			if n > 0 {
-				written += n
-				deltaFn(relPath, int64(n))
-			}
-			if err != nil {
-				resultCh <- writeResult{n: written, err: err}
-				return
-			}
+	written := 0
+	for written < len(buf) {
+		n, err := s.Write(buf[written:])
+		if n > 0 {
+			written += n
+			deltaFn(relPath, int64(n))
 		}
-		resultCh <- writeResult{n: written, err: nil}
-	}()
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
+		if err != nil {
+			return err
 		}
-		if res.n != len(buf) {
-			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		return nil
-	case <-time.After(streamIOTimeout):
-		fmt.Fprintf(termio.Stderr(), "sender write timeout after %s: file=%s phase=%s\n", streamIOTimeout, relPath, phase)
-		os.Exit(1)
-		return fmt.Errorf("sender write timeout after %s", streamIOTimeout)
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	if written != len(buf) {
+		return fmt.Errorf("short write: wrote %d, expected %d", written, len(buf))
+	}
+	return nil
 }
 
 func writeUint32WithTimeout(ctx context.Context, s Stream, value uint32, relPath string, phase string) error {
@@ -379,28 +377,24 @@ func writeUint32WithTimeout(ctx context.Context, s Stream, value uint32, relPath
 }
 
 func writeAtWithTimeout(ctx context.Context, f *os.File, buf []byte, offset int64, relPath string) error {
-	type writeResult struct {
-		n   int
-		err error
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	resultCh := make(chan writeResult, 1)
-	go func() {
-		n, err := f.WriteAt(buf, offset)
-		resultCh <- writeResult{n: n, err: err}
-	}()
+	job := writeJob{
+		file:   f,
+		offset: offset,
+		buf:    buf,
+		result: resultCh,
+	}
+	select {
+	case getWritePool().jobs <- job:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	select {
 	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
-		}
-		if res.n != len(buf) {
-			return fmt.Errorf("short write: wrote %d, expected %d", res.n, len(buf))
-		}
-		return nil
-	case <-time.After(10 * time.Minute):
-		fmt.Fprintf(termio.Stderr(), "receiver write timeout after 10m: file=%s offset=%d len=%d\n", relPath, offset, len(buf))
-		os.Exit(1)
-		return fmt.Errorf("receiver write timeout after 10m")
+		return res.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -539,8 +533,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 	}
 	fullFile := startChunk == 0 && endChunk == totalChunks
 
-	fileCRC := crc32.New(crc32cTable)
-
 	// Determine read-ahead depth (bounded, fixed)
 	maxReadAhead := uint32(DefaultSendQueueMax)
 
@@ -555,7 +547,6 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 		index uint32
 		n     int
 		buf   []byte
-		crc   uint32
 	}
 
 	// Read-ahead channel (bounded to maxReadAhead)
@@ -607,16 +598,13 @@ func sendFileChunksWindowed(ctx context.Context, s Stream, relPath string, fileP
 				break
 			}
 
-			// Calculate CRC in read-ahead
-			chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-
 			// Send chunk data to sender
 			// If channel is full, wait for space or cancellation
 			select {
 			case <-readAheadCtx.Done():
 				bufPool.Put(buf)
 				return
-			case chunkChan <- chunkData{index: nextToRead, n: n, buf: buf, crc: chunkCRC}:
+			case chunkChan <- chunkData{index: nextToRead, n: n, buf: buf}:
 			}
 			fileOffset += int64(n)
 			nextToRead++
@@ -673,16 +661,10 @@ sendLoop:
 		}
 
 		if sendChunk {
-			// CRC is already calculated in read-ahead
-			chunkCRC := chunk.crc
-			if fullFile {
-				fileCRC.Write(chunk.buf[:chunk.n])
-			}
-
 			var header [12]byte
 			binary.BigEndian.PutUint32(header[0:4], nextToSend)
 			binary.BigEndian.PutUint32(header[4:8], uint32(chunk.n))
-			binary.BigEndian.PutUint32(header[8:12], chunkCRC)
+			binary.BigEndian.PutUint32(header[8:12], 0)
 			if err := writeFullWithTimeout(ctx, s, header[:], relPath, "chunk-header"); err != nil {
 				bufPool.Put(chunk.buf)
 				return 0, fmt.Errorf("failed to write chunk header: %w", err)
@@ -718,7 +700,7 @@ sendLoop:
 	if !fullFile {
 		return 0, nil
 	}
-	return fileCRC.Sum32(), nil
+	return 0, nil
 }
 
 // receiveFileChunksWindowed receives file chunks, writes to disk,
@@ -757,7 +739,6 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	}
 	bytesReceived := uint64(0)
 	initialBytes := uint64(0)
-	fileCRC := crc32.New(crc32cTable)
 	if resume != nil && resume.sidecar != nil {
 		resume.totalChunks = resume.sidecar.TotalChunks
 	}
@@ -771,7 +752,6 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 	type recvChunk struct {
 		index uint32
 		n     int
-		crc   uint32
 		buf   []byte
 	}
 	const recvQueueDepth = 64
@@ -825,7 +805,6 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				sendReadErr(fmt.Errorf("chunk length %d exceeds chunk size %d", chunkLen, chunkSize))
 				return
 			}
-			chunkCRC := binary.BigEndian.Uint32(metaBuf[4:8])
 			buf := bufPool.Get()
 			if int(chunkLen) > len(buf) {
 				bufPool.Put(buf)
@@ -837,7 +816,7 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 				sendReadErr(fmt.Errorf("failed to read chunk bytes: %w", err))
 				return
 			}
-			chunk := recvChunk{index: chunkIndex, n: int(chunkLen), crc: chunkCRC, buf: buf}
+			chunk := recvChunk{index: chunkIndex, n: int(chunkLen), buf: buf}
 			select {
 			case chunkChan <- chunk:
 			case <-readerCtx.Done():
@@ -871,9 +850,47 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 
 	// Async write pipeline
 	const maxConcurrentWrites = 64
-	writeSem := make(chan struct{}, maxConcurrentWrites)
 	writeErrChan := make(chan error, 1)
 	var writeWg sync.WaitGroup
+	writeCtx, writeCancel := context.WithCancel(ctx)
+	defer writeCancel()
+
+	type writeTask struct {
+		chunk  recvChunk
+		offset int64
+	}
+	writeJobs := make(chan writeTask, maxConcurrentWrites*2)
+	defer func() {
+		writeCancel()
+		close(writeJobs)
+		writeWg.Wait()
+	}()
+	for workerIndex := 0; workerIndex < maxConcurrentWrites; workerIndex++ {
+		go func() {
+			for task := range writeJobs {
+				if writeCtx.Err() != nil {
+					bufPool.Put(task.chunk.buf)
+					writeWg.Done()
+					continue
+				}
+				if err := writeAtWithTimeout(writeCtx, outFile, task.chunk.buf[:task.chunk.n], task.offset, relPath); err != nil {
+					select {
+					case writeErrChan <- fmt.Errorf("failed to write to file: %w", err):
+					default:
+					}
+					writeCancel()
+					bufPool.Put(task.chunk.buf)
+					writeWg.Done()
+					continue
+				}
+				if resume != nil && resume.sidecar != nil {
+					resume.sidecar.MarkComplete(task.chunk.index)
+				}
+				bufPool.Put(task.chunk.buf)
+				writeWg.Done()
+			}
+		}()
+	}
 
 	for {
 		select {
@@ -887,44 +904,17 @@ func receiveFileChunksWindowed(ctx context.Context, s Stream, relPath string, fi
 			if !ok {
 				goto done
 			}
-			if crc32.Checksum(chunk.buf[:chunk.n], crc32cTable) != chunk.crc {
-				bufPool.Put(chunk.buf)
-				return 0, ErrCRC32Mismatch
-			}
-
-			// Update Rolling File CRC
 			bytesReceived += uint64(chunk.n)
-			fileCRC.Write(chunk.buf[:chunk.n])
 
-			// Prepare Async Write
 			writeWg.Add(1)
+			writeTask := writeTask{chunk: chunk, offset: int64(chunk.index) * int64(chunkSize)}
 			select {
-			case writeSem <- struct{}{}:
-			case <-ctx.Done():
+			case writeJobs <- writeTask:
+			case <-writeCtx.Done():
 				writeWg.Done()
 				bufPool.Put(chunk.buf)
 				return 0, ctx.Err()
 			}
-
-			go func(c recvChunk, offset int64) {
-				defer func() {
-					<-writeSem
-					writeWg.Done()
-					bufPool.Put(c.buf)
-				}()
-
-				if err := writeAtWithTimeout(ctx, outFile, c.buf[:c.n], offset, relPath); err != nil {
-					select {
-					case writeErrChan <- fmt.Errorf("failed to write to file: %w", err):
-					default:
-					}
-					return
-				}
-
-				if resume != nil && resume.sidecar != nil {
-					resume.sidecar.MarkComplete(c.index)
-				}
-			}(chunk, int64(chunk.index)*int64(chunkSize))
 
 			if progressFn != nil {
 				progressFn(relPath, int64(bytesReceived), int64(fileSize))
@@ -949,13 +939,7 @@ done:
 		}
 	}
 
-	if resume == nil || resume.sidecar == nil {
-		if bytesReceived != fileSize {
-			return 0, ErrCRC32Mismatch
-		}
-	}
-
-	return fileCRC.Sum32(), nil
+	return 0, nil
 }
 
 // sendDirRecord sends a directory record.

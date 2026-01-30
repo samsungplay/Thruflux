@@ -137,8 +137,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 		AgingAfter:       5 * time.Second,
 		Resume:           true,
 		ResumeTimeout:    10 * time.Second,
-		ResumeVerify:     "last",
-		HashAlg:          "crc32c",
+		ResumeVerify:     "none",
+		HashAlg:          "none",
 		Destination:      "",
 		ResumeVerifyTail: 0,
 	}
@@ -197,10 +197,10 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	switch cfg.ResumeVerify {
 	case "", "last", "none", "all":
 	default:
-		cfg.ResumeVerify = "last"
+		cfg.ResumeVerify = "none"
 	}
 	if cfg.HashAlg == "" {
-		cfg.HashAlg = "crc32c"
+		cfg.HashAlg = "none"
 	}
 	cfg.ResumeVerifyTail = 0
 

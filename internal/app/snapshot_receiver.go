@@ -699,7 +699,7 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	opts := transfer.Options{
 		Resume:        r.resumeEnabled,
 		NoRootDir:     true,
-		HashAlg:       "crc32c",
+		HashAlg:       "none",
 		ParallelFiles: totalStreams,
 		OnManifestFn: func(m manifest.Manifest) {
 			if r.clearResumeOnStart {

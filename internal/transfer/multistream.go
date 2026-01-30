@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"hash/fnv"
 	"io"
 	"os"
@@ -468,6 +467,7 @@ type recvFileStateMux struct {
 	resumeOnce  sync.Once
 	resumeInfo  *FileResumeInfo
 	fileCache   *fileCache
+	baseBytes   int64
 
 	mu          sync.Mutex
 	file        *os.File
@@ -819,21 +819,9 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	if resumeTimeout < 0 {
 		resumeTimeout = 0
 	}
-	resumeVerify := opts.ResumeVerify
-	if resumeVerify == "" {
-		resumeVerify = "last"
-	}
-	resumeVerifyTail := opts.ResumeVerifyTail
-	switch resumeVerify {
-	case "last", "none", "all":
-	default:
-		return fmt.Errorf("invalid resume verify mode %q", resumeVerify)
-	}
-
-	hashAlg, err := parseHashAlg(opts.HashAlg)
-	if err != nil {
-		return err
-	}
+	resumeVerify := "none"
+	resumeVerifyTail := uint32(0)
+	hashAlg := HashAlgNone
 
 	controlStream, err := conn.OpenStream(ctx)
 	if err != nil {
@@ -1592,8 +1580,7 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					setErr(fmt.Errorf("short read for %s: got %d want %d", state.item.RelPath, n, chunkLen))
 					return
 				}
-				chunkCRC := crc32.Checksum(buf[:n], crc32cTable)
-				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), chunkCRC, buf[:n], opts.ProgressDeltaFn); err != nil {
+				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), 0, buf[:n], opts.ProgressDeltaFn); err != nil {
 					bufPool.Put(buf)
 					setErr(err)
 					return
@@ -2696,6 +2683,16 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			globalSidecarFlushRegistry.remove(state.sidecar)
 		}
 
+		if ok {
+			writtenBytes := state.baseBytes + atomic.LoadInt64(&state.bytesRecv)
+			if writtenBytes != state.item.Size {
+				ok = false
+				if errMsg == "" {
+					errMsg = fmt.Sprintf("size mismatch: wrote %d expected %d", writtenBytes, state.item.Size)
+				}
+			}
+		}
+
 		if opts.FileDoneFn != nil {
 			opts.FileDoneFn(state.item.RelPath, ok)
 		}
@@ -2951,6 +2948,33 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return info, nil
 	}
 
+	computeBaseBytes := func(item manifest.FileItem, chunkSize uint32, sidecar *Sidecar) int64 {
+		if sidecar == nil || sidecar.bitmap == nil || chunkSize == 0 || item.Size <= 0 {
+			return 0
+		}
+		completedChunks := sidecar.bitmap.CountSet()
+		if completedChunks <= 0 {
+			return 0
+		}
+		totalChunks := chunkTotal(item.Size, chunkSize)
+		if totalChunks == 0 {
+			return 0
+		}
+		baseBytes := int64(completedChunks) * int64(chunkSize)
+		lastIndex := int(totalChunks - 1)
+		if sidecar.bitmap.Get(lastIndex) {
+			lastSize := chunkSizeForIndex(item.Size, chunkSize, totalChunks-1)
+			if lastSize > 0 {
+				baseBytes -= int64(chunkSize)
+				baseBytes += int64(lastSize)
+			}
+		}
+		if baseBytes > item.Size {
+			baseBytes = item.Size
+		}
+		return baseBytes
+	}
+
 	createState := func(item manifest.FileItem, key uint64, chunkSize uint32, hashAlg byte) (*recvFileStateMux, error) {
 		if chunkSize == 0 {
 			return nil, fmt.Errorf("invalid chunk size 0 for %s", item.RelPath)
@@ -2984,6 +3008,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				if totalChunks >= skipped {
 					state.remaining = totalChunks - skipped
 				}
+				state.baseBytes = computeBaseBytes(item, chunkSize, sidecar)
 			}
 		}
 		return state, nil
@@ -3202,7 +3227,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			fileKey := binary.BigEndian.Uint64(header[0:8])
 			chunkIndex := binary.BigEndian.Uint32(header[8:12])
 			chunkLen := binary.BigEndian.Uint32(header[12:16])
-			chunkCRC := binary.BigEndian.Uint32(header[16:20])
 			chunkSize := binary.BigEndian.Uint32(header[20:24])
 			hashAlg := header[24]
 			flags := header[25]
@@ -3251,12 +3275,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				reportDataErr(err)
 				return
 			}
-			if crc32.Checksum(buf[:chunkLen], crc32cTable) != chunkCRC {
-				bufPool.Put(buf)
-				finalizeFile(state, false, ErrCRC32Mismatch.Error())
-				reportDataErr(ErrCRC32Mismatch)
-				return
-			}
 			f, err := state.openFile()
 			if err != nil {
 				bufPool.Put(buf)
@@ -3272,9 +3290,11 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				return
 			}
 			done, added := state.markChunkComplete(chunkIndex, chunkLen)
-			if added > 0 && opts.ProgressFn != nil {
+			if added > 0 {
 				newTotal := atomic.AddInt64(&state.bytesRecv, added)
-				opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
+				if opts.ProgressFn != nil {
+					opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
+				}
 			}
 			bufPool.Put(buf)
 			if done {
