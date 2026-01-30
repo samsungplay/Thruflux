@@ -177,7 +177,7 @@ func Run(args []string) {
 				chunkSize = parsed
 			case "--total-streams":
 				parsed, err := strconv.Atoi(value)
-				if err != nil || parsed < 1 || parsed > 64 {
+				if err != nil || parsed < 1 || parsed > 128 {
 					fmt.Fprintln(termio.Stderr(), "invalid --total-streams value")
 					os.Exit(2)
 				}

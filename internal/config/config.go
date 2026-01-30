@@ -43,7 +43,7 @@ type ClientConfig struct {
 	QUICTransferTest bool     // Enable QUIC transfer test mode
 	ChunkSize        uint32   // Chunk size in bytes for file transfer (default: 4 MiB)
 	MultiStream      bool     // Use multi-stream QUIC transfers (control + per-file data streams)
-	ParallelFiles    int      // Max concurrent transfer streams (1..8)
+	ParallelFiles    int      // Max concurrent transfer streams (1..128)
 	SmallThreshold   int64    // Bytes threshold for small files
 	MediumThreshold  int64    // Bytes threshold for medium files
 	SmallSlotFrac    float64  // Fraction of slots reserved for small files
@@ -154,7 +154,7 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	fs.BoolVar(&cfg.QUICTest, "quic-test", false, "enable QUIC connectivity test mode")
 	fs.BoolVar(&cfg.QUICTransferTest, "quic-transfer-test", false, "enable QUIC transfer test mode")
 	fs.BoolVar(&cfg.MultiStream, "multistream", cfg.MultiStream, "use multi-stream QUIC transfer (control + per-file data streams)")
-	fs.IntVar(&cfg.ParallelFiles, "total-streams", cfg.ParallelFiles, "total concurrent transfer streams (1..8)")
+	fs.IntVar(&cfg.ParallelFiles, "total-streams", cfg.ParallelFiles, "total concurrent transfer streams (1..128)")
 	fs.Float64Var(&cfg.SmallSlotFrac, "small-slot-frac", cfg.SmallSlotFrac, "fraction of slots reserved for small files")
 	fs.DurationVar(&cfg.AgingAfter, "aging-after", cfg.AgingAfter, "duration before aging boosts a file")
 	fs.BoolVar(&cfg.Resume, "resume", cfg.Resume, "enable resume for QUIC transfers")
@@ -212,8 +212,8 @@ func parseClientConfigWithFlagSet(fs *flag.FlagSet, args []string) ClientConfig 
 	if cfg.ParallelFiles < 1 {
 		cfg.ParallelFiles = 1
 	}
-	if cfg.ParallelFiles > 8 {
-		cfg.ParallelFiles = 8
+	if cfg.ParallelFiles > 128 {
+		cfg.ParallelFiles = 128
 	}
 
 	return cfg
