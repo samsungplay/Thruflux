@@ -36,8 +36,8 @@ func NormalizeParams(p RuntimeParams, opts Options) RuntimeParams {
 	if out.ParallelFiles < 1 {
 		out.ParallelFiles = 1
 	}
-	if out.ParallelFiles > 8 {
-		out.ParallelFiles = 8
+	if out.ParallelFiles > 32 {
+		out.ParallelFiles = 32
 	}
 	return out
 }
