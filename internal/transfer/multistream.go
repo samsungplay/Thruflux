@@ -3475,7 +3475,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				return m, nil
 			}
 		case err := <-controlErr:
-			if err != nil && !errors.Is(err, io.EOF) {
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					if waitForCompletion() {
+						return m, nil
+					}
+					return m, err
+				}
 				if isGracefulRemoteClose(err) && waitForCompletion() {
 					return m, nil
 				}
