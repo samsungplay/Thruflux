@@ -1122,6 +1122,38 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			setErr(err)
 			return
 		}
+		// Free the file slot immediately; FileDone becomes verification-only.
+		schedMu.Lock()
+		for i := 0; i < len(activeFiles); i++ {
+			if activeFiles[i] == state {
+				activeFiles = append(activeFiles[:i], activeFiles[i+1:]...)
+				if activeIdx >= len(activeFiles) {
+					activeIdx = 0
+				}
+				break
+			}
+		}
+		if key, ok := keyByRelPath[state.item.RelPath]; ok {
+			sched.Remove(key)
+		}
+		schedMu.Unlock()
+
+		state.closeFile()
+
+		statsMu.Lock()
+		activeCount--
+		completedCount++
+		remainingBytes -= state.item.Size
+		active := activeCount
+		completed := completedCount
+		remaining := remainingBytes
+		statsMu.Unlock()
+		updateStats(active, completed, remaining)
+		if totalFiles > 0 && completed >= totalFiles {
+			signalDone()
+		}
+		signalWake()
+
 		go func() {
 			fileDone, err := doneRegistry.wait(transferCtx, state.key)
 			if err != nil {
@@ -1129,15 +1161,12 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				return
 			}
 			if !fileDone.OK {
+				if opts.FileDoneFn != nil {
+					opts.FileDoneFn(state.item.RelPath, false)
+				}
 				if fileDone.ErrMsg == "" {
-					if opts.FileDoneFn != nil {
-						opts.FileDoneFn(state.item.RelPath, false)
-					}
 					setErr(fmt.Errorf("receiver reported failure for %s", state.item.RelPath))
 				} else {
-					if opts.FileDoneFn != nil {
-						opts.FileDoneFn(state.item.RelPath, false)
-					}
 					setErr(fmt.Errorf("receiver reported failure for %s: %s", state.item.RelPath, fileDone.ErrMsg))
 				}
 				return
@@ -1145,36 +1174,6 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			if opts.FileDoneFn != nil {
 				opts.FileDoneFn(state.item.RelPath, true)
 			}
-			schedMu.Lock()
-			for i := 0; i < len(activeFiles); i++ {
-				if activeFiles[i] == state {
-					activeFiles = append(activeFiles[:i], activeFiles[i+1:]...)
-					if activeIdx >= len(activeFiles) {
-						activeIdx = 0
-					}
-					break
-				}
-			}
-			if key, ok := keyByRelPath[state.item.RelPath]; ok {
-				sched.Remove(key)
-			}
-			schedMu.Unlock()
-
-			state.closeFile()
-
-			statsMu.Lock()
-			activeCount--
-			completedCount++
-			remainingBytes -= state.item.Size
-			active := activeCount
-			completed := completedCount
-			remaining := remainingBytes
-			statsMu.Unlock()
-			updateStats(active, completed, remaining)
-			if totalFiles > 0 && completed >= totalFiles {
-				signalDone()
-			}
-			signalWake()
 		}()
 	}
 
