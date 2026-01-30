@@ -6,7 +6,6 @@ func computeParallelBudget(fileCount, requestedStreams, connections int, allowSt
 	if connections < 1 {
 		connections = 1
 	}
-	explicitStreams := requestedStreams > 0
 	totalStreams = requestedStreams
 	if totalStreams <= 0 {
 		totalStreams = transfer.HeuristicParams(fileCount).ParallelFiles
@@ -14,10 +13,7 @@ func computeParallelBudget(fileCount, requestedStreams, connections int, allowSt
 	if totalStreams < 1 {
 		totalStreams = 1
 	}
-	// Only force streams >= connections when streams weren't explicitly set.
-	// Some networks can establish multiple QUIC connections but stall on opening streams
-	// on one of them; allowing the user to force fewer streams helps isolate/fallback.
-	if connections > 1 && totalStreams < connections && !explicitStreams {
+	if connections > 1 && totalStreams < connections {
 		totalStreams = connections
 	}
 	if !allowStriping && fileCount > 0 && totalStreams > fileCount {

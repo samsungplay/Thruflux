@@ -695,29 +695,16 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		return err
 	}
 
-	// Open data streams before announcing the count, and apply a timeout per stream open.
-	//
-	// Without this, a single stalled connection/stream-open can deadlock the sender before
-	// any file data begins, while the receiver waits forever for the promised streams.
-	const dataStreamOpenTimeout = 10 * time.Second
-	dataStreams := make([]Stream, 0, parallelStreams)
-	for i := 0; i < parallelStreams; i++ {
-		openCtx, cancel := context.WithTimeout(ctx, dataStreamOpenTimeout)
-		stream, err := conn.OpenStream(openCtx)
-		cancel()
-		if err != nil {
-			for _, s := range dataStreams {
-				_ = s.Close()
-			}
-			return fmt.Errorf("failed to open data stream %d/%d: %w", i+1, parallelStreams, err)
-		}
-		dataStreams = append(dataStreams, stream)
-	}
-	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(len(dataStreams))}); err != nil {
-		for _, s := range dataStreams {
-			_ = s.Close()
-		}
+	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(parallelStreams)}); err != nil {
 		return err
+	}
+	dataStreams := make([]Stream, parallelStreams)
+	for i := 0; i < parallelStreams; i++ {
+		stream, err := conn.OpenStream(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to open data stream: %w", err)
+		}
+		dataStreams[i] = stream
 	}
 
 	doneRegistry := newFileDoneRegistry()
@@ -2612,15 +2599,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return nil
 	}
 
-	dataStreamsList := make([]Stream, 0, dataStreams)
-	for i := 0; i < dataStreams; i++ {
-		stream, err := conn.AcceptStream(recvCtx)
-		if err != nil {
-			return m, err
-		}
-		dataStreamsList = append(dataStreamsList, stream)
-	}
-
 	handleControl := func(ev controlEvent) error {
 		switch ev.typ {
 		case controlTypeFileBegin:
@@ -2644,104 +2622,126 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	}
 
 	dataErrCh := make(chan error, dataStreams)
-	for _, stream := range dataStreamsList {
-		go func(s Stream) {
-			defer s.Close()
-			header := make([]byte, dataChunkHeaderLen)
-			for {
-				if err := readFullWithTimeout(recvCtx, s, header, "", "mux-header"); err != nil {
-					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.Canceled) {
-						dataErrCh <- nil
-						return
-					}
-					dataErrCh <- err
+	reportDataErr := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case dataErrCh <- err:
+		default:
+		}
+	}
+
+	handleDataStream := func(s Stream) {
+		defer s.Close()
+		header := make([]byte, dataChunkHeaderLen)
+		for {
+			if err := readFullWithTimeout(recvCtx, s, header, "", "mux-header"); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.Canceled) {
 					return
 				}
-				fileKey := binary.BigEndian.Uint64(header[0:8])
-				chunkIndex := binary.BigEndian.Uint32(header[8:12])
-				chunkLen := binary.BigEndian.Uint32(header[12:16])
-				chunkCRC := binary.BigEndian.Uint32(header[16:20])
-				if chunkLen == 0 {
-					dataErrCh <- fmt.Errorf("invalid chunk length 0")
+				reportDataErr(err)
+				return
+			}
+			fileKey := binary.BigEndian.Uint64(header[0:8])
+			chunkIndex := binary.BigEndian.Uint32(header[8:12])
+			chunkLen := binary.BigEndian.Uint32(header[12:16])
+			chunkCRC := binary.BigEndian.Uint32(header[16:20])
+			if chunkLen == 0 {
+				reportDataErr(fmt.Errorf("invalid chunk length 0"))
+				return
+			}
+			stateMu.Lock()
+			state := stateByKey[fileKey]
+			stateMu.Unlock()
+			if state == nil {
+				if !fileReady.wait(recvCtx, fileKey) {
+					reportDataErr(fmt.Errorf("chunk for unknown file %d", fileKey))
 					return
 				}
 				stateMu.Lock()
-				state := stateByKey[fileKey]
+				state = stateByKey[fileKey]
 				stateMu.Unlock()
 				if state == nil {
-					if !fileReady.wait(recvCtx, fileKey) {
-						dataErrCh <- fmt.Errorf("chunk for unknown file %d", fileKey)
-						return
-					}
-					stateMu.Lock()
-					state = stateByKey[fileKey]
-					stateMu.Unlock()
-					if state == nil {
-						dataErrCh <- fmt.Errorf("chunk for unknown file %d", fileKey)
-						return
-					}
-				}
-				if state.totalChunks > 0 && chunkIndex >= state.totalChunks {
-					err := fmt.Errorf("chunk index %d out of range for %s", chunkIndex, state.item.RelPath)
-					finalizeFile(state, false, err.Error())
-					dataErrCh <- err
+					reportDataErr(fmt.Errorf("chunk for unknown file %d", fileKey))
 					return
-				}
-				if state.chunkSize > 0 && chunkLen > state.chunkSize {
-					err := fmt.Errorf("chunk length %d exceeds chunk size %d for %s", chunkLen, state.chunkSize, state.item.RelPath)
-					finalizeFile(state, false, err.Error())
-					dataErrCh <- err
-					return
-				}
-				bufPool := chunkPoolFor(state.chunkSize)
-				if bufPool == nil {
-					bufPool = bufpool.New(int(state.chunkSize))
-				}
-				buf := bufPool.Get()
-				if int(chunkLen) > len(buf) {
-					bufPool.Put(buf)
-					dataErrCh <- fmt.Errorf("chunk length %d exceeds buffer size %d", chunkLen, len(buf))
-					return
-				}
-				deltaFn := opts.ProgressDeltaFn
-				if err := readFullWithTimeoutDelta(recvCtx, s, buf[:chunkLen], state.item.RelPath, "mux-data", deltaFn); err != nil {
-					bufPool.Put(buf)
-					finalizeFile(state, false, err.Error())
-					dataErrCh <- err
-					return
-				}
-				if crc32.Checksum(buf[:chunkLen], crc32cTable) != chunkCRC {
-					bufPool.Put(buf)
-					finalizeFile(state, false, ErrCRC32Mismatch.Error())
-					dataErrCh <- ErrCRC32Mismatch
-					return
-				}
-				f, err := state.openFile()
-				if err != nil {
-					bufPool.Put(buf)
-					finalizeFile(state, false, err.Error())
-					dataErrCh <- err
-					return
-				}
-				offset := int64(chunkIndex) * int64(state.chunkSize)
-				if err := writeAtWithTimeout(recvCtx, f, buf[:chunkLen], offset, state.item.RelPath); err != nil {
-					bufPool.Put(buf)
-					finalizeFile(state, false, err.Error())
-					dataErrCh <- err
-					return
-				}
-				done, added := state.markChunkComplete(chunkIndex, chunkLen)
-				if added > 0 && opts.ProgressFn != nil {
-					newTotal := atomic.AddInt64(&state.bytesRecv, added)
-					opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
-				}
-				bufPool.Put(buf)
-				if done {
-					finalizeFile(state, true, "")
 				}
 			}
-		}(stream)
+			if state.totalChunks > 0 && chunkIndex >= state.totalChunks {
+				err := fmt.Errorf("chunk index %d out of range for %s", chunkIndex, state.item.RelPath)
+				finalizeFile(state, false, err.Error())
+				reportDataErr(err)
+				return
+			}
+			if state.chunkSize > 0 && chunkLen > state.chunkSize {
+				err := fmt.Errorf("chunk length %d exceeds chunk size %d for %s", chunkLen, state.chunkSize, state.item.RelPath)
+				finalizeFile(state, false, err.Error())
+				reportDataErr(err)
+				return
+			}
+			bufPool := chunkPoolFor(state.chunkSize)
+			if bufPool == nil {
+				bufPool = bufpool.New(int(state.chunkSize))
+			}
+			buf := bufPool.Get()
+			if int(chunkLen) > len(buf) {
+				bufPool.Put(buf)
+				reportDataErr(fmt.Errorf("chunk length %d exceeds buffer size %d", chunkLen, len(buf)))
+				return
+			}
+			deltaFn := opts.ProgressDeltaFn
+			if err := readFullWithTimeoutDelta(recvCtx, s, buf[:chunkLen], state.item.RelPath, "mux-data", deltaFn); err != nil {
+				bufPool.Put(buf)
+				finalizeFile(state, false, err.Error())
+				reportDataErr(err)
+				return
+			}
+			if crc32.Checksum(buf[:chunkLen], crc32cTable) != chunkCRC {
+				bufPool.Put(buf)
+				finalizeFile(state, false, ErrCRC32Mismatch.Error())
+				reportDataErr(ErrCRC32Mismatch)
+				return
+			}
+			f, err := state.openFile()
+			if err != nil {
+				bufPool.Put(buf)
+				finalizeFile(state, false, err.Error())
+				reportDataErr(err)
+				return
+			}
+			offset := int64(chunkIndex) * int64(state.chunkSize)
+			if err := writeAtWithTimeout(recvCtx, f, buf[:chunkLen], offset, state.item.RelPath); err != nil {
+				bufPool.Put(buf)
+				finalizeFile(state, false, err.Error())
+				reportDataErr(err)
+				return
+			}
+			done, added := state.markChunkComplete(chunkIndex, chunkLen)
+			if added > 0 && opts.ProgressFn != nil {
+				newTotal := atomic.AddInt64(&state.bytesRecv, added)
+				opts.ProgressFn(state.item.RelPath, newTotal, int64(state.item.Size))
+			}
+			bufPool.Put(buf)
+			if done {
+				finalizeFile(state, true, "")
+			}
+		}
 	}
+
+	go func() {
+		for {
+			stream, err := conn.AcceptStream(recvCtx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				setRecvErr(err)
+				reportDataErr(err)
+				return
+			}
+			go handleDataStream(stream)
+		}
+	}()
 
 	endReceived := false
 	for {
