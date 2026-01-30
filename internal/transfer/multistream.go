@@ -695,6 +695,9 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		return err
 	}
 
+	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(parallelStreams)}); err != nil {
+		return err
+	}
 	dataStreams := make([]Stream, parallelStreams)
 	for i := 0; i < parallelStreams; i++ {
 		stream, err := conn.OpenStream(ctx)
@@ -702,10 +705,6 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			return fmt.Errorf("failed to open data stream: %w", err)
 		}
 		dataStreams[i] = stream
-	}
-
-	if err := writeDataStreams(controlStream, DataStreams{Count: uint16(parallelStreams)}); err != nil {
-		return err
 	}
 
 	doneRegistry := newFileDoneRegistry()
