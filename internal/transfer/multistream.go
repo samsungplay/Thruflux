@@ -2735,6 +2735,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				if errors.Is(err, context.Canceled) {
 					return
 				}
+				if isGracefulRemoteClose(err) && allFilesCompleted(&statsMu, &completedCount, totalFiles) {
+					return
+				}
 				setRecvErr(err)
 				reportDataErr(err)
 				return
