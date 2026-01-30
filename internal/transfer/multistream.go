@@ -595,6 +595,20 @@ func isFileIOError(err error) bool {
 		strings.Contains(msg, "failed to write to file")
 }
 
+func resetSidecarForMissingFile(sc *Sidecar, fileID string, fileSize int64, chunkSize uint32) (*Sidecar, error) {
+	if sc == nil {
+		return nil, nil
+	}
+	globalSidecarFlushRegistry.remove(sc)
+	_ = os.Remove(sc.Path)
+	fresh, err := CreateSidecar(sc.Path, fileID, fileSize, chunkSize)
+	if err != nil {
+		return nil, err
+	}
+	globalSidecarFlushRegistry.add(fresh)
+	return fresh, nil
+}
+
 func hashFileChunk(filePath string, chunkIndex uint32, chunkSize uint32, fileSize int64, alg byte) (uint64, error) {
 	if alg == HashAlgNone {
 		return 0, nil
@@ -1569,28 +1583,69 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			sidecar = loaded
 		}
 		state.sidecar = sidecar
-		info.Bitmap = sidecar.MarshalBitmap()
-		completedChunks := uint32(sidecar.bitmap.CountSet())
-		allComplete := totalChunks > 0 && completedChunks >= totalChunks
-		if allComplete {
-			info.LastVerifiedChunk = totalChunks
-		} else if highest, ok := sidecar.HighestComplete(); ok {
-			info.LastVerifiedChunk = uint32(highest)
-			if begin.HashAlg != HashAlgNone {
-				hashValue, ok, err := hashFileChunkWithTimeout(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg, defaultResumeHashTimeout)
-				if err != nil {
-					return nil, nil, err
-				}
-				if ok {
-					info.LastVerifiedHash = hashValue
-					state.verifiedChunk = info.LastVerifiedChunk
-					state.hasVerified = true
-				} else {
-					info.LastVerifiedHash = resumeHashUnknown
-				}
+		missingFile := false
+		if _, statErr := os.Stat(filePath); errors.Is(statErr, os.ErrNotExist) {
+			fresh, resetErr := resetSidecarForMissingFile(sidecar, item.ID, int64(begin.FileSize), begin.ChunkSize)
+			if resetErr != nil {
+				return nil, nil, resetErr
 			}
-		} else {
-			info.LastVerifiedChunk = totalChunks
+			if fileAgg != nil {
+				fileAgg.mu.Lock()
+				fileAgg.sidecar = fresh
+				fileAgg.mu.Unlock()
+			}
+			sidecar = fresh
+			state.sidecar = fresh
+			info.Bitmap = nil
+			info.LastVerifiedChunk = 0
+			info.LastVerifiedHash = 0
+			state.verifiedChunk = 0
+			state.hasVerified = false
+			missingFile = true
+		}
+		if !missingFile {
+			info.Bitmap = sidecar.MarshalBitmap()
+			completedChunks := uint32(sidecar.bitmap.CountSet())
+			allComplete := totalChunks > 0 && completedChunks >= totalChunks
+			if allComplete {
+				info.LastVerifiedChunk = totalChunks
+			} else if highest, ok := sidecar.HighestComplete(); ok {
+				info.LastVerifiedChunk = uint32(highest)
+				if begin.HashAlg != HashAlgNone {
+					hashValue, ok, err := hashFileChunkWithTimeout(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg, defaultResumeHashTimeout)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							fresh, resetErr := resetSidecarForMissingFile(sidecar, item.ID, int64(begin.FileSize), begin.ChunkSize)
+							if resetErr != nil {
+								return nil, nil, resetErr
+							}
+							if fileAgg != nil {
+								fileAgg.mu.Lock()
+								fileAgg.sidecar = fresh
+								fileAgg.mu.Unlock()
+							}
+							sidecar = fresh
+							state.sidecar = fresh
+							info.Bitmap = nil
+							info.LastVerifiedChunk = 0
+							info.LastVerifiedHash = 0
+							state.verifiedChunk = 0
+							state.hasVerified = false
+						} else {
+							return nil, nil, err
+						}
+					}
+					if ok {
+						info.LastVerifiedHash = hashValue
+						state.verifiedChunk = info.LastVerifiedChunk
+						state.hasVerified = true
+					} else {
+						info.LastVerifiedHash = resumeHashUnknown
+					}
+				}
+			} else {
+				info.LastVerifiedChunk = totalChunks
+			}
 		}
 		if opts.ResumeStatsFn != nil && totalChunks > 0 {
 			callResume := func() {
@@ -2312,26 +2367,51 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			globalSidecarFlushRegistry.add(loaded)
 			state.sidecar = loaded
 		}
-		info.Bitmap = state.sidecar.MarshalBitmap()
-		completedChunks := uint32(state.sidecar.bitmap.CountSet())
-		allComplete := state.totalChunks > 0 && completedChunks >= state.totalChunks
-		if allComplete {
-			info.LastVerifiedChunk = state.totalChunks
-		} else if highest, ok := state.sidecar.HighestComplete(); ok {
-			info.LastVerifiedChunk = uint32(highest)
-			if state.hashAlg != HashAlgNone {
-				hashValue, ok, err := hashFileChunkWithTimeout(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg, defaultResumeHashTimeout)
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					info.LastVerifiedHash = hashValue
-				} else {
-					info.LastVerifiedHash = resumeHashUnknown
-				}
+		missingFile := false
+		if _, statErr := os.Stat(state.filePath); errors.Is(statErr, os.ErrNotExist) {
+			fresh, resetErr := resetSidecarForMissingFile(state.sidecar, state.item.ID, state.item.Size, state.chunkSize)
+			if resetErr != nil {
+				return nil, resetErr
 			}
-		} else {
-			info.LastVerifiedChunk = state.totalChunks
+			state.sidecar = fresh
+			info.Bitmap = nil
+			info.LastVerifiedChunk = 0
+			info.LastVerifiedHash = 0
+			missingFile = true
+		}
+		if !missingFile {
+			info.Bitmap = state.sidecar.MarshalBitmap()
+			completedChunks := uint32(state.sidecar.bitmap.CountSet())
+			allComplete := state.totalChunks > 0 && completedChunks >= state.totalChunks
+			if allComplete {
+				info.LastVerifiedChunk = state.totalChunks
+			} else if highest, ok := state.sidecar.HighestComplete(); ok {
+				info.LastVerifiedChunk = uint32(highest)
+				if state.hashAlg != HashAlgNone {
+					hashValue, ok, err := hashFileChunkWithTimeout(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg, defaultResumeHashTimeout)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							fresh, resetErr := resetSidecarForMissingFile(state.sidecar, state.item.ID, state.item.Size, state.chunkSize)
+							if resetErr != nil {
+								return nil, resetErr
+							}
+							state.sidecar = fresh
+							info.Bitmap = nil
+							info.LastVerifiedChunk = 0
+							info.LastVerifiedHash = 0
+						} else {
+							return nil, err
+						}
+					}
+					if ok {
+						info.LastVerifiedHash = hashValue
+					} else {
+						info.LastVerifiedHash = resumeHashUnknown
+					}
+				}
+			} else {
+				info.LastVerifiedChunk = state.totalChunks
+			}
 		}
 		if opts.ResumeStatsFn != nil && state.totalChunks > 0 {
 			state.resumeOnce.Do(func() {
