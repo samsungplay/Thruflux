@@ -13,16 +13,17 @@ import (
 const (
 	controlMagic = "SBC1"
 
-	controlTypeFileBegin      = byte(0x10)
-	controlTypeCredit         = byte(0x11)
-	controlTypeFileEnd        = byte(0x12)
-	controlTypeFileDone       = byte(0x13)
-	controlTypeFileResumeInfo = byte(0x14)
-	controlTypeResumeRequest  = byte(0x15)
-	controlTypeCreditBatch    = byte(0x16)
-	controlTypeDataStreams    = byte(0x17)
-	controlTypeBatch          = byte(0x18)
-	controlTypeEnd            = byte(0xFF)
+	controlTypeFileBegin             = byte(0x10)
+	controlTypeCredit                = byte(0x11)
+	controlTypeFileEnd               = byte(0x12)
+	controlTypeFileDone              = byte(0x13)
+	controlTypeFileResumeInfo        = byte(0x14)
+	controlTypeResumeRequest         = byte(0x15)
+	controlTypeCreditBatch           = byte(0x16)
+	controlTypeDataStreams           = byte(0x17)
+	controlTypeBatch                 = byte(0x18)
+	controlTypeResumeSnapshotRequest = byte(0x19)
+	controlTypeEnd                   = byte(0xFF)
 )
 
 type FileBegin struct {
@@ -69,6 +70,17 @@ type FileResumeInfo struct {
 type ResumeRequest struct {
 	FileID   string
 	StreamID uint64
+}
+
+type ResumeSnapshotEntry struct {
+	FileID    string
+	StreamID  uint64
+	ChunkSize uint32
+	HashAlg   byte
+}
+
+type ResumeSnapshotRequest struct {
+	Entries []ResumeSnapshotEntry
 }
 
 type DataStreams struct {
@@ -494,6 +506,82 @@ func readResumeRequest(s Stream) (ResumeRequest, error) {
 	return msg, nil
 }
 
+func writeResumeSnapshotRequest(s Stream, msg ResumeSnapshotRequest) error {
+	if err := writeFullControl(s, []byte{controlTypeResumeSnapshotRequest}, "resume snapshot request type"); err != nil {
+		return fmt.Errorf("failed to write ResumeSnapshotRequest type: %w", err)
+	}
+	count := uint32(len(msg.Entries))
+	if err := writeUint32Control(s, count, "resume snapshot count"); err != nil {
+		return fmt.Errorf("failed to write resume snapshot count: %w", err)
+	}
+	for _, entry := range msg.Entries {
+		fileIDBytes := []byte(entry.FileID)
+		fileIDLen := uint16(len(fileIDBytes))
+		if err := writeUint16Control(s, fileIDLen, "file id length"); err != nil {
+			return fmt.Errorf("failed to write file id length: %w", err)
+		}
+		if err := writeFullControl(s, fileIDBytes, "file id"); err != nil {
+			return fmt.Errorf("failed to write file id: %w", err)
+		}
+		if err := writeUint64Control(s, entry.StreamID, "stream id"); err != nil {
+			return fmt.Errorf("failed to write stream id: %w", err)
+		}
+		if err := writeUint32Control(s, entry.ChunkSize, "chunk size"); err != nil {
+			return fmt.Errorf("failed to write chunk size: %w", err)
+		}
+		if err := writeFullControl(s, []byte{entry.HashAlg}, "hash alg"); err != nil {
+			return fmt.Errorf("failed to write hash alg: %w", err)
+		}
+	}
+	return nil
+}
+
+func readResumeSnapshotRequest(s Stream) (ResumeSnapshotRequest, error) {
+	var msg ResumeSnapshotRequest
+	count, err := readUint32Control(s, "resume snapshot count")
+	if err != nil {
+		return msg, fmt.Errorf("failed to read resume snapshot count: %w", err)
+	}
+	if count == 0 {
+		return msg, nil
+	}
+	entries := make([]ResumeSnapshotEntry, 0, count)
+	for i := uint32(0); i < count; i++ {
+		fileIDLen, err := readUint16Control(s, "file id length")
+		if err != nil {
+			return msg, fmt.Errorf("failed to read file id length: %w", err)
+		}
+		fileID := ""
+		if fileIDLen > 0 {
+			buf := make([]byte, fileIDLen)
+			if err := readFullControl(s, buf, "file id"); err != nil {
+				return msg, fmt.Errorf("failed to read file id: %w", err)
+			}
+			fileID = string(buf)
+		}
+		streamID, err := readUint64Control(s, "stream id")
+		if err != nil {
+			return msg, fmt.Errorf("failed to read stream id: %w", err)
+		}
+		chunkSize, err := readUint32Control(s, "chunk size")
+		if err != nil {
+			return msg, fmt.Errorf("failed to read chunk size: %w", err)
+		}
+		hashBuf := make([]byte, 1)
+		if err := readFullControl(s, hashBuf, "hash alg"); err != nil {
+			return msg, fmt.Errorf("failed to read hash alg: %w", err)
+		}
+		entries = append(entries, ResumeSnapshotEntry{
+			FileID:    fileID,
+			StreamID:  streamID,
+			ChunkSize: chunkSize,
+			HashAlg:   hashBuf[0],
+		})
+	}
+	msg.Entries = entries
+	return msg, nil
+}
+
 func writeDataStreams(s Stream, msg DataStreams) error {
 	if err := writeFullControl(s, []byte{controlTypeDataStreams}, "data streams type"); err != nil {
 		return fmt.Errorf("failed to write DataStreams type: %w", err)
@@ -547,6 +635,9 @@ func readControlMessage(s Stream) (byte, any, error) {
 	case controlTypeResumeRequest:
 		msg, err := readResumeRequest(s)
 		return controlTypeResumeRequest, msg, err
+	case controlTypeResumeSnapshotRequest:
+		msg, err := readResumeSnapshotRequest(s)
+		return controlTypeResumeSnapshotRequest, msg, err
 	case controlTypeDataStreams:
 		msg, err := readDataStreams(s)
 		return controlTypeDataStreams, msg, err
@@ -677,9 +768,9 @@ type readerStream struct {
 	r *bytes.Reader
 }
 
-func (r *readerStream) Read(p []byte) (int, error)  { return r.r.Read(p) }
-func (r *readerStream) Write([]byte) (int, error)   { return 0, io.ErrClosedPipe }
-func (r *readerStream) Close() error                { return nil }
+func (r *readerStream) Read(p []byte) (int, error) { return r.r.Read(p) }
+func (r *readerStream) Write([]byte) (int, error)  { return 0, io.ErrClosedPipe }
+func (r *readerStream) Close() error               { return nil }
 
 func encodeControlBody(typ byte, msg any) ([]byte, error) {
 	buf := &bytes.Buffer{}
@@ -696,6 +787,8 @@ func encodeControlBody(typ byte, msg any) ([]byte, error) {
 		err = writeFileResumeInfo(bs, msg.(FileResumeInfo))
 	case controlTypeResumeRequest:
 		err = writeResumeRequest(bs, msg.(ResumeRequest))
+	case controlTypeResumeSnapshotRequest:
+		err = writeResumeSnapshotRequest(bs, msg.(ResumeSnapshotRequest))
 	case controlTypeDataStreams:
 		err = writeDataStreams(bs, msg.(DataStreams))
 	case controlTypeCredit:
@@ -728,6 +821,8 @@ func decodeControlBody(typ byte, body []byte) (any, error) {
 		return readFileResumeInfo(rs)
 	case controlTypeResumeRequest:
 		return readResumeRequest(rs)
+	case controlTypeResumeSnapshotRequest:
+		return readResumeSnapshotRequest(rs)
 	case controlTypeDataStreams:
 		return readDataStreams(rs)
 	case controlTypeCredit:
