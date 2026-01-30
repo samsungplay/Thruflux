@@ -1367,16 +1367,6 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 		}
 	}
 
-	for _, item := range m.Items {
-		if !item.IsDir {
-			continue
-		}
-		dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			return m, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
-		}
-	}
-
 	registry := newStreamRegistry()
 	acceptErrChan := make(chan error, 1)
 
@@ -1583,33 +1573,36 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			sidecar = loaded
 		}
 		state.sidecar = sidecar
-		missingFile := false
-		if _, statErr := os.Stat(filePath); errors.Is(statErr, os.ErrNotExist) {
-			fresh, resetErr := resetSidecarForMissingFile(sidecar, item.ID, int64(begin.FileSize), begin.ChunkSize)
-			if resetErr != nil {
-				return nil, nil, resetErr
+		highest, hasAny := sidecar.HighestComplete()
+		if hasAny {
+			if _, statErr := os.Stat(filePath); errors.Is(statErr, os.ErrNotExist) {
+				fresh, resetErr := resetSidecarForMissingFile(sidecar, item.ID, int64(begin.FileSize), begin.ChunkSize)
+				if resetErr != nil {
+					return nil, nil, resetErr
+				}
+				if fileAgg != nil {
+					fileAgg.mu.Lock()
+					fileAgg.sidecar = fresh
+					fileAgg.mu.Unlock()
+				}
+				sidecar = fresh
+				state.sidecar = fresh
+				info.Bitmap = nil
+				info.LastVerifiedChunk = 0
+				info.LastVerifiedHash = 0
+				state.verifiedChunk = 0
+				state.hasVerified = false
+				hasAny = false
+				highest = 0
 			}
-			if fileAgg != nil {
-				fileAgg.mu.Lock()
-				fileAgg.sidecar = fresh
-				fileAgg.mu.Unlock()
-			}
-			sidecar = fresh
-			state.sidecar = fresh
-			info.Bitmap = nil
-			info.LastVerifiedChunk = 0
-			info.LastVerifiedHash = 0
-			state.verifiedChunk = 0
-			state.hasVerified = false
-			missingFile = true
 		}
-		if !missingFile {
+		if hasAny {
 			info.Bitmap = sidecar.MarshalBitmap()
 			completedChunks := uint32(sidecar.bitmap.CountSet())
 			allComplete := totalChunks > 0 && completedChunks >= totalChunks
 			if allComplete {
 				info.LastVerifiedChunk = totalChunks
-			} else if highest, ok := sidecar.HighestComplete(); ok {
+			} else {
 				info.LastVerifiedChunk = uint32(highest)
 				if begin.HashAlg != HashAlgNone {
 					hashValue, ok, err := hashFileChunkWithTimeout(filePath, uint32(highest), begin.ChunkSize, int64(begin.FileSize), begin.HashAlg, defaultResumeHashTimeout)
@@ -1631,20 +1624,21 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 							info.LastVerifiedHash = 0
 							state.verifiedChunk = 0
 							state.hasVerified = false
+							hasAny = false
 						} else {
 							return nil, nil, err
 						}
 					}
-					if ok {
-						info.LastVerifiedHash = hashValue
-						state.verifiedChunk = info.LastVerifiedChunk
-						state.hasVerified = true
-					} else {
-						info.LastVerifiedHash = resumeHashUnknown
+					if hasAny {
+						if ok {
+							info.LastVerifiedHash = hashValue
+							state.verifiedChunk = info.LastVerifiedChunk
+							state.hasVerified = true
+						} else {
+							info.LastVerifiedHash = resumeHashUnknown
+						}
 					}
 				}
-			} else {
-				info.LastVerifiedChunk = totalChunks
 			}
 		}
 		if opts.ResumeStatsFn != nil && totalChunks > 0 {
@@ -2095,9 +2089,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if opts.OnManifestFn != nil {
 		opts.OnManifestFn(m)
 	}
-	if opts.OnManifestFn != nil {
-		opts.OnManifestFn(m)
-	}
 
 	rootedDir := filepath.Join(outDir, m.Root)
 	baseDir := outDir
@@ -2367,25 +2358,28 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			globalSidecarFlushRegistry.add(loaded)
 			state.sidecar = loaded
 		}
-		missingFile := false
-		if _, statErr := os.Stat(state.filePath); errors.Is(statErr, os.ErrNotExist) {
-			fresh, resetErr := resetSidecarForMissingFile(state.sidecar, state.item.ID, state.item.Size, state.chunkSize)
-			if resetErr != nil {
-				return nil, resetErr
+		highest, hasAny := state.sidecar.HighestComplete()
+		if hasAny {
+			if _, statErr := os.Stat(state.filePath); errors.Is(statErr, os.ErrNotExist) {
+				fresh, resetErr := resetSidecarForMissingFile(state.sidecar, state.item.ID, state.item.Size, state.chunkSize)
+				if resetErr != nil {
+					return nil, resetErr
+				}
+				state.sidecar = fresh
+				info.Bitmap = nil
+				info.LastVerifiedChunk = 0
+				info.LastVerifiedHash = 0
+				hasAny = false
+				highest = 0
 			}
-			state.sidecar = fresh
-			info.Bitmap = nil
-			info.LastVerifiedChunk = 0
-			info.LastVerifiedHash = 0
-			missingFile = true
 		}
-		if !missingFile {
+		if hasAny {
 			info.Bitmap = state.sidecar.MarshalBitmap()
 			completedChunks := uint32(state.sidecar.bitmap.CountSet())
 			allComplete := state.totalChunks > 0 && completedChunks >= state.totalChunks
 			if allComplete {
 				info.LastVerifiedChunk = state.totalChunks
-			} else if highest, ok := state.sidecar.HighestComplete(); ok {
+			} else {
 				info.LastVerifiedChunk = uint32(highest)
 				if state.hashAlg != HashAlgNone {
 					hashValue, ok, err := hashFileChunkWithTimeout(state.filePath, uint32(highest), state.chunkSize, state.item.Size, state.hashAlg, defaultResumeHashTimeout)
@@ -2399,18 +2393,19 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 							info.Bitmap = nil
 							info.LastVerifiedChunk = 0
 							info.LastVerifiedHash = 0
+							hasAny = false
 						} else {
 							return nil, err
 						}
 					}
-					if ok {
-						info.LastVerifiedHash = hashValue
-					} else {
-						info.LastVerifiedHash = resumeHashUnknown
+					if hasAny {
+						if ok {
+							info.LastVerifiedHash = hashValue
+						} else {
+							info.LastVerifiedHash = resumeHashUnknown
+						}
 					}
 				}
-			} else {
-				info.LastVerifiedChunk = state.totalChunks
 			}
 		}
 		if opts.ResumeStatsFn != nil && state.totalChunks > 0 {
