@@ -478,6 +478,7 @@ type recvFileStateMux struct {
 	writerOnce  sync.Once
 	writerClose sync.Once
 	writerCh    chan recvChunkData
+	writerStop  chan struct{}
 
 	mu           sync.Mutex
 	file         *os.File
@@ -531,8 +532,8 @@ func (s *recvFileStateMux) endReceivedNow() bool {
 
 func (s *recvFileStateMux) closeWriter() {
 	s.writerClose.Do(func() {
-		if s.writerCh != nil {
-			close(s.writerCh)
+		if s.writerStop != nil {
+			close(s.writerStop)
 		}
 	})
 }
@@ -3061,6 +3062,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	startWriter := func(state *recvFileStateMux) {
 		state.writerOnce.Do(func() {
 			state.writerCh = make(chan recvChunkData, writerQueueCap)
+			state.writerStop = make(chan struct{})
 			go func() {
 				var completedBitmap *Bitmap
 				if state.sidecar != nil && state.totalChunks > 0 {
@@ -3150,6 +3152,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				for {
 					select {
 					case <-recvCtx.Done():
+						drain()
+						return
+					case <-state.writerStop:
 						drain()
 						return
 					case chunk, ok := <-state.writerCh:
@@ -3428,6 +3433,9 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			}
 			select {
 			case state.writerCh <- chunk:
+			case <-state.writerStop:
+				bufPool.Put(buf)
+				return
 			case <-recvCtx.Done():
 				bufPool.Put(buf)
 				return
