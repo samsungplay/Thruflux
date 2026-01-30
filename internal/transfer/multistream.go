@@ -23,28 +23,31 @@ import (
 
 // Options configures multi-stream manifest transfers.
 type Options struct {
-	ChunkSize        uint32
-	ParallelFiles    int
-	StripeMax        int
-	SmallThreshold   int64
-	MediumThreshold  int64
-	SmallSlotFrac    float64
-	AgingAfter       time.Duration
-	Resume           bool
-	ResumeTimeout    time.Duration
-	ResumeVerify     string
-	ResumeVerifyTail uint32
-	HashAlg          string
-	NoRootDir        bool
-	ResolveFilePath  func(relPath string) string
-	ProgressFn       ProgressFn
-	ProgressDeltaFn  ProgressDeltaFn
-	TransferStatsFn  TransferStatsFn
-	ResumeStatsFn    ResumeStatsFn
-	FileDoneFn       FileDoneFn
-	ParamSource      func() RuntimeParams
-	OnFileStart      func(relpath string, size int64, params RuntimeParams)
-	OnManifestFn     func(manifest.Manifest)
+	ChunkSize                uint32
+	ParallelFiles            int
+	StripeMax                int
+	SmallThreshold           int64
+	MediumThreshold          int64
+	SmallSlotFrac            float64
+	AgingAfter               time.Duration
+	Resume                   bool
+	ResumeTimeout            time.Duration
+	ResumeVerify             string
+	ResumeVerifyTail         uint32
+	HashAlg                  string
+	NoRootDir                bool
+	ResolveFilePath          func(relPath string) string
+	ProgressFn               ProgressFn
+	ProgressDeltaFn          ProgressDeltaFn
+	TransferStatsFn          TransferStatsFn
+	ResumeStatsFn            ResumeStatsFn
+	FileDoneFn               FileDoneFn
+	ParamSource              func() RuntimeParams
+	OnFileStart              func(relpath string, size int64, params RuntimeParams)
+	OnManifestFn             func(manifest.Manifest)
+	OnResumeSnapshotStart    func(total int)
+	OnResumeSnapshotProgress func(done, total int)
+	OnResumeSnapshotDone     func()
 }
 
 // TransferStatsFn reports active/completed file counts and remaining bytes.
@@ -3048,33 +3051,12 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		return newState, nil
 	}
 
-	handleFileBegin := func(begin FileBegin) error {
-		if err := validateRelPath(begin.RelPath); err != nil {
-			return err
-		}
-		expectedSize, ok := expectedFiles[begin.RelPath]
-		if !ok {
-			return fmt.Errorf("manifest mismatch: unexpected file %s size %d", begin.RelPath, begin.FileSize)
-		}
-		if expectedSize != int64(begin.FileSize) {
-			return fmt.Errorf("manifest mismatch: expected %s size %d, got %s size %d", begin.RelPath, expectedSize, begin.RelPath, begin.FileSize)
-		}
-		item := itemByRelPath[begin.RelPath]
-		key := fileKeyForItem(item)
-		if begin.StreamID != 0 && begin.StreamID != key {
-			return fmt.Errorf("file key mismatch for %s", begin.RelPath)
-		}
-		if begin.ChunkSize == 0 {
-			return fmt.Errorf("file begin missing chunk size for %s", begin.RelPath)
-		}
-		if _, err := getOrCreateState(key, begin.ChunkSize, begin.HashAlg); err != nil {
-			return err
-		}
-		return nil
-	}
-
 	handleResumeSnapshotRequest := func(req ResumeSnapshotRequest) error {
 		snapshotRequested = true
+		if len(req.Entries) > 0 && opts.OnResumeSnapshotStart != nil {
+			opts.OnResumeSnapshotStart(len(req.Entries))
+		}
+		done := 0
 		for _, entry := range req.Entries {
 			info, err := buildSnapshotResumeInfo(entry)
 			if err != nil {
@@ -3085,6 +3067,13 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			case <-recvCtx.Done():
 				return recvCtx.Err()
 			}
+			done++
+			if opts.OnResumeSnapshotProgress != nil {
+				opts.OnResumeSnapshotProgress(done, len(req.Entries))
+			}
+		}
+		if len(req.Entries) > 0 && opts.OnResumeSnapshotDone != nil {
+			opts.OnResumeSnapshotDone()
 		}
 		return nil
 	}
@@ -3148,8 +3137,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 
 	handleControl := func(ev controlEvent) error {
 		switch ev.typ {
-		case controlTypeFileBegin:
-			return handleFileBegin(ev.msg.(FileBegin))
 		case controlTypeResumeSnapshotRequest:
 			return handleResumeSnapshotRequest(ev.msg.(ResumeSnapshotRequest))
 		case controlTypeResumeRequest:

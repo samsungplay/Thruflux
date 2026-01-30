@@ -687,6 +687,10 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 	})
 	defer progressStop()
 
+	var snapshotMu sync.Mutex
+	snapshotTotal := 0
+	snapshotDone := 0
+
 	opts := transfer.Options{
 		Resume:        r.resumeEnabled,
 		NoRootDir:     true,
@@ -733,6 +737,34 @@ func (r *snapshotReceiver) runTransfer(start protocol.TransferStart) {
 				}
 				progressCollector.Update(relpath, bytes, total)
 				progressState.Update(relpath, bytes, total)
+			}
+		},
+		OnResumeSnapshotStart: func(total int) {
+			snapshotMu.Lock()
+			snapshotTotal = total
+			snapshotDone = 0
+			snapshotMu.Unlock()
+			if total > 0 {
+				sendTransferStatus(ReceiverStatusPreparing)
+				progressState.SetHeaderLine(fmt.Sprintf("Preparing resume snapshot (%d/%d)...", 0, total))
+			}
+		},
+		OnResumeSnapshotProgress: func(done, total int) {
+			snapshotMu.Lock()
+			snapshotTotal = total
+			snapshotDone = done
+			snapshotMu.Unlock()
+			if total > 0 {
+				progressState.SetHeaderLine(fmt.Sprintf("Preparing resume snapshot (%d/%d)...", done, total))
+			}
+		},
+		OnResumeSnapshotDone: func() {
+			snapshotMu.Lock()
+			total := snapshotTotal
+			snapshotMu.Unlock()
+			if total > 0 {
+				progressState.SetHeaderLine("")
+				sendTransferStatus(ReceiverStatusTransferring)
 			}
 		},
 	}
@@ -1075,6 +1107,9 @@ func (p *receiverProgress) Update(relpath string, bytes int64, total int64) {
 
 func (p *receiverProgress) UpdateStats(active, completed int) {
 	p.mu.Lock()
+	if p.fileTotal > 0 && completed > p.fileTotal {
+		completed = p.fileTotal
+	}
 	p.fileDone = completed
 	p.mu.Unlock()
 }
