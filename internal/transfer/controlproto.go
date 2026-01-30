@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,7 @@ const (
 	controlTypeResumeRequest  = byte(0x15)
 	controlTypeCreditBatch    = byte(0x16)
 	controlTypeDataStreams    = byte(0x17)
+	controlTypeBatch          = byte(0x18)
 	controlTypeEnd            = byte(0xFF)
 )
 
@@ -71,6 +73,15 @@ type ResumeRequest struct {
 
 type DataStreams struct {
 	Count uint16
+}
+
+type ControlEntry struct {
+	Type byte
+	Msg  any
+}
+
+type ControlBatch struct {
+	Entries []ControlEntry
 }
 
 func writeControlHeader(s Stream, m manifest.Manifest) error {
@@ -539,6 +550,9 @@ func readControlMessage(s Stream) (byte, any, error) {
 	case controlTypeDataStreams:
 		msg, err := readDataStreams(s)
 		return controlTypeDataStreams, msg, err
+	case controlTypeBatch:
+		msg, err := readControlBatch(s)
+		return controlTypeBatch, msg, err
 	case controlTypeEnd:
 		return controlTypeEnd, nil, nil
 	default:
@@ -581,6 +595,148 @@ func writeFullControl(s Stream, buf []byte, op string) error {
 		written += n
 	}
 	return nil
+}
+
+func writeControlBatch(s Stream, batch ControlBatch) error {
+	if len(batch.Entries) == 0 {
+		return nil
+	}
+	if len(batch.Entries) > int(^uint16(0)) {
+		return fmt.Errorf("control batch too large: %d", len(batch.Entries))
+	}
+	if err := writeFullControl(s, []byte{controlTypeBatch}, "control batch type"); err != nil {
+		return err
+	}
+	if err := writeUint16Control(s, uint16(len(batch.Entries)), "control batch count"); err != nil {
+		return err
+	}
+	for _, entry := range batch.Entries {
+		if err := writeFullControl(s, []byte{entry.Type}, "control batch entry type"); err != nil {
+			return err
+		}
+		body, err := encodeControlBody(entry.Type, entry.Msg)
+		if err != nil {
+			return err
+		}
+		if err := writeUint32Control(s, uint32(len(body)), "control batch entry length"); err != nil {
+			return err
+		}
+		if len(body) > 0 {
+			if err := writeFullControl(s, body, "control batch entry body"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func readControlBatch(s Stream) (ControlBatch, error) {
+	var batch ControlBatch
+	count, err := readUint16Control(s, "control batch count")
+	if err != nil {
+		return batch, err
+	}
+	if count == 0 {
+		return batch, nil
+	}
+	entries := make([]ControlEntry, 0, count)
+	for i := 0; i < int(count); i++ {
+		var typBuf [1]byte
+		if err := readFullControl(s, typBuf[:], "control batch entry type"); err != nil {
+			return batch, err
+		}
+		typ := typBuf[0]
+		length, err := readUint32Control(s, "control batch entry length")
+		if err != nil {
+			return batch, err
+		}
+		var body []byte
+		if length > 0 {
+			body = make([]byte, length)
+			if err := readFullControl(s, body, "control batch entry body"); err != nil {
+				return batch, err
+			}
+		}
+		msg, err := decodeControlBody(typ, body)
+		if err != nil {
+			return batch, err
+		}
+		entries = append(entries, ControlEntry{Type: typ, Msg: msg})
+	}
+	batch.Entries = entries
+	return batch, nil
+}
+
+type bufferStream struct {
+	*bytes.Buffer
+}
+
+func (b *bufferStream) Close() error { return nil }
+
+type readerStream struct {
+	r *bytes.Reader
+}
+
+func (r *readerStream) Read(p []byte) (int, error)  { return r.r.Read(p) }
+func (r *readerStream) Write([]byte) (int, error)   { return 0, io.ErrClosedPipe }
+func (r *readerStream) Close() error                { return nil }
+
+func encodeControlBody(typ byte, msg any) ([]byte, error) {
+	buf := &bytes.Buffer{}
+	bs := &bufferStream{buf}
+	var err error
+	switch typ {
+	case controlTypeFileBegin:
+		err = writeFileBegin(bs, msg.(FileBegin))
+	case controlTypeFileEnd:
+		err = writeFileEnd(bs, msg.(FileEnd))
+	case controlTypeFileDone:
+		err = writeFileDone(bs, msg.(FileDone))
+	case controlTypeFileResumeInfo:
+		err = writeFileResumeInfo(bs, msg.(FileResumeInfo))
+	case controlTypeResumeRequest:
+		err = writeResumeRequest(bs, msg.(ResumeRequest))
+	case controlTypeDataStreams:
+		err = writeDataStreams(bs, msg.(DataStreams))
+	case controlTypeCredit:
+		err = writeCredit(bs, msg.(Credit))
+	case controlTypeCreditBatch:
+		err = writeCreditBatch(bs, msg.(CreditBatch))
+	default:
+		return nil, fmt.Errorf("unsupported control batch type 0x%02x", typ)
+	}
+	if err != nil {
+		return nil, err
+	}
+	data := buf.Bytes()
+	if len(data) == 0 || data[0] != typ {
+		return nil, fmt.Errorf("control batch encode mismatch for type 0x%02x", typ)
+	}
+	return data[1:], nil
+}
+
+func decodeControlBody(typ byte, body []byte) (any, error) {
+	rs := &readerStream{r: bytes.NewReader(body)}
+	switch typ {
+	case controlTypeFileBegin:
+		return readFileBegin(rs)
+	case controlTypeFileEnd:
+		return readFileEnd(rs)
+	case controlTypeFileDone:
+		return readFileDone(rs)
+	case controlTypeFileResumeInfo:
+		return readFileResumeInfo(rs)
+	case controlTypeResumeRequest:
+		return readResumeRequest(rs)
+	case controlTypeDataStreams:
+		return readDataStreams(rs)
+	case controlTypeCredit:
+		return readCredit(rs)
+	case controlTypeCreditBatch:
+		return readCreditBatch(rs)
+	default:
+		return nil, fmt.Errorf("unsupported control batch type 0x%02x", typ)
+	}
 }
 
 func readUint16Control(s Stream, op string) (uint16, error) {

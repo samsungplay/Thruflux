@@ -18,6 +18,7 @@ import (
 	"github.com/sheerbytes/sheerbytes/internal/bufpool"
 	"github.com/sheerbytes/sheerbytes/internal/scheduler"
 	"github.com/sheerbytes/sheerbytes/pkg/manifest"
+	"container/list"
 )
 
 // Options configures multi-stream manifest transfers.
@@ -59,6 +60,8 @@ const resumeHashUnknown = ^uint64(0)
 
 const defaultResumeHashTimeout = 2 * time.Second
 const resumeGracePeriod = 300 * time.Millisecond
+const controlBatchMax = 32
+const controlBatchFlushInterval = 2 * time.Millisecond
 
 type resumeHashResult struct {
 	hash uint64
@@ -462,6 +465,7 @@ type recvFileStateMux struct {
 	sidecar     *Sidecar
 	resumeOnce  sync.Once
 	resumeInfo  *FileResumeInfo
+	fileCache   *fileCache
 
 	mu          sync.Mutex
 	file        *os.File
@@ -477,7 +481,15 @@ func (s *recvFileStateMux) openFile() (*os.File, error) {
 	if s.file != nil {
 		return s.file, nil
 	}
-	f, err := os.OpenFile(s.filePath, os.O_RDWR|os.O_CREATE, 0644)
+	var (
+		f   *os.File
+		err error
+	)
+	if s.fileCache != nil {
+		f, err = s.fileCache.pin(s.filePath)
+	} else {
+		f, err = os.OpenFile(s.filePath, os.O_RDWR|os.O_CREATE, 0644)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -489,8 +501,126 @@ func (s *recvFileStateMux) closeFile() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.file != nil {
-		_ = s.file.Close()
+		if s.fileCache != nil {
+			s.fileCache.unpin(s.filePath)
+		} else {
+			_ = s.file.Close()
+		}
 		s.file = nil
+	}
+}
+
+type fileCache struct {
+	mu      sync.Mutex
+	max     int
+	lru     *list.List
+	entries map[string]*fileCacheEntry
+}
+
+type fileCacheEntry struct {
+	path   string
+	file   *os.File
+	pinned int
+	elem   *list.Element
+}
+
+func newFileCache(max int) *fileCache {
+	if max < 0 {
+		max = 0
+	}
+	return &fileCache{
+		max:     max,
+		lru:     list.New(),
+		entries: make(map[string]*fileCacheEntry),
+	}
+}
+
+func (c *fileCache) ensureFile(path string, size int64) error {
+	c.mu.Lock()
+	if entry, ok := c.entries[path]; ok {
+		c.lru.MoveToFront(entry.elem)
+		err := entry.file.Truncate(size)
+		c.mu.Unlock()
+		return err
+	}
+	c.mu.Unlock()
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(size); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func (c *fileCache) pin(path string) (*os.File, error) {
+	c.mu.Lock()
+	if entry, ok := c.entries[path]; ok {
+		entry.pinned++
+		c.lru.MoveToFront(entry.elem)
+		f := entry.file
+		c.mu.Unlock()
+		return f, nil
+	}
+	c.mu.Unlock()
+
+	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	entry := &fileCacheEntry{path: path, file: f, pinned: 1}
+	c.mu.Lock()
+	entry.elem = c.lru.PushFront(entry)
+	c.entries[path] = entry
+	c.evictLocked()
+	c.mu.Unlock()
+	return f, nil
+}
+
+func (c *fileCache) unpin(path string) {
+	c.mu.Lock()
+	if entry, ok := c.entries[path]; ok {
+		if entry.pinned > 0 {
+			entry.pinned--
+		}
+		c.evictLocked()
+	}
+	c.mu.Unlock()
+}
+
+func (c *fileCache) closeAll() {
+	c.mu.Lock()
+	for _, entry := range c.entries {
+		_ = entry.file.Close()
+	}
+	c.entries = make(map[string]*fileCacheEntry)
+	c.lru.Init()
+	c.mu.Unlock()
+}
+
+func (c *fileCache) evictLocked() {
+	if c.max == 0 {
+		return
+	}
+	for c.lru.Len() > c.max {
+		var victim *list.Element
+		for e := c.lru.Back(); e != nil; e = e.Prev() {
+			entry := e.Value.(*fileCacheEntry)
+			if entry.pinned == 0 {
+				victim = e
+				break
+			}
+		}
+		if victim == nil {
+			return
+		}
+		entry := victim.Value.(*fileCacheEntry)
+		delete(c.entries, entry.path)
+		c.lru.Remove(victim)
+		_ = entry.file.Close()
 	}
 }
 
@@ -785,16 +915,34 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 				return
 			}
 
-			switch msgType {
-			case controlTypeFileDone:
-				doneRegistry.deliver(msg.(FileDone))
-			case controlTypeFileResumeInfo:
-				resumeRegistry.deliver(msg.(FileResumeInfo))
-			default:
-				select {
-				case ackErrChan <- fmt.Errorf("unexpected control message type: 0x%02x", msgType):
+			handleControl := func(typ byte, payload any) bool {
+				switch typ {
+				case controlTypeFileDone:
+					doneRegistry.deliver(payload.(FileDone))
+					return true
+				case controlTypeFileResumeInfo:
+					resumeRegistry.deliver(payload.(FileResumeInfo))
+					return true
 				default:
+					select {
+					case ackErrChan <- fmt.Errorf("unexpected control message type: 0x%02x", typ):
+					default:
+					}
+					return false
 				}
+			}
+
+			if msgType == controlTypeBatch {
+				batch := msg.(ControlBatch)
+				for _, entry := range batch.Entries {
+					if !handleControl(entry.Type, entry.Msg) {
+						return
+					}
+				}
+				continue
+			}
+
+			if !handleControl(msgType, msg) {
 				return
 			}
 		}
@@ -823,7 +971,6 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}
 	}
 
-	var controlWriteMu sync.Mutex
 	var errMu sync.Mutex
 	var transferErr error
 	transferCtx, transferCancel := context.WithCancel(ctx)
@@ -849,6 +996,73 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 		}
 	}()
 
+	controlWriteCh := make(chan ControlEntry, parallelStreams*4+4)
+	controlWriteErr := make(chan error, 1)
+	controlWriteDone := make(chan struct{})
+	go func() {
+		defer close(controlWriteDone)
+		batch := make([]ControlEntry, 0, controlBatchMax)
+		timer := time.NewTimer(controlBatchFlushInterval)
+		timer.Stop()
+		timerActive := false
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			if err := writeControlBatch(controlStream, ControlBatch{Entries: batch}); err != nil {
+				select {
+				case controlWriteErr <- err:
+				default:
+				}
+				return false
+			}
+			batch = batch[:0]
+			return true
+		}
+		for {
+			select {
+			case <-transferCtx.Done():
+				_ = flush()
+				return
+			case entry, ok := <-controlWriteCh:
+				if !ok {
+					_ = flush()
+					return
+				}
+				batch = append(batch, entry)
+				if len(batch) >= controlBatchMax {
+					if !flush() {
+						return
+					}
+				}
+				if !timerActive {
+					timer.Reset(controlBatchFlushInterval)
+					timerActive = true
+				}
+			case <-timer.C:
+				timerActive = false
+				if !flush() {
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		select {
+		case err := <-controlWriteErr:
+			setErr(err)
+		case <-transferCtx.Done():
+		}
+	}()
+	sendControl := func(typ byte, msg any) error {
+		select {
+		case controlWriteCh <- ControlEntry{Type: typ, Msg: msg}:
+			return nil
+		case <-transferCtx.Done():
+			return transferCtx.Err()
+		}
+	}
+
 	activeFiles := make([]*sendFileState, 0, parallelStreams)
 	activeIdx := 0
 	var schedMu sync.Mutex
@@ -860,12 +1074,10 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			return
 		}
 		go func() {
-			controlWriteMu.Lock()
-			reqErr := writeResumeRequest(controlStream, ResumeRequest{
+			reqErr := sendControl(controlTypeResumeRequest, ResumeRequest{
 				FileID:   state.item.ID,
 				StreamID: state.key,
 			})
-			controlWriteMu.Unlock()
 			if reqErr != nil {
 				state.setReady(reqErr)
 				setErr(reqErr)
@@ -1084,13 +1296,10 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 			StreamID:  state.key,
 			HashAlg:   hashAlg,
 		}
-		controlWriteMu.Lock()
-		if err := writeFileBegin(controlStream, begin); err != nil {
-			controlWriteMu.Unlock()
+		if err := sendControl(controlTypeFileBegin, begin); err != nil {
 			setErr(err)
 			return nil
 		}
-		controlWriteMu.Unlock()
 
 		meta := metaByRelPath[state.item.RelPath]
 		now := time.Now()
@@ -1112,12 +1321,10 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	}
 
 	sendFileEnd := func(state *sendFileState) {
-		controlWriteMu.Lock()
-		err := writeFileEnd(controlStream, FileEnd{
+		err := sendControl(controlTypeFileEnd, FileEnd{
 			StreamID: state.key,
 			CRC32:    0,
 		})
-		controlWriteMu.Unlock()
 		if err != nil {
 			setErr(err)
 			return
@@ -1324,6 +1531,8 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	}
 
 	wg.Wait()
+	close(controlWriteCh)
+	<-controlWriteDone
 	if transferErr != nil {
 		return transferErr
 	}
@@ -1921,150 +2130,176 @@ func RecvManifestMultiStreamLegacy(ctx context.Context, conn Conn, outDir string
 			return m, err
 		}
 
-		switch msgType {
-		case controlTypeFileBegin:
-			begin := msg.(FileBegin)
-			if err := validateRelPath(begin.RelPath); err != nil {
-				return m, err
-			}
-			expectedSize, ok := expectedFiles[begin.RelPath]
-			if !ok {
-				return m, fmt.Errorf("manifest mismatch: unexpected file %s size %d", begin.RelPath, begin.FileSize)
-			}
-			if expectedSize != int64(begin.FileSize) {
-				return m, fmt.Errorf("manifest mismatch: expected %s size %d, got %s size %d", begin.RelPath, expectedSize, begin.RelPath, begin.FileSize)
-			}
-			stripeCount := int(begin.StripeCount)
-			if stripeCount < 1 {
-				stripeCount = 1
-			}
-			if stripeCount > 1 {
-				if begin.StripeChunks == 0 {
-					return m, fmt.Errorf("invalid stripe chunk count for %s", begin.RelPath)
+		handleControl := func(typ byte, payload any) (bool, error) {
+			switch typ {
+			case controlTypeFileBegin:
+				begin := payload.(FileBegin)
+				if err := validateRelPath(begin.RelPath); err != nil {
+					return false, err
 				}
-				if int(begin.StripeIndex) >= stripeCount {
-					return m, fmt.Errorf("invalid stripe index %d for %s", begin.StripeIndex, begin.RelPath)
+				expectedSize, ok := expectedFiles[begin.RelPath]
+				if !ok {
+					return false, fmt.Errorf("manifest mismatch: unexpected file %s size %d", begin.RelPath, begin.FileSize)
 				}
-			} else {
-				begin.StripeIndex = 0
-				begin.StripeStart = 0
-				begin.StripeChunks = 0
-			}
+				if expectedSize != int64(begin.FileSize) {
+					return false, fmt.Errorf("manifest mismatch: expected %s size %d, got %s size %d", begin.RelPath, expectedSize, begin.RelPath, begin.FileSize)
+				}
+				stripeCount := int(begin.StripeCount)
+				if stripeCount < 1 {
+					stripeCount = 1
+				}
+				if stripeCount > 1 {
+					if begin.StripeChunks == 0 {
+						return false, fmt.Errorf("invalid stripe chunk count for %s", begin.RelPath)
+					}
+					if int(begin.StripeIndex) >= stripeCount {
+						return false, fmt.Errorf("invalid stripe index %d for %s", begin.StripeIndex, begin.RelPath)
+					}
+				} else {
+					begin.StripeIndex = 0
+					begin.StripeStart = 0
+					begin.StripeChunks = 0
+				}
 
-			fileAgg, ok := fileAggByRelPath[begin.RelPath]
-			if !ok {
-				fileAgg = &recvFileAggregate{
-					relPath:     begin.RelPath,
-					size:        begin.FileSize,
-					chunkSize:   begin.ChunkSize,
-					stripeCount: stripeCount,
-					stripesSeen: make(map[uint16]struct{}),
+				fileAgg, ok := fileAggByRelPath[begin.RelPath]
+				if !ok {
+					fileAgg = &recvFileAggregate{
+						relPath:     begin.RelPath,
+						size:        begin.FileSize,
+						chunkSize:   begin.ChunkSize,
+						stripeCount: stripeCount,
+						stripesSeen: make(map[uint16]struct{}),
+					}
+					fileAggByRelPath[begin.RelPath] = fileAgg
+					remainingFiles--
+				} else {
+					if fileAgg.size != begin.FileSize || fileAgg.chunkSize != begin.ChunkSize {
+						return false, fmt.Errorf("manifest mismatch: stripe size differs for %s", begin.RelPath)
+					}
+					if fileAgg.stripeCount != stripeCount {
+						return false, fmt.Errorf("manifest mismatch: stripe count differs for %s", begin.RelPath)
+					}
 				}
-				fileAggByRelPath[begin.RelPath] = fileAgg
-				remainingFiles--
-			} else {
-				if fileAgg.size != begin.FileSize || fileAgg.chunkSize != begin.ChunkSize {
-					return m, fmt.Errorf("manifest mismatch: stripe size differs for %s", begin.RelPath)
+				fileAgg.mu.Lock()
+				if _, seen := fileAgg.stripesSeen[begin.StripeIndex]; seen {
+					fileAgg.mu.Unlock()
+					return false, fmt.Errorf("duplicate file begin for %s stripe %d", begin.RelPath, begin.StripeIndex)
 				}
-				if fileAgg.stripeCount != stripeCount {
-					return m, fmt.Errorf("manifest mismatch: stripe count differs for %s", begin.RelPath)
-				}
-			}
-			fileAgg.mu.Lock()
-			if _, seen := fileAgg.stripesSeen[begin.StripeIndex]; seen {
+				fileAgg.stripesSeen[begin.StripeIndex] = struct{}{}
 				fileAgg.mu.Unlock()
-				return m, fmt.Errorf("duplicate file begin for %s stripe %d", begin.RelPath, begin.StripeIndex)
-			}
-			fileAgg.stripesSeen[begin.StripeIndex] = struct{}{}
-			fileAgg.mu.Unlock()
 
-			state := &recvFileState{
-				begin:        begin,
-				lastProgress: time.Now(),
-				fileAgg:      fileAgg,
-			}
-			if resumeInfo, resumeState, err := buildResumeInfo(begin, itemByRelPath[begin.RelPath], fileAgg); err == nil {
-				state.resume = resumeState
-				state.resumeInfo = resumeInfo
-			} else {
-				return m, err
-			}
-			stateMu.Lock()
-			stateByStream[begin.StreamID] = state
-			stateMu.Unlock()
-			select {
-			case beginQueue <- begin:
-			case <-recvCtx.Done():
-				return m, recvCtx.Err()
-			}
+				state := &recvFileState{
+					begin:        begin,
+					lastProgress: time.Now(),
+					fileAgg:      fileAgg,
+				}
+				if resumeInfo, resumeState, err := buildResumeInfo(begin, itemByRelPath[begin.RelPath], fileAgg); err == nil {
+					state.resume = resumeState
+					state.resumeInfo = resumeInfo
+				} else {
+					return false, err
+				}
+				stateMu.Lock()
+				stateByStream[begin.StreamID] = state
+				stateMu.Unlock()
+				select {
+				case beginQueue <- begin:
+				case <-recvCtx.Done():
+					return false, recvCtx.Err()
+				}
+				return false, nil
 
-		case controlTypeResumeRequest:
-			req := msg.(ResumeRequest)
-			stateMu.Lock()
-			state, ok := stateByStream[req.StreamID]
-			stateMu.Unlock()
-			if !ok {
-				return m, fmt.Errorf("resume request for unknown stream %d", req.StreamID)
-			}
-			item, ok := itemByRelPath[state.begin.RelPath]
-			if !ok {
-				return m, fmt.Errorf("missing manifest item for %s", state.begin.RelPath)
-			}
-			if req.FileID != "" && item.ID != "" && req.FileID != item.ID {
-				return m, fmt.Errorf("resume request file id mismatch for %s", state.begin.RelPath)
-			}
+			case controlTypeResumeRequest:
+				req := payload.(ResumeRequest)
+				stateMu.Lock()
+				state, ok := stateByStream[req.StreamID]
+				stateMu.Unlock()
+				if !ok {
+					return false, fmt.Errorf("resume request for unknown stream %d", req.StreamID)
+				}
+				item, ok := itemByRelPath[state.begin.RelPath]
+				if !ok {
+					return false, fmt.Errorf("missing manifest item for %s", state.begin.RelPath)
+				}
+				if req.FileID != "" && item.ID != "" && req.FileID != item.ID {
+					return false, fmt.Errorf("resume request file id mismatch for %s", state.begin.RelPath)
+				}
 
-			resumeInfo := state.resumeInfo
-			if resumeInfo == nil {
-				resumeInfo, state.resume, err = buildResumeInfo(state.begin, item, state.fileAgg)
+				resumeInfo := state.resumeInfo
+				if resumeInfo == nil {
+					resumeInfo, state.resume, err = buildResumeInfo(state.begin, item, state.fileAgg)
+					if err != nil {
+						return false, err
+					}
+					state.resumeInfo = resumeInfo
+				}
+
+				select {
+				case controlWriteCh <- controlMsg{resume: resumeInfo}:
+				case <-recvCtx.Done():
+					return false, recvCtx.Err()
+				}
+				return false, nil
+
+			case controlTypeFileEnd:
+				end := payload.(FileEnd)
+				stateMu.Lock()
+				state, ok := stateByStream[end.StreamID]
+				if ok {
+					state.hasEnd = true
+					if state.hasData && end.CRC32 != 0 && state.computedCRC != end.CRC32 {
+						// Note: Realistically we should signal this error back,
+						// but chunk-level CRC is already very strong.
+					}
+					deleteState := state.hasData
+					stateMu.Unlock()
+					if deleteState {
+						stateMu.Lock()
+						delete(stateByStream, end.StreamID)
+						stateMu.Unlock()
+					}
+					return false, nil
+				}
+				stateMu.Unlock()
+				if !ok {
+					return false, fmt.Errorf("file end for unknown stream %d", end.StreamID)
+				}
+				return false, nil
+			case controlTypeEnd:
+				if remainingFiles != 0 {
+					return false, fmt.Errorf("received fewer files than manifest: remaining %d", remainingFiles)
+				}
+				close(beginQueue)
+				<-schedulerDone
+				wg.Wait()
+				if recvErr != nil {
+					return true, recvErr
+				}
+				return true, nil
+			default:
+				return false, fmt.Errorf("unexpected control message type: 0x%02x", typ)
+			}
+		}
+
+		if msgType == controlTypeBatch {
+			batch := msg.(ControlBatch)
+			for _, entry := range batch.Entries {
+				done, err := handleControl(entry.Type, entry.Msg)
 				if err != nil {
 					return m, err
 				}
-				state.resumeInfo = resumeInfo
-			}
-
-			select {
-			case controlWriteCh <- controlMsg{resume: resumeInfo}:
-			case <-recvCtx.Done():
-				return m, recvCtx.Err()
-			}
-
-		case controlTypeFileEnd:
-			end := msg.(FileEnd)
-			stateMu.Lock()
-			state, ok := stateByStream[end.StreamID]
-			if ok {
-				state.hasEnd = true
-				if state.hasData && end.CRC32 != 0 && state.computedCRC != end.CRC32 {
-					// Note: Realistically we should signal this error back,
-					// but chunk-level CRC is already very strong.
+				if done {
+					return m, nil
 				}
-				deleteState := state.hasData
-				stateMu.Unlock()
-				if deleteState {
-					stateMu.Lock()
-					delete(stateByStream, end.StreamID)
-					stateMu.Unlock()
-				}
-				break
 			}
-			stateMu.Unlock()
-			if !ok {
-				return m, fmt.Errorf("file end for unknown stream %d", end.StreamID)
-			}
-		case controlTypeEnd:
-			if remainingFiles != 0 {
-				return m, fmt.Errorf("received fewer files than manifest: remaining %d", remainingFiles)
-			}
-			close(beginQueue)
-			<-schedulerDone
-			wg.Wait()
-			if recvErr != nil {
-				return m, recvErr
-			}
+			continue
+		}
+		done, err := handleControl(msgType, msg)
+		if err != nil {
+			return m, err
+		}
+		if done {
 			return m, nil
-		default:
-			return m, fmt.Errorf("unexpected control message type: 0x%02x", msgType)
 		}
 	}
 }
@@ -2099,12 +2334,19 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return m, fmt.Errorf("failed to create output directory %s: %w", baseDir, err)
 	}
-
+	dirSet := make(map[string]struct{})
 	for _, item := range m.Items {
-		if !item.IsDir {
+		if item.IsDir {
+			dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
+			dirSet[dirPath] = struct{}{}
 			continue
 		}
-		dirPath := filepath.Join(baseDir, filepath.FromSlash(item.RelPath))
+		parentDir := filepath.Dir(filepath.Join(baseDir, filepath.FromSlash(item.RelPath)))
+		if parentDir != "" {
+			dirSet[parentDir] = struct{}{}
+		}
+	}
+	for dirPath := range dirSet {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			return m, fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 		}
@@ -2149,6 +2391,16 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				}
 				return
 			}
+			if msgType == controlTypeBatch {
+				batch := msg.(ControlBatch)
+				for _, entry := range batch.Entries {
+					controlCh <- controlEvent{typ: entry.Type, msg: entry.Msg}
+					if entry.Type == controlTypeEnd {
+						return
+					}
+				}
+				continue
+			}
 			controlCh <- controlEvent{typ: msgType, msg: msg}
 			if msgType == controlTypeEnd {
 				return
@@ -2176,6 +2428,15 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	if dataStreams < 1 {
 		dataStreams = 1
 	}
+	maxOpenFiles := dataStreams * 4
+	if maxOpenFiles < 32 {
+		maxOpenFiles = 32
+	}
+	if maxOpenFiles > 1024 {
+		maxOpenFiles = 1024
+	}
+	fileCache := newFileCache(maxOpenFiles)
+	defer fileCache.closeAll()
 
 	recvCtx, recvCancel := context.WithCancel(ctx)
 	defer recvCancel()
@@ -2228,22 +2489,46 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 	}
 	controlWriteCh := make(chan controlMsg, controlWriteCap)
 	go func() {
+		batch := make([]ControlEntry, 0, controlBatchMax)
+		timer := time.NewTimer(controlBatchFlushInterval)
+		timer.Stop()
+		timerActive := false
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			if err := writeControlBatch(controlStream, ControlBatch{Entries: batch}); err != nil {
+				setRecvErr(err)
+				return false
+			}
+			batch = batch[:0]
+			return true
+		}
 		for {
 			select {
 			case <-recvCtx.Done():
+				_ = flush()
 				return
 			case msg := <-controlWriteCh:
 				if msg.done != nil {
-					if err := writeFileDone(controlStream, *msg.done); err != nil {
-						setRecvErr(err)
+					batch = append(batch, ControlEntry{Type: controlTypeFileDone, Msg: *msg.done})
+				}
+				if msg.resume != nil {
+					batch = append(batch, ControlEntry{Type: controlTypeFileResumeInfo, Msg: *msg.resume})
+				}
+				if len(batch) >= controlBatchMax {
+					if !flush() {
 						return
 					}
 				}
-				if msg.resume != nil {
-					if err := writeFileResumeInfo(controlStream, *msg.resume); err != nil {
-						setRecvErr(err)
-						return
-					}
+				if !timerActive {
+					timer.Reset(controlBatchFlushInterval)
+					timerActive = true
+				}
+			case <-timer.C:
+				timerActive = false
+				if !flush() {
+					return
 				}
 			}
 		}
@@ -2461,17 +2746,8 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 		stateMu.Unlock()
 
 		filePath := filepath.Join(baseDir, filepath.FromSlash(begin.RelPath))
-		parentDir := filepath.Dir(filePath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
-			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
-		}
-		f, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open output file %s: %w", filePath, err)
-		}
-		if err := f.Truncate(int64(begin.FileSize)); err != nil {
-			_ = f.Close()
-			return fmt.Errorf("failed to truncate output file %s: %w", filePath, err)
+		if err := fileCache.ensureFile(filePath, int64(begin.FileSize)); err != nil {
+			return fmt.Errorf("failed to prepare output file %s: %w", filePath, err)
 		}
 
 		totalChunks := uint32(0)
@@ -2485,7 +2761,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			chunkSize:   begin.ChunkSize,
 			totalChunks: totalChunks,
 			hashAlg:     begin.HashAlg,
-			file:        f,
+			fileCache:   fileCache,
 			remaining:   totalChunks,
 		}
 
@@ -2497,7 +2773,6 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			}
 			loaded, err := LoadOrCreateSidecarWithFallback(primary, fallback, item.ID, int64(begin.FileSize), begin.ChunkSize)
 			if err != nil {
-				_ = f.Close()
 				return fmt.Errorf("failed to load sidecar: %w", err)
 			}
 			globalSidecarFlushRegistry.add(loaded)
