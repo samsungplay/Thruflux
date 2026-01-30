@@ -10,31 +10,33 @@ https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 ## Benchmarks (rough comparison)
 
 The table below is **not meant to be a hard proof or a definitive ranking**.  
-Its purpose is to give a **rough, practical picture** of how thruflux compares to commonly used tools under realistic workloads.
+Its goal is to give a **rough, practical picture** of how thruflux compares to commonly used tools under realistic conditions.
 
-Performance depends heavily on network conditions, routing, and system load.  
+Performance depends heavily on network paths, routing, congestion, and system load.  
 Numbers shown are **median wall-clock times (5 runs)** on direct VPS-to-VPS transfers unless otherwise noted.
 
-I am **actively improving thruflux**, and this table will be **updated over time** as the implementation evolves.
+thruflux is under **active development**, and performance improvements are ongoing.  
+This section will be **updated over time** as the implementation evolves.
 
 ---
 
 ### Workloads tested
-- **Single large file:** 1 × 1 GiB
+
+- **Single large file:** 1 × 1 GiB  
 - **Many files:** 1000 × 1 MiB (native directory transfer where applicable)
 
 ---
 
 ### Summary
 
-| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Native multi-file | 1 GiB single file | 1000 × 1 MiB files |
-|---|---|---|---|---|---|---|---|
-| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ~26 s | ~35 s |
-| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ~83 s | ~95 s |
-| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ~61 s | ~11 min |
-| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ~29 s | ~40–90 s* |
-| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ~16 s† | ~2–3 min† |
-| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ~28 s | ~15 s |
+| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Multi-file support | Multi-receiver support | 1 GiB single file | 1000 × 1 MiB files |
+|---|---|---|---|---|---|---|---|---|
+| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ✅ | ~26 s | ~35 s |
+| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ✅ | ~83 s | ~95 s |
+| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ❌ | ~61 s | ~11 min |
+| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ❌ | ~29 s | ~40–90 s* |
+| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ❌ | ~16 s† | ~2–3 min† |
+| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ❌ | ~28 s | ~15 s |
 
 \* magic-wormhole bundles directories into a ZIP archive and automatically decompresses on receive.  
 The multi-file timing reflects **bundled transfer + unzip overhead**, not native file streaming.
@@ -43,21 +45,20 @@ The multi-file timing reflects **bundled transfer + unzip overhead**, not native
 
 ---
 
-### How to read this table
+### What this table shows
 
-- **thruflux vs P2P tools:** thruflux is significantly faster and more scalable than existing zero-setup P2P tools, especially for directories.
-- **thruflux vs scp/rsync:** scp and rsync can be very fast, but require pre-existing SSH connectivity and do not support NAT traversal or peer discovery.
-- **Predictability matters:** thruflux trades a small amount of peak throughput for **lower variance and better reliability** across real-world networks.
-- **Native directories:** thruflux streams files directly instead of bundling them, preserving file boundaries and enabling efficient resume.
+- **Strong P2P performance:** Among zero-setup, peer-to-peer tools, thruflux delivers substantially higher throughput, especially for directory transfers, while preserving NAT traversal and relay fallback.
+- **Near-infrastructure speeds without setup:** thruflux approaches the performance of scp and rsync while avoiding their assumptions about reachable hosts, SSH configuration, and stable network paths.
+- **Predictable behavior across networks:** Compared to single-stream tools, thruflux shows lower run-to-run variance, resulting in more consistent transfer times in real-world conditions.
+- **Native handling of real workloads:** Direct, native directory transfers and multi-receiver support reflect how users actually share files, without bundling or archive-based shortcuts.
+- **Clear tradeoffs, no hidden optimizations:** Where thruflux is slower, it is typically doing additional work (resumability, traversal, relay support). The table makes these tradeoffs explicit rather than masking them behind idealized benchmarks.
 
 ---
 
-### Note on ongoing work
+### Ongoing work
 
-thruflux is under active development.  
-Performance, scheduling, and resume logic are continuously being refined, and **future versions are expected to close remaining gaps further** while keeping the same zero-setup, P2P-first design.
-
-This benchmark section will be updated as improvements land.
+Performance tuning, scheduling, and resume behavior are actively being refined.  
+Future releases are expected to **further reduce overhead and close remaining gaps** while preserving thruflux’s zero-setup, P2P-first design.
 
 ## Why Thruflux?
 
