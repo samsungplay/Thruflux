@@ -57,13 +57,6 @@ The multi-file timing reflects **bundled transfer + unzip overhead**, not native
 - **Native handling of real workloads:** Direct, native directory transfers and multi-receiver support reflect how users actually share files, without bundling or archive-based shortcuts.
 - **Clear tradeoffs, no hidden optimizations:** Where thruflux is slower, it is typically doing additional work (resumability, traversal, relay support). The table makes these tradeoffs explicit rather than masking them behind idealized benchmarks.
 
----
-
-### Ongoing work
-
-Performance tuning, scheduling, and resume behavior are actively being refined.  
-Future releases are expected to **further reduce overhead and close remaining gaps** while preserving thruflux’s zero-setup, P2P-first design.
-
 ## Why Thruflux?
 
 The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
