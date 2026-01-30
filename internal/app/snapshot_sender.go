@@ -1393,7 +1393,6 @@ func (s *SnapshotSender) logSnapshotState() {
 
 func (s *SnapshotSender) transferOptions() transfer.Options {
 	opts := s.transferOpts
-	opts.Resume = true
 	opts.ParamSource = s.runtimeParams
 	return opts
 }

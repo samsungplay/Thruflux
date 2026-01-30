@@ -41,6 +41,7 @@ func Run(args []string) {
 	serverURL := ""
 	maxReceivers := 4
 	benchmark := false
+	noResume := false
 	verbose := false
 	totalConnections := 4
 	udpReadBufferBytes := 8 * 1024 * 1024
@@ -68,6 +69,10 @@ func Run(args []string) {
 		}
 		if arg == "--benchmark" {
 			benchmark = true
+			continue
+		}
+		if arg == "--no-resume" {
+			noResume = true
 			continue
 		}
 		if arg == "--verbose" {
@@ -224,6 +229,7 @@ func Run(args []string) {
 		TransferOpts: transfer.Options{
 			ChunkSize:     uint32(chunkSize),
 			ParallelFiles: totalStreams,
+			Resume:        !noResume,
 		},
 	}); err != nil {
 		logger.Error("snapshot sender failed", "error", err)
@@ -246,6 +252,7 @@ func printSenderUsage() {
 	fmt.Fprintln(termio.Stderr(), "  --test-turn                 only use TURN relay candidates (no direct probing)")
 	fmt.Fprintln(termio.Stderr(), "  --benchmark                 enable benchmark stats")
 	fmt.Fprintln(termio.Stderr(), "  --verbose                   enable verbose UI/logging")
+	fmt.Fprintln(termio.Stderr(), "  --no-resume                 disable resume handshake")
 	fmt.Fprintln(termio.Stderr(), "  --total-connections N       total QUIC connections (default 4)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-read-buffer-bytes N   UDP read buffer size (default 8388608)")
 	fmt.Fprintln(termio.Stderr(), "  --udp-write-buffer-bytes N  UDP write buffer size (default 8388608)")
