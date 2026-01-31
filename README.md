@@ -1,6 +1,8 @@
 # Thruflux (Open Beta)
 
-<img width="2048" height="2048" alt="Thruflux_Icon" src="https://github.com/user-attachments/assets/777f87ae-2802-45f4-b659-b8abb3e13ed9" />
+<p align="center">
+<img width="256" height="256" alt="Thruflux_Icon" src="https://github.com/user-attachments/assets/777f87ae-2802-45f4-b659-b8abb3e13ed9" />
+</p>
 
 Thruflux is a cross-platform, **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**.
 
