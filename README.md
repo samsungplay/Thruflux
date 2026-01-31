@@ -1,5 +1,4 @@
 # Thruflux
-**Status:** Thruflux is under heavy maintenance at the moment; Things will NOT work. Please wait for next release (v0.2.0) as huge improvements are coming.
 
 Thruflux is a **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows**.
 
