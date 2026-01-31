@@ -4,7 +4,7 @@ Thruflux is a cross-platform, **throughput-maximized, peer-to-peer** file transf
 
 It uses a lightweight signaling server (thruserv) for discovery and ICE negotiation, while the unified thru CLI lets you host or join transfers in seconds. Data flows directly between peers over QUIC for fast, resilient, and encrypted transfers.
 
-https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
+https://github.com/user-attachments/assets/7e5cfc77-1120-4971-be87-92a27c4b8ca5
 
 ## Quickstart 🚀
 
