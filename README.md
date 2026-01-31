@@ -6,6 +6,65 @@ It uses a lightweight signaling server (thruserv) for discovery and ICE negotiat
 
 https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
 
+## Quickstart 🚀
+
+**Install**
+
+**macOS / Linux (Homebrew)**
+
+```bash
+brew tap samsungplay/thruflux
+brew install thru
+```
+
+**Windows (Scoop)**
+
+```bash
+scoop bucket add thruflux https://github.com/samsungplay/scoop-thruflux
+scoop install thru
+```
+
+**Use**
+
+```bash
+# host files (defaults to https://bytepipe.app + bundled STUN list)
+thru host ./photos ./videos
+
+# share the join code with multiple peers
+thru join ABCDEFGH --out ./downloads
+```
+
+
+
+Multiple receivers can join the same code concurrently (subject to `--max-receivers` and server limits).
+
+## Why Thruflux?
+
+The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
+
+It is designed to **work out of the box**:
+- **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
+- **STUN defaults** so most users can connect immediately without extra setup.
+- **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
+
+If you need full control or higher limits, self‑host in minutes.
+
+**Heads-up**: The hosted TURN pool is shared under a fair-use policy, with bandwidth divided among active users. TURN relaying is only used on restrictive networks when direct peer-to-peer connectivity is not possible, but during periods of high usage it may reduce throughput. If you need guaranteed capacity, self-host a TURN server (coturn works great); the final section shows how to set it up.
+
+## Key features ✅
+
+- **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
+- **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
+- **First-class multi-file and directory transfers** — this is what thruflux is built for, fully leveraging QUIC’s parallel streams for sustained high throughput.
+- **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
+- **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
+- **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
+- **Clean, intuitive CLI**: `thru host` and `thru join` — nothing extra, nothing confusing, all bundled with sane defaults.
+- **Power-user flexibility**: bring your own STUN/TURN, fine-tune QUIC parameters, and customize dozens of advanced options.
+- **Automatic TURN/TURNS fallback**, ensuring reliable connectivity across restrictive networks for a true “just works” experience.
+- **Fully self-hostable**, giving you complete control, guaranteed capacity, and private deployments when you need them.
+
+
 ## Benchmarks (rough comparison)
 
 The table below is **not meant to be a hard proof or a definitive ranking**.  
@@ -54,62 +113,7 @@ This section will be **updated over time** as the implementation evolves.
 - **Native handling of real workloads:** Direct, native directory transfers and multi-receiver support reflect how users actually share files, without bundling or archive-based shortcuts.
 - **Clear tradeoffs, no hidden optimizations:** Where thruflux is slower, it is typically doing additional work (resumability, traversal, relay support). The table makes these tradeoffs explicit rather than masking them behind idealized benchmarks.
 
-## Why Thruflux?
 
-The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
-
-It is designed to **work out of the box**:
-- **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
-- **STUN defaults** so most users can connect immediately without extra setup.
-- **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
-
-If you need full control or higher limits, self‑host in minutes.
-
-**Heads-up**: The hosted TURN pool is shared under a fair-use policy, with bandwidth divided among active users. TURN relaying is only used on restrictive networks when direct peer-to-peer connectivity is not possible, but during periods of high usage it may reduce throughput. If you need guaranteed capacity, self-host a TURN server (coturn works great); the final section shows how to set it up.
-
-## Key features ✅
-
-- **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
-- **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
-- **First-class multi-file and directory transfers** — this is what thruflux is built for, fully leveraging QUIC’s parallel streams for sustained high throughput.
-- **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
-- **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
-- **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
-- **Clean, intuitive CLI**: `thru host` and `thru join` — nothing extra, nothing confusing, all bundled with sane defaults.
-- **Power-user flexibility**: bring your own STUN/TURN, fine-tune QUIC parameters, and customize dozens of advanced options.
-- **Automatic TURN/TURNS fallback**, ensuring reliable connectivity across restrictive networks for a true “just works” experience.
-- **Fully self-hostable**, giving you complete control, guaranteed capacity, and private deployments when you need them.
-
-
-## Quickstart 🚀
-
-**Install**
-
-**macOS / Linux (Homebrew)**
-
-```bash
-brew tap samsungplay/thruflux
-brew install thru
-```
-
-**Windows (Scoop)**
-
-```bash
-scoop bucket add thruflux https://github.com/samsungplay/scoop-thruflux
-scoop install thru
-```
-
-**Use**
-
-```bash
-# host files (defaults to https://bytepipe.app + bundled STUN list)
-thru host ./photos ./videos
-
-# share the join code with multiple peers
-thru join ABCDEFGH --out ./downloads
-```
-
-Multiple receivers can join the same code concurrently (subject to `--max-receivers` and server limits).
 
 ## Building the CLIs locally 🛠️
 
