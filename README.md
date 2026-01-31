@@ -343,12 +343,6 @@ thru join <join-code> [flags]
    - Clients do **not** need to specify `--turn-server` manually unless you want to override the TURN server provided by `thruserv`.
 
 
-## Contributing 🤝
-
-Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
-
-May TURN never be needed!
-
 ## TURN / TURNS usage
 
 Thruflux performs manual hole‑punching first and only falls back to TURN relay when needed.
@@ -375,3 +369,9 @@ Notes:
 - If thruserv is configured to provide TURN access via time-limited REST credentials (via --turn-server and --turn-static-auth-secret), clients do not need to specify a TURN server
 - `turn:` and `turn://` are equivalent; `turns:` / `turns://` enables TLS for the TURN control channel.
 - If you use `turns://`, the hostname in the URL must match the TURN server TLS certificate (unless `insecure=1` is set).
+
+## Contributing 🤝
+
+Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
+
+May TURN never be needed!
