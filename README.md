@@ -1,4 +1,4 @@
-# Thruflux
+# Thruflux (Open Beta)
 
 Thruflux is a **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows**.
 
