@@ -183,7 +183,7 @@ thru host <paths...> [flags]
 | `--test-turn`                                             | Only use TURN relay candidates (no direct probing).                                                                           |
 | `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`).                                                                        |
 | `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `256`).                                                                                    |
-| `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
+| `--chunk-size`                                            | Chunk size in bytes (default `4194304`).                                                                                           |
 | `--total-connections`                                     | Total QUIC connections (default `4`).                                                                                         |
 | `--total-streams`                                         | Total concurrent transfer streams (default `64`, `1..128`).                                                                    |
 | `--udp-read-buffer-bytes`                                 | UDP read buffer size (default `8388608`).                                                                                      |
