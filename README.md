@@ -90,7 +90,7 @@ This section will be **updated over time** as the implementation evolves.
 
 - **Single large file:** 1 × 1 GiB  
 - **Many files:** 1000 × 1 MiB (native directory transfer where applicable)
-
+- Measured via time command (the end-to-end duration of the transfer from beginning of the program to exit)
 ---
 
 ### Summary
