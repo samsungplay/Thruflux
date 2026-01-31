@@ -31,7 +31,7 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-const serverVersion = "v0.1.1"
+const serverVersion = "v0.2.0"
 
 func main() {
 	if hasHelpFlag(os.Args[1:]) {
