@@ -1,5 +1,7 @@
 # Thruflux (Open Beta)
 
+<img width="2048" height="2048" alt="Thruflux_Icon" src="https://github.com/user-attachments/assets/777f87ae-2802-45f4-b659-b8abb3e13ed9" />
+
 Thruflux is a cross-platform, **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**.
 
 It uses a lightweight signaling server (thruserv) for discovery and ICE negotiation, while the unified thru CLI lets you host or join transfers in seconds. Data flows directly between peers over QUIC for fast, resilient, and encrypted transfers.
