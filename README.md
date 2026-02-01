@@ -1,86 +1,14 @@
-# Thruflux
-**Status:** Thruflux is under heavy maintenance at the moment; Things will NOT work. Please wait for next release (v0.2.0) as huge improvements are coming.
+# Thruflux (Open Beta)
 
-Thruflux is a **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows**.
+<p align="center">
+<img width="256" height="256" alt="Thruflux_Icon" src="https://github.com/user-attachments/assets/777f87ae-2802-45f4-b659-b8abb3e13ed9" />
+</p>
+
+Thruflux is a cross-platform, **throughput-maximized, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**.
 
 It uses a lightweight signaling server (thruserv) for discovery and ICE negotiation, while the unified thru CLI lets you host or join transfers in seconds. Data flows directly between peers over QUIC for fast, resilient, and encrypted transfers.
 
-https://github.com/user-attachments/assets/db7aebf8-322f-44cc-8d4b-b3c6b765f994
-
-## Benchmarks (rough comparison)
-
-The table below is **not meant to be a hard proof or a definitive ranking**.  
-Its goal is to give a **rough, practical picture** of how thruflux compares to commonly used tools under realistic conditions.
-
-These results are **not intended to deride or diminish any of the tools listed**.  
-Each exists for good reasons, and more high-quality tools ultimately make the ecosystem better.  
-The goal here is simply to provide a **big-picture reference** so users can understand where thruflux fits.
-
-Performance depends heavily on network paths, routing, congestion, and system load.  
-Numbers shown are **median wall-clock times (5 runs)** on direct VPS-to-VPS transfers unless otherwise noted.
-
-thruflux is under **active development**, and performance improvements are ongoing.  
-This section will be **updated over time** as the implementation evolves.
-
----
-
-### Workloads tested
-
-- **Single large file:** 1 × 1 GiB  
-- **Many files:** 1000 × 1 MiB (native directory transfer where applicable)
-
----
-
-### Summary
-
-| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Multi-file support | Multi-receiver support | 1 GiB single file (min / median / max) | 1000 × 1 MiB files (min / median / max) |
-|---|---|---|---|---|---|---|---|---|
-| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ✅ | ~23 s / ~26 s / ~33 s | ~25 s / ~35 s / ~37 s |
-| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ✅ | ~81 s / ~83 s / ~89 s | ~84 s / ~95 s / ~101 s |
-| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ❌ | ~59 s / ~61 s / ~83 s | ~10.7 min / ~11.3 min / ~11.8 min |
-| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ❌ | ~26 s / ~29 s / ~38 s | ~41 s / ~75 s / ~94 s* |
-| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ❌ | ~13 s / ~16 s / ~36 s† | ~54 s / ~2.5 min / ~3.5 min† |
-| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ❌ | ~16 s / ~28 s / ~34 s | ~14 s / ~15 s / ~21 s |
-
-\* magic-wormhole bundles directories into a ZIP archive and automatically decompresses on receive; multi-file timings reflect bundled transfer + unzip overhead, not native file streaming.  
-† scp exhibits very high run-to-run variance due to its single TCP stream; values shown are typical ranges rather than best-case peaks.
-
----
-
-### What this table shows
-
-- **Strong P2P performance:** Among zero-setup, peer-to-peer tools, thruflux delivers substantially higher throughput, especially for directory transfers, while preserving NAT traversal and relay fallback.
-- **Near-infrastructure speeds without setup:** thruflux approaches the performance of scp and rsync while avoiding their assumptions about reachable hosts, SSH configuration, and stable network paths.
-- **Predictable behavior across networks:** Compared to single-stream tools, thruflux shows lower run-to-run variance, resulting in more consistent transfer times in real-world conditions.
-- **Native handling of real workloads:** Direct, native directory transfers and multi-receiver support reflect how users actually share files, without bundling or archive-based shortcuts.
-- **Clear tradeoffs, no hidden optimizations:** Where thruflux is slower, it is typically doing additional work (resumability, traversal, relay support). The table makes these tradeoffs explicit rather than masking them behind idealized benchmarks.
-
-## Why Thruflux?
-
-The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
-
-It is designed to **work out of the box**:
-- **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
-- **STUN defaults** so most users can connect immediately without extra setup.
-- **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
-
-If you need full control or higher limits, self‑host in minutes.
-
-**Heads-up**: The hosted TURN pool is shared under a fair-use policy, with bandwidth divided among active users. TURN relaying is only used on restrictive networks when direct peer-to-peer connectivity is not possible, but during periods of high usage it may reduce throughput. If you need guaranteed capacity, self-host a TURN server (coturn works great); the final section shows how to set it up.
-
-## Key features ✅
-
-- **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
-- **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
-- **First-class multi-file and directory transfers** — this is what thruflux is built for, fully leveraging QUIC’s parallel streams for sustained high throughput.
-- **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
-- **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
-- **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
-- **Clean, intuitive CLI**: `thru host` and `thru join` — nothing extra, nothing confusing, all bundled with sane defaults.
-- **Power-user flexibility**: bring your own STUN/TURN, fine-tune QUIC parameters, and customize dozens of advanced options.
-- **Automatic TURN/TURNS fallback**, ensuring reliable connectivity across restrictive networks for a true “just works” experience.
-- **Fully self-hostable**, giving you complete control, guaranteed capacity, and private deployments when you need them.
-
+https://github.com/user-attachments/assets/a2fd4d61-b079-479d-b241-93ec440d45e4
 
 ## Quickstart 🚀
 
@@ -110,7 +38,86 @@ thru host ./photos ./videos
 thru join ABCDEFGH --out ./downloads
 ```
 
+
+
 Multiple receivers can join the same code concurrently (subject to `--max-receivers` and server limits).
+
+## Why Thruflux?
+
+The vision is simple: **maximize throughput without sacrificing ease of use**. Thruflux dreams of a world where secure, large-scale file sharing is fast, simple, and freely available to everyone.
+
+It is designed to **work out of the box**:
+- **Default Signaling server** at `https://bytepipe.app` (capacity‑limited, but free to use. Currently supports up to ~2k concurrent users. May be expanded in the future).
+- **STUN defaults** so most users can connect immediately without extra setup.
+- **Default TURN relays** for tougher networks (shared ~900 Mbps bandwidth right now, may be expanded in the future).
+
+If you need full control or higher limits, self‑host in minutes.
+
+**Heads-up**: The hosted TURN pool is shared under a fair-use policy, with bandwidth divided among active users. TURN relaying is only used on restrictive networks when direct peer-to-peer connectivity is not possible, but during periods of high usage it may reduce throughput. If you need guaranteed capacity, self-host a TURN server (coturn works great); the final section shows how to set it up.
+
+## Key features ✅
+
+- **Aggressive UDP hole-punching** that maximizes direct peer-to-peer connectivity, even across the toughest NATs.
+- **High-performance, massively parallel QUIC over UDP transfers** delivering exceptional throughput with modern, built-in encryption.
+- **First-class multi-file and directory transfers** — this is what thruflux is built for, fully leveraging QUIC’s parallel streams for sustained high throughput.
+- **Transport-level security** bound directly to the secure join code and QUIC session, protecting against Man-in-the-Middle attacks by design.
+- **Native multi-receiver support**, allowing a single host to share with many peers simultaneously.
+- **Fully resumable transfers**, so large sends continue seamlessly even after interruptions.
+- **Clean, intuitive CLI**: `thru host` and `thru join` — nothing extra, nothing confusing, all bundled with sane defaults.
+- **Power-user flexibility**: bring your own STUN/TURN, fine-tune QUIC parameters, and customize dozens of advanced options.
+- **Automatic TURN/TURNS fallback**, ensuring reliable connectivity across restrictive networks for a true “just works” experience.
+- **Fully self-hostable**, giving you complete control, guaranteed capacity, and private deployments when you need them.
+
+
+## Benchmarks (rough comparison)
+
+The table below is **not meant to be a hard proof or a definitive ranking**.  
+Its goal is to give a **rough, practical picture** of how thruflux compares to commonly used tools under realistic conditions.
+
+These results are **not intended to deride or diminish any of the tools listed**.  
+Each exists for good reasons, and more high-quality tools ultimately make the ecosystem better.  
+The goal here is simply to provide a **big-picture reference** so users can understand where thruflux fits.
+
+Performance depends heavily on network paths, routing, congestion, and system load.  
+Numbers shown are **median wall-clock times (5 runs)** on direct VPS-to-VPS transfers unless otherwise noted.
+
+thruflux is under **active development**, and performance improvements are ongoing.  
+This section will be **updated over time** as the implementation evolves.
+
+---
+
+### Workloads tested
+
+- **Single large file:** 1 × 1 GiB  
+- **Many files:** 1000 × 1 MiB (native directory transfer where applicable)
+- Measured via time command (the end-to-end duration of the transfer from beginning of the program to exit)
+---
+
+### Summary
+
+| Tool | Transport | Zero-setup P2P | NAT traversal | Relay fallback | Multi-file support | Multi-receiver support | 1 GiB single file (min / median / max) | 1000 × 1 MiB files (min / median / max) |
+|---|---|---|---|---|---|---|---|---|
+| **thruflux (direct)** | QUIC (UDP) | ✅ | ✅ | — | ✅ | ✅ | ~23 s / ~26 s / ~33 s | ~25 s / ~35 s / ~37 s |
+| **thruflux (relayed)** | QUIC (UDP) | ✅ | ✅ | ✅ | ✅ | ✅ | ~81 s / ~83 s / ~89 s | ~84 s / ~95 s / ~101 s |
+| croc | TCP | ✅ | ✅ | ✅ | ⚠️ | ❌ | ~59 s / ~61 s / ~83 s | ~10.7 min / ~11.3 min / ~11.8 min |
+| magic-wormhole | TCP | ✅ | ✅ | ⚠️ | ❌ (bundled) | ❌ | ~26 s / ~29 s / ~38 s | ~41 s / ~75 s / ~94 s* |
+| scp | TCP (SSH) | ❌ | ❌ | ❌ | ❌ | ❌ | ~13 s / ~16 s / ~36 s† | ~54 s / ~2.5 min / ~3.5 min† |
+| rsync | TCP (SSH) | ❌ | ❌ | ❌ | ✅ | ❌ | ~16 s / ~28 s / ~34 s | ~14 s / ~15 s / ~21 s |
+
+\* magic-wormhole bundles directories into a ZIP archive and automatically decompresses on receive; multi-file timings reflect bundled transfer + unzip overhead, not native file streaming.  
+† scp exhibits very high run-to-run variance due to its single TCP stream; values shown are typical ranges rather than best-case peaks.
+
+---
+
+### What this table shows
+
+- **Strong P2P performance:** Among zero-setup, peer-to-peer tools, thruflux delivers substantially higher throughput, especially for directory transfers, while preserving NAT traversal and relay fallback.
+- **Near-infrastructure speeds without setup:** thruflux approaches the performance of scp and rsync while avoiding their assumptions about reachable hosts, SSH configuration, and stable network paths.
+- **Predictable behavior across networks:** Compared to single-stream tools, thruflux shows lower run-to-run variance, resulting in more consistent transfer times in real-world conditions.
+- **Native handling of real workloads:** Direct, native directory transfers and multi-receiver support reflect how users actually share files, without bundling or archive-based shortcuts.
+- **Clear tradeoffs, no hidden optimizations:** Where thruflux is slower, it is typically doing additional work (resumability, traversal, relay support). The table makes these tradeoffs explicit rather than masking them behind idealized benchmarks.
+
+
 
 ## Building the CLIs locally 🛠️
 
@@ -176,7 +183,7 @@ thru host <paths...> [flags]
 | `--test-turn`                                             | Only use TURN relay candidates (no direct probing).                                                                           |
 | `--quic-conn-window-bytes` / `--quic-stream-window-bytes` | QUIC flow‑control knobs (defaults `512MiB` / `64MiB`).                                                                        |
 | `--quic-max-incoming-streams`                             | Max QUIC incoming streams (default `256`).                                                                                    |
-| `--chunk-size`                                            | Chunk size in bytes (default auto).                                                                                           |
+| `--chunk-size`                                            | Chunk size in bytes (default `4194304`).                                                                                           |
 | `--total-connections`                                     | Total QUIC connections (default `4`).                                                                                         |
 | `--total-streams`                                         | Total concurrent transfer streams (default `64`, `1..128`).                                                                    |
 | `--udp-read-buffer-bytes`                                 | UDP read buffer size (default `8388608`).                                                                                      |
@@ -336,12 +343,6 @@ thru join <join-code> [flags]
    - Clients do **not** need to specify `--turn-server` manually unless you want to override the TURN server provided by `thruserv`.
 
 
-## Contributing 🤝
-
-Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
-
-May TURN never be needed!
-
 ## TURN / TURNS usage
 
 Thruflux performs manual hole‑punching first and only falls back to TURN relay when needed.
@@ -368,3 +369,9 @@ Notes:
 - If thruserv is configured to provide TURN access via time-limited REST credentials (via --turn-server and --turn-static-auth-secret), clients do not need to specify a TURN server
 - `turn:` and `turn://` are equivalent; `turns:` / `turns://` enables TLS for the TURN control channel.
 - If you use `turns://`, the hostname in the URL must match the TURN server TLS certificate (unless `insecure=1` is set).
+
+## Contributing 🤝
+
+Thruflux is community‑driven. Contributions, testing, and feedback help keep it fast, free, and accessible.
+
+May TURN never be needed!
