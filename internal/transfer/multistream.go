@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"hash/fnv"
 	"io"
 	"os"
@@ -848,6 +849,13 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 	resumeVerify := "none"
 	resumeVerifyTail := uint32(0)
 	hashAlg := HashAlgNone
+	if opts.HashAlg != "" {
+		parsed, err := parseHashAlg(opts.HashAlg)
+		if err != nil {
+			return err
+		}
+		hashAlg = parsed
+	}
 
 	controlStream, err := conn.OpenStream(ctx)
 	if err != nil {
@@ -1606,7 +1614,11 @@ func SendManifestMultiStream(ctx context.Context, conn Conn, rootPath string, m 
 					setErr(fmt.Errorf("short read for %s: got %d want %d", state.item.RelPath, n, chunkLen))
 					return
 				}
-				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), 0, buf[:n], opts.ProgressDeltaFn); err != nil {
+				var chunkCRC uint32
+				if state.hashAlg == HashAlgCRC32C {
+					chunkCRC = crc32.Checksum(buf[:n], crc32cTable)
+				}
+				if err := writeChunkFrame(transferCtx, s, state, chunkIndex, uint32(n), chunkCRC, buf[:n], opts.ProgressDeltaFn); err != nil {
 					bufPool.Put(buf)
 					setErr(err)
 					return
@@ -3376,6 +3388,7 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 			fileKey := binary.BigEndian.Uint64(header[0:8])
 			chunkIndex := binary.BigEndian.Uint32(header[8:12])
 			chunkLen := binary.BigEndian.Uint32(header[12:16])
+			chunkCRC := binary.BigEndian.Uint32(header[16:20])
 			chunkSize := binary.BigEndian.Uint32(header[20:24])
 			hashAlg := header[24]
 			flags := header[25]
@@ -3423,6 +3436,16 @@ func RecvManifestMultiStream(ctx context.Context, conn Conn, outDir string, opts
 				finalizeFile(state, false, err.Error())
 				reportDataErr(err)
 				return
+			}
+			if hashAlg == HashAlgCRC32C {
+				computedCRC := crc32.Checksum(buf[:chunkLen], crc32cTable)
+				if computedCRC != chunkCRC {
+					bufPool.Put(buf)
+					err := fmt.Errorf("chunk crc mismatch for %s: idx=%d got=%08x want=%08x", state.item.RelPath, chunkIndex, computedCRC, chunkCRC)
+					finalizeFile(state, false, err.Error())
+					reportDataErr(err)
+					return
+				}
 			}
 			startWriter(state)
 			chunk := recvChunkData{
