@@ -1,5 +1,4 @@
 # Thruflux (Open Alpha, Newly Re-written in C++)
-Status: Server is down temporarily due to unexpected glitch, please wait!
 
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
