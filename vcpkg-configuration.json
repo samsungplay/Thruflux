@@ -1,0 +1,8 @@
+{
+  "overlay-ports": [
+    "./dependency-overlay"
+  ],
+ "overlay-triplets" : [
+	"./triplet-overlay"
+]
+}

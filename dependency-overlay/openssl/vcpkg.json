@@ -1,0 +1,6 @@
+{
+  "name": "openssl",
+  "version-string": "boringssl-wrapper",
+  "description": "Replace openssl with boringssl",
+  "dependencies": [ "boringssl" ]
+}

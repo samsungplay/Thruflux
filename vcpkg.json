@@ -1,0 +1,33 @@
+{
+  "name": "thruflux",
+  "version-string": "1.0.0",
+  "builtin-baseline": "fb87e2bb3fe69e16c224989acb5a61349166c782",
+  "dependencies": [
+    "boost-asio",
+    "boost-url",
+    "cli11",
+    "dirent",
+    "fmt",
+    "glib",
+    "indicators",
+    {
+      "name": "ixwebsocket",
+      "default-features": false,
+      "features": [ "mbedtls" ]
+    },
+    "liblsquic",
+    "libnice",
+    "nlohmann-json",
+    "spdlog",
+    "uwebsockets",
+    "mbedtls",
+     "pkgconf",
+    "llfio"
+  ],
+  "overrides": [
+    {
+      "name": "openssl",
+      "version": "3.6.1#2"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+build
+out.bin
+random_file.bin
+build_intel_mac
+build_universal_mac
+build_linux
+build_windows
