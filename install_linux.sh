@@ -5,7 +5,7 @@ APP="thru"
 INSTALL_DIR="/usr/local/bin"
 TARGET="${INSTALL_DIR}/${APP}"
 UDP_BYTES=$((16 * 1024 * 1024))
-URL_LINUX_X64="https://github.com/samsungplay/Thruflux-C-/releases/download/v18/thru_linux"
+URL_LINUX_X64="https://github.com/samsungplay/Thruflux/releases/download/Beta/thru_linux"
 
 log()  { printf "%s\n" "$*"; }
 warn() { printf "warning: %s\n" "$*" >&2; }
