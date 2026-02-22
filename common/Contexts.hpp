@@ -90,7 +90,10 @@ namespace common {
                 return nullptr;
             }
 
-            auto opened = write ? llfio::file({},paths[id], llfio::file_handle::mode::write, llfio::file_handle::creation::if_needed) : llfio::file({}, paths[id]);
+            const auto native = paths[id].native();
+
+            auto opened = write ? llfio::file({},llfio::path_view(native), llfio::file_handle::mode::write, llfio::file_handle::creation::if_needed) : llfio::file({},
+                llfio::path_view(native));
             if (!opened) {
                 spdlog::error("Failed to open file id {} path='{}' err={}", id, paths[id].string(), opened.error().message());
                 return nullptr;
