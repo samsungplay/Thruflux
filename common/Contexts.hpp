@@ -38,7 +38,7 @@ namespace common {
         };
 
         size_t maxFds = 128;
-        std::vector<std::string> paths;
+        std::vector<std::filesystem::path> paths;
         std::vector<Entry> entries;
 
         int head = -1;
@@ -62,12 +62,12 @@ namespace common {
             openCount = 0;
         }
 
-        void registerPath(uint32_t id, std::string p) {
+        void registerPath(uint32_t id, std::filesystem::path path) {
             if (id >= paths.size()) {
                 paths.resize(id + 1);
                 entries.resize(id + 1);
             }
-            paths[id] = std::move(p);
+            paths[id] = std::move(path);
         }
 
         llfio::file_handle* acquire(uint32_t id, bool write = false) {
@@ -92,7 +92,7 @@ namespace common {
 
             auto opened = write ? llfio::file({},paths[id], llfio::file_handle::mode::write, llfio::file_handle::creation::if_needed) : llfio::file({}, paths[id]);
             if (!opened) {
-                spdlog::error("Failed to open file id {} path='{}' err={}", id, paths[id], opened.error().message());
+                spdlog::error("Failed to open file id {} path='{}' err={}", id, paths[id].string(), opened.error().message());
                 return nullptr;
             }
 

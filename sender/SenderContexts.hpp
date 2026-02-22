@@ -8,8 +8,8 @@ namespace sender {
     struct FileInfo {
         uint32_t id;
         uint64_t size;
-        std::string path;
-        std::string relativePath;
+        std::filesystem::path path;
+        std::filesystem::path relativePath;
     };
 
 
@@ -58,10 +58,8 @@ namespace sender {
                     auto size = std::filesystem::file_size(root);
                     totalSize += size;
                     filesCount++;
-                    auto u8 = root.filename().generic_u8string();
-                    const auto relativePath = std::string(u8.begin(), u8.end());
-                    u8 = root.generic_u8string();
-                    const auto absolutePath = std::string(u8.begin(), u8.end());
+                    const auto relativePath = root.filename();
+                    const auto absolutePath = root;
                     files.push_back({
                         0,
                         size,
@@ -82,11 +80,8 @@ namespace sender {
                             totalSize += size;
                             filesCount++;
 
-                            auto relative = entry.path().lexically_relative(root.parent_path());
-                            auto u8 = relative.generic_u8string();
-                            auto relativePath = std::string(u8.begin(), u8.end());
-                            u8 = entry.path().generic_u8string();
-                            auto absolutePath = std::string(u8.begin(), u8.end());
+                            auto relativePath = entry.path().lexically_relative(root.parent_path());
+                            auto absolutePath = entry.path();
                             files.push_back({
                                 0,
                                 size,
@@ -108,14 +103,16 @@ namespace sender {
             //sort for stable file ids (for resuming)
             std::sort(files.begin(), files.end(),
                       [](const FileInfo &a, const FileInfo &b) {
-                          return a.relativePath < b.relativePath;
+                          return a.relativePath.compare(b.relativePath) < 0;
                       });
             for (uint32_t i = 0; i < files.size(); ++i) {
                 files[i].id = i;
             }
 
             cache.reset(files.size());
-            for (auto &f: files) cache.registerPath(f.id, f.path);
+            for (auto &f: files) {
+                cache.registerPath(f.id, f.path);
+            }
 
 
             std::string stats = std::to_string(filesCount) + " file(s), " + common::Utils::sizeToReadableFormat(
@@ -129,23 +126,26 @@ namespace sender {
             totalExpectedFilesCount = filesCount;
 
             size_t estimatedSize = 4;
-            for (const auto &f: files) estimatedSize += (14 + f.relativePath.size());
+            for (const auto &f: files) {
+                estimatedSize += (14 + f.relativePath.generic_u8string().size());
+            }
             manifestBlob.clear();
             manifestBlob.resize(estimatedSize);
             uint8_t *p = manifestBlob.data();
-            const uint32_t count = static_cast<uint32_t>(files.size());
+            const auto count = static_cast<uint32_t>(files.size());
             memcpy(p, &count, 4);
             p += 4;
 
             for (const auto &f: files) {
-                uint16_t nl = static_cast<uint16_t>(f.relativePath.size());
+                auto u8 = f.relativePath.generic_u8string();
+                auto nl = static_cast<uint16_t>(u8.size());
                 memcpy(p, &f.id, 4);
                 p += 4;
                 memcpy(p, &f.size, 8);
                 p += 8;
                 memcpy(p, &nl, 2);
                 p += 2;
-                memcpy(p, f.relativePath.data(), nl);
+                memcpy(p, u8.data(), nl);
                 p += nl;
             }
 
@@ -186,7 +186,6 @@ namespace sender {
         uint64_t lastLogicalBytesMoved = 0;
         uint32_t resumeFileId = 0;
         uint64_t resumeOffset = 0;
-
     };
 
     struct SenderStreamContext {
@@ -212,7 +211,10 @@ namespace sender {
             }
             if (!fillBuf()) {
                 while (fileOffset >= fileSize) {
-                    if (!advanceFile()) { eofAll = true; return; }
+                    if (!advanceFile()) {
+                        eofAll = true;
+                        return;
+                    }
                 }
                 if (!fillBuf()) { eofAll = true; }
             }
