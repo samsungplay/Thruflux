@@ -49,6 +49,7 @@ int main(const int argc, char **argv) {
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError &e) {
+        spdlog::error("Could not parse command: {}", e.what());
         return app.exit(e);
     }
 
