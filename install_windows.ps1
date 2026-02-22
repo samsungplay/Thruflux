@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 
 $AppExe     = "thru.exe"
-$UrlX64     = "https://github.com/samsungplay/Thruflux/releases/download/Alpha/thru_windows.exe"
+$UrlX64     = "https://github.com/samsungplay/Thruflux/releases/download/0.3.1/thru_windows.exe"
 $InstallDir = Join-Path $env:LOCALAPPDATA "Thruflux\bin"
 $Target     = Join-Path $InstallDir $AppExe
 
