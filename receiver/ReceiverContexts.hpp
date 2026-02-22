@@ -73,12 +73,14 @@ namespace receiver {
                 uint16_t l;
                 memcpy(&l, p, 2);
                 p += 2;
-                std::string relativePath(reinterpret_cast<char *>(p), l);
+                std::string relativePathU8(reinterpret_cast<char *>(p), l);
                 p += l;
 
-                std::filesystem::path full = std::filesystem::path(ReceiverConfig::out) / relativePath;
-                std::filesystem::create_directories(full.parent_path());
-                cache.registerPath(id, full.string());
+                auto relativePath = std::filesystem::u8path(relativePathU8);
+
+                std::filesystem::path fullPath = std::filesystem::path(ReceiverConfig::out) / relativePath;
+                std::filesystem::create_directories(fullPath.parent_path());
+                cache.registerPath(id, fullPath);
             }
 
 
