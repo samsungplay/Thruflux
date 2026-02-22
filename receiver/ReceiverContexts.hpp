@@ -60,7 +60,6 @@ namespace receiver {
             cache.reset(count);
             p += 4;
             fileSizes.resize(count);
-            spdlog::info("Parsing outpath..");
             auto outPath = std::filesystem::u8path(ReceiverConfig::out);
 
             for (int i = 0; i < count; i++) {
@@ -84,13 +83,12 @@ namespace receiver {
                 std::filesystem::path fullPath = outPath / relativePath;
                 std::error_code ec;
                 std::filesystem::create_directories(fullPath.parent_path(),ec);
-                spdlog::info("Full path: {}", fullPath.string());
                 cache.registerPath(id, fullPath);
             }
 
 
             const auto manifestHash = common::Utils::fnv1a64(manifestBuf.data(), manifestBuf.size());
-            auto statePath = std::filesystem::path(ReceiverConfig::out) /
+            auto statePath = outPath /
                              (".thruflux_resume_" + std::to_string(manifestHash) + ".state");
             resumeStatePath = statePath.string();
 
