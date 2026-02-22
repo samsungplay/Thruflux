@@ -35,7 +35,7 @@ static void forceUtf8Locale() {
     SET_ENV("LC_ALL", "C");
 }
 
-int main(const int argc, char **argv) {
+int runApp(const int argc, char **argv) {
     forceUtf8Locale();
     CLI::App app{"Thruflux"};
     app.require_subcommand(1);
@@ -65,3 +65,39 @@ int main(const int argc, char **argv) {
 
     return 0;
 }
+
+#ifdef _WIN32
+
+static std::string wideToUtf8(const wchar_t* w) {
+    if (!w) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string s(n - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+int wmain(const int argc, wchar_t** wargv) {
+    std::vector<std::string> args;
+    args.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        args.push_back(wideToUtf8(wargv[i]));
+    }
+    std::vector<char*> argv8;
+    argv8.reserve(argc);
+    for (auto& s : args) {
+        argv8.push_back(s.data());
+    }
+
+    return runApp(argc, argv8.data());
+}
+
+#else
+
+int main(const int argc, char** argv) {
+    return runApp(argc,argv);
+}
+
+#endif
+
+
