@@ -50,7 +50,7 @@ namespace sender {
             };
 
             for (auto &path: paths) {
-                std::filesystem::path root(path);
+                auto root = std::filesystem::u8path(path);
                 if (!std::filesystem::exists(root)) {
                     continue;
                 }
