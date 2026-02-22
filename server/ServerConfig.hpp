@@ -3,7 +3,6 @@
 #include <CLI/App.hpp>
 #include <CLI/Validators.hpp>
 #include <string>
-#include <spdlog/spdlog.h>
 
 namespace server {
     class ServerConfig {

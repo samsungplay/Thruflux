@@ -119,7 +119,7 @@ namespace common {
                 Entry &e = entries[static_cast<size_t>(cur)];
                 if (e.open && e.fh.is_valid() && e.pinCount == 0) {
                     auto r = e.fh.close();
-                    if (!r) spdlog::warn("failed to close {} : {}", paths[cur], r.error().message());
+                    if (!r) spdlog::warn("failed to close {} : {}", paths[cur].string(), r.error().message());
 
                     e.fh = llfio::file_handle{};
                     e.open = false;
@@ -140,7 +140,7 @@ namespace common {
                 auto &e = entries[i];
                 if (e.open && e.fh.is_valid()) {
                     auto r = e.fh.close();
-                    if (!r) spdlog::warn("close('{}') failed: {}", paths[i], r.error().message());
+                    if (!r) spdlog::warn("close('{}') failed: {}", paths[i].string(), r.error().message());
                 }
                 e.fh = llfio::file_handle{};
                 e.open = false;
