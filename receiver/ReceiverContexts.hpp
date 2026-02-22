@@ -78,7 +78,7 @@ namespace receiver {
 
                 auto relativePath = std::filesystem::u8path(relativePathU8);
 
-                std::filesystem::path fullPath = std::filesystem::path(ReceiverConfig::out) / relativePath;
+                std::filesystem::path fullPath = std::filesystem::u8path(ReceiverConfig::out) / relativePath;
                 std::filesystem::create_directories(fullPath.parent_path());
                 cache.registerPath(id, fullPath);
             }

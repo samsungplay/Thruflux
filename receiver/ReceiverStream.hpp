@@ -431,7 +431,7 @@ namespace receiver {
 
 
         static void receiveTransfer(NiceAgent *agent, const guint streamId) {
-            spdlog::info("Saving to {}", ReceiverConfig::out);
+            spdlog::info("Saving to {}", std::filesystem::u8path(ReceiverConfig::out).string());
 
             setAndVerifySocketBuffers(agent, streamId, 1, ReceiverConfig::udpBufferBytes);
             NiceCandidate *local = nullptr, *remote = nullptr;
