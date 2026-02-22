@@ -60,6 +60,7 @@ namespace receiver {
             cache.reset(count);
             p += 4;
             fileSizes.resize(count);
+            spdlog::info("Parsing outpath..");
             auto outPath = std::filesystem::u8path(ReceiverConfig::out);
 
             for (int i = 0; i < count; i++) {
@@ -83,9 +84,7 @@ namespace receiver {
                 std::filesystem::path fullPath = outPath / relativePath;
                 std::error_code ec;
                 std::filesystem::create_directories(fullPath.parent_path(),ec);
-                if (ec) {
-                    spdlog::error("Failed to create directories with error: {}" , ec.message());
-                }
+                spdlog::info("Full path: {}", fullPath.string());
                 cache.registerPath(id, fullPath);
             }
 
