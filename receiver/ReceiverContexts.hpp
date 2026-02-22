@@ -81,7 +81,11 @@ namespace receiver {
                 auto relativePath = std::filesystem::u8path(relativePathU8);
 
                 std::filesystem::path fullPath = outPath / relativePath;
-                std::filesystem::create_directories(fullPath.parent_path());
+                std::error_code ec;
+                std::filesystem::create_directories(fullPath.parent_path(),ec);
+                if (ec) {
+                    spdlog::error("Failed to create directories with error: {}" , ec.message());
+                }
                 cache.registerPath(id, fullPath);
             }
 
