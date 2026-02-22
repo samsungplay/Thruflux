@@ -52,6 +52,7 @@ namespace receiver {
         };
 
 
+
         void parseManifest() {
             uint8_t *p = manifestBuf.data();
             uint32_t count;
@@ -59,6 +60,7 @@ namespace receiver {
             cache.reset(count);
             p += 4;
             fileSizes.resize(count);
+            auto outPath = std::filesystem::u8path(ReceiverConfig::out);
 
             for (int i = 0; i < count; i++) {
                 uint32_t id;
@@ -78,7 +80,7 @@ namespace receiver {
 
                 auto relativePath = std::filesystem::u8path(relativePathU8);
 
-                std::filesystem::path fullPath = std::filesystem::u8path(ReceiverConfig::out) / relativePath;
+                std::filesystem::path fullPath = outPath / relativePath;
                 std::filesystem::create_directories(fullPath.parent_path());
                 cache.registerPath(id, fullPath);
             }
