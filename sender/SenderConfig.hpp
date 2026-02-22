@@ -99,7 +99,7 @@ namespace sender {
                     ->check(CLI::Range(256 * 1024, 256 * 1024 * 1024))
                     ->capture_default_str();
 
-            app->set_version_flag("--version", "Thruflux v0.3.0");
+            app->set_version_flag("--version", "Thruflux v0.3.1");
 
             app->parse_complete_callback([&]() {
 
