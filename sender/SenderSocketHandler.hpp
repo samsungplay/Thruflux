@@ -15,11 +15,13 @@ namespace sender {
     class SenderSocketHandler {
     public:
         static void onConnect(ix::WebSocket &socket) {
-            spdlog::info("Signaling Server Cnnected: {}", SenderConfig::serverUrl);
+            spdlog::info("Signaling Server Connected: {}", SenderConfig::serverUrl);
+            ui::eventStream.sendMessage("connect_success", "");
         }
 
         static void onClose(ix::WebSocket &socket, std::string_view reason) {
             spdlog::info("Signaling Server Disconnected: {} Reason: {}", SenderConfig::serverUrl, reason);
+            ui::eventStream.sendMessage("disconnected", nlohmann::json{{"reason", reason}}.dump());
             common::ThreadManager::terminate();
         }
 
@@ -56,6 +58,7 @@ namespace sender {
                     const auto createdTransferPayload = j.get<common::CreatedTransferSessionPayload>();
                     spdlog::info("Secure Join Code Generated : \033[1;36m{}\033[0m", createdTransferPayload.joinCode);
                     spdlog::info("Run on receiver : thru join {}", createdTransferPayload.joinCode);
+                    ui::eventStream.sendMessage("join_code_issued", nlohmann::json{{"join_code", createdTransferPayload.joinCode}}.dump());
                     common::ThreadManager::postTask([createdTransferPayload = std::move(createdTransferPayload)]() {
                         senderPersistentContext.joinCode = createdTransferPayload.joinCode;
                     });

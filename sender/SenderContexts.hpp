@@ -4,6 +4,8 @@
 #include "../common/Stream.hpp"
 #include <llfio/llfio.hpp>
 
+#include "../ui/UIData.hpp"
+
 namespace sender {
     struct FileInfo {
         uint32_t id;
@@ -49,6 +51,8 @@ namespace sender {
                 indicators::option::ForegroundColor{indicators::Color::white}
             };
 
+            ui::eventStream.sendMessage("manifest_build_start","");
+
             for (auto &path: paths) {
                 auto root = std::filesystem::u8path(path);
                 if (!std::filesystem::exists(root)) {
@@ -72,6 +76,7 @@ namespace sender {
                                             common::Utils::sizeToReadableFormat(totalSize);
                         scannerBar.set_option(indicators::option::PostfixText{stats});
                         scannerBar.print_progress();
+                        ui::eventStream.sendMessage("manifest_build_progress", nlohmann::json{{"files_count", filesCount, "total_size", totalSize}}.dump());
                     }
                 } else {
                     for (const auto &entry: std::filesystem::recursive_directory_iterator(root)) {
@@ -94,6 +99,7 @@ namespace sender {
                                             totalSize);
                                 scannerBar.set_option(indicators::option::PostfixText{stats});
                                 scannerBar.print_progress();
+                                ui::eventStream.sendMessage("manifest_build_progress", nlohmann::json{{"files_count", filesCount, "total_size", totalSize}}.dump());
                             }
                         }
                     }
@@ -120,6 +126,7 @@ namespace sender {
             scannerBar.set_option(indicators::option::PrefixText{"Encoding Manifest... "});
             scannerBar.set_option(indicators::option::PostfixText{stats});
             scannerBar.print_progress();
+            ui::eventStream.sendMessage("manifest_encoding", "");
 
 
             totalExpectedBytes = totalSize;
@@ -158,6 +165,7 @@ namespace sender {
 
             scannerBar.set_option(indicators::option::PrefixText{"Manifest Sealed. "});
             scannerBar.mark_as_completed();
+            ui::eventStream.sendMessage("manifest_sealed","");
         }
 
 

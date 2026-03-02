@@ -12,6 +12,11 @@ namespace common {
     public:
         //run some task on the main thread
         static void postTask(std::function<void()> task) {
+
+            if (context_ == nullptr || mainLoop_ == nullptr) {
+                return;
+            }
+
             auto *taskPtr = new std::function(std::move(task));
 
             g_main_context_invoke_full(
@@ -44,6 +49,10 @@ namespace common {
             }
         }
 
+        static bool isBusy() {
+            return mainLoop_ != nullptr && g_main_loop_is_running(mainLoop_);
+        }
+
         static void runMainLoop() {
             context_ = g_main_context_default();
             mainLoop_ = g_main_loop_new(context_, FALSE);
@@ -51,6 +60,8 @@ namespace common {
             g_main_loop_quit(mainLoop_);
             g_main_loop_unref(mainLoop_);
             g_main_context_unref(context_);
+            mainLoop_ = nullptr;
+            context_ = nullptr;
         }
     };
 }
