@@ -8,6 +8,7 @@
 #include <indicators/multi_progress.hpp>
 #include <indicators/progress_bar.hpp>
 #include "../common/IceHandler.hpp"
+#include "../ui/UIData.hpp"
 
 namespace sender {
     class SenderStream : public common::Stream {
@@ -64,6 +65,9 @@ namespace sender {
                         if (p < 0) p = 0;
                         if (p > 100) p = 100;
 
+                        std::string connectionType = context->connectionType == common::ConnectionContext::RELAYED
+                                                         ? "relayed"
+                                                         : "direct";
                         std::string postfix;
                         postfix.reserve(256);
                         postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
@@ -76,13 +80,27 @@ namespace sender {
                         postfix += "/";
                         postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
                         postfix += " ";
-                        postfix += context->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
+                        postfix += connectionType;
 
                         progressBar.set_option(indicators::option::PostfixText{postfix});
                         progressBar.set_progress(p);
 
                         context->lastTime = now;
                         context->lastBytesMoved = context->bytesMoved;
+
+                        ui::UIProgressSnapshot snapshot{
+                            .receiverId = static_cast<SenderConnectionContext *>(context)->receiverId,
+                            .ewmaThroughput = ewmaThroughput,
+                            .bytesMoved = context->bytesMoved,
+                            .skippedBytes = context->skippedBytes,
+                            .percent = p,
+                            .filesMoved = context->filesMoved,
+                            .totalExpectedFilesCount = senderPersistentContext.totalExpectedFilesCount,
+                            .isRelayed = context->connectionType == common::ConnectionContext::RELAYED,
+                        };
+
+
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
                     }
 
                     return G_SOURCE_CONTINUE;
@@ -127,6 +145,20 @@ namespace sender {
                         progressBar.set_option(indicators::option::PostfixText{postfix});
                         progressBar.set_progress(100);
                         senderPersistentContext.progressBars.print_progress();
+
+                        ui::UIProgressSnapshot snapshot{
+                            .receiverId = ctx->receiverId,
+                            .ewmaThroughput = ctx->ewmaThroughput,
+                            .bytesMoved = ctx->bytesMoved,
+                            .skippedBytes = ctx->skippedBytes,
+                            .percent = 100,
+                            .filesMoved = ctx->filesMoved,
+                            .totalExpectedFilesCount = senderPersistentContext.totalExpectedFilesCount,
+                            .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
+                        };
+
+
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
                     } else {
                         auto &progressBar = senderPersistentContext.progressBars[ctx->progressBarIndex];
                         progressBar.set_option(
@@ -147,6 +179,21 @@ namespace sender {
                         progressBar.set_option(indicators::option::PostfixText{postfix});
                         progressBar.mark_as_completed();
                         senderPersistentContext.progressBars.print_progress();
+
+                        ui::UIProgressSnapshot snapshot{
+                            .receiverId = ctx->receiverId,
+                            .ewmaThroughput = ctx->ewmaThroughput,
+                            .bytesMoved = ctx->bytesMoved,
+                            .skippedBytes = ctx->skippedBytes,
+                            .percent = 100,
+                            .filesMoved = ctx->filesMoved,
+                            .totalExpectedFilesCount = senderPersistentContext.totalExpectedFilesCount,
+                            .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
+                            .hasError = true
+                        };
+
+
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
                     }
                     std::erase(connectionContexts_, ctx);
                     ctx->connection = nullptr;
@@ -403,7 +450,6 @@ namespace sender {
 
             NiceCandidate *local = nullptr, *remote = nullptr;
             if (!nice_agent_get_selected_pair(agent, streamId, 1, &local, &remote)) {
-                spdlog::error("QUIC connection not ready");
                 return;
             }
 

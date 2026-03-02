@@ -4,6 +4,8 @@
 #include "../receiver/ReceiverEntryPoint.hpp"
 #include <clocale>
 
+#include "../ui/UIEntryPoint.hpp"
+
 #ifdef _WIN32
     #include <windows.h>
     #define SET_ENV(name, value) _putenv_s(name, value)
@@ -42,6 +44,7 @@ int runApp(const int argc, char **argv) {
     CLI::App* host = app.add_subcommand("host", "Share files with other multiple receivers");
     CLI::App* join = app.add_subcommand("join", "Receive files from a host");
     CLI::App* server = app.add_subcommand("server", "Start a thruflux signaling server");
+    CLI::App* ui = app.add_subcommand("ui", "Start a thruflux local web interface for communication between UI and the engine");
     server::ServerConfig::initialize(server);
     sender::SenderConfig::initialize(host);
     receiver::ReceiverConfig::initialize(join);
@@ -53,13 +56,17 @@ int runApp(const int argc, char **argv) {
     }
 
     if (app.got_subcommand(host)) {
-        sender::run(argc, argv);
+        sender::run();
     }
     else if (app.got_subcommand(join)) {
-        receiver::run(argc, argv);
+        receiver::run();
     }
     else if (app.got_subcommand(server)) {
-        server::run(argc, argv);
+        server::run();
+    }
+    else if (app.got_subcommand(ui)) {
+        //start a local web interface
+        ui::run();
     }
 
     return 0;

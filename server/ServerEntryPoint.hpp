@@ -7,23 +7,23 @@
 #include "../common/Types.hpp"
 
 namespace server {
-    inline int run(const int argc, char **argv) {
-        server::TransferSessionStore::instance();
+    inline void run() {
+        TransferSessionStore::instance();
 
         auto *loop = reinterpret_cast<struct us_loop_t *>(uWS::Loop::get());
 
-        auto wsConnectionRateLimiter = common::TokenBucket(server::ServerConfig::wsConnectionsPerMin / 60.0, server::ServerConfig::wsConnectionsBurst);
-        auto wsMessageRateLimiter = common::TokenBucket(server::ServerConfig::wsMessagesPerSec, server::ServerConfig::wsMessagesBurst);
-        std::atomic<int> wsConnections{0};
+        auto wsConnectionRateLimiter = common::TokenBucket(ServerConfig::wsConnectionsPerMin / 60.0, ServerConfig::wsConnectionsBurst);
+        auto wsMessageRateLimiter = common::TokenBucket(ServerConfig::wsMessagesPerSec, ServerConfig::wsMessagesBurst);
+        std::atomic wsConnections{0};
 
         us_timer_t *timer = us_create_timer(loop, 0, 0);
         us_timer_set(timer, [](us_timer_t *t) {
-            server::TransferSessionStore::instance().cleanExpiredSessions();
+            TransferSessionStore::instance().cleanExpiredSessions();
         }, 5000, 5000);
 
         uWS::App().ws<common::SocketUserData>("/ws", {
-                                                  .maxPayloadLength = server::ServerConfig::maxMessageBytes,
-                                                  .idleTimeout = server::ServerConfig::wsIdleTimeout,
+                                                  .maxPayloadLength = ServerConfig::maxMessageBytes,
+                                                  .idleTimeout = ServerConfig::wsIdleTimeout,
                                                   .upgrade = [&wsConnectionRateLimiter](auto *res, auto *req, auto *context) {
 
                                                       if (!wsConnectionRateLimiter.allow()) {
@@ -49,11 +49,11 @@ namespace server {
                                                   },
                                                   .open = [&wsConnections](auto *ws) {
                                                       const auto current = wsConnections.fetch_add(1) + 1;
-                                                      if (current > server::ServerConfig::maxWsConnections) {
+                                                      if (current > ServerConfig::maxWsConnections) {
                                                           ws->end(4000,"Server reached max number of concurrent websocket connections. Please try again later.");
                                                           return;
                                                       }
-                                                      server::ServerSocketHandler::onConnect(ws);
+                                                      ServerSocketHandler::onConnect(ws);
                                                   },
                                                   .message = [&wsMessageRateLimiter](auto *ws, std::string_view message, uWS::OpCode op) {
                                                       if (op != uWS::OpCode::TEXT) return;
@@ -61,21 +61,20 @@ namespace server {
                                                           ws->end(4000,"Server reached max number of websocket messages per second. Please try again later.");
                                                           return;
                                                       }
-                                                      server::ServerSocketHandler::onMessage(ws, message);
+                                                      ServerSocketHandler::onMessage(ws, message);
                                                   },
                                                   .close = [&wsConnections](auto *ws, int code, std::string_view message) {
                                                       wsConnections.fetch_sub(1);
-                                                      server::ServerSocketHandler::onClose(ws, message);
+                                                      ServerSocketHandler::onClose(ws, message);
                                                   }
                                               })
-                .listen(server::ServerConfig::port, [](const us_listen_socket_t *socket) {
+                .listen(ServerConfig::port, [](const us_listen_socket_t *socket) {
                     if (socket) {
-                        spdlog::info("Server successfully started on port {}", server::ServerConfig::port);
+                        spdlog::info("Server successfully started on port {}", ServerConfig::port);
                     } else {
-                        spdlog::info("Server failed to start on port {}", server::ServerConfig::port);
+                        spdlog::info("Server failed to start on port {}", ServerConfig::port);
                     }
                 })
                 .run();
-        return 0;
     }
 }

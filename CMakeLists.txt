@@ -17,7 +17,7 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-
+find_package(httplib CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(unofficial-uwebsockets CONFIG REQUIRED)
@@ -62,6 +62,8 @@ add_executable(thru
         common/ThreadManager.hpp
         common/Contexts.hpp
         common/Stream.hpp
+        ui/UIEntryPoint.hpp
+        ui/UIData.hpp
 )
 
 target_link_libraries(thru PRIVATE
@@ -78,4 +80,5 @@ target_link_libraries(thru PRIVATE
         MbedTLS::mbedtls
         PkgConfig::NICE
         llfio::sl
+        httplib::httplib
 )

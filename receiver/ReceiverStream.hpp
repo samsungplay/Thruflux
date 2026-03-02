@@ -11,6 +11,7 @@
 #include "../common/Contexts.hpp"
 #include "../common/Stream.hpp"
 #include <llfio/llfio.hpp>
+#include "../ui/UIData.hpp"
 
 namespace receiver {
     class ReceiverStream : public common::Stream {
@@ -64,7 +65,13 @@ namespace receiver {
                 if (p < 0) p = 0;
                 if (p > 100) p = 100;
 
+
+                std::string connectionType = receiverConnectionContext->connectionType ==
+                                             common::ConnectionContext::RELAYED
+                                                 ? "relayed"
+                                                 : "direct";
                 std::string postfix;
+
                 postfix.reserve(256);
                 postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
                 postfix += "/s received ";
@@ -78,15 +85,27 @@ namespace receiver {
                 postfix += "/";
                 postfix += std::to_string(receiverConnectionContext->totalExpectedFilesCount);
                 postfix += " ";
-                postfix += receiverConnectionContext->connectionType == common::ConnectionContext::RELAYED
-                               ? "relayed"
-                               : "direct";
+                postfix += connectionType;
                 receiverConnectionContext->progressBar->set_option(indicators::option::PostfixText{postfix});
                 receiverConnectionContext->progressBar->set_progress(p);;
                 receiverConnectionContext->lastTime = now;
                 receiverConnectionContext->lastBytesMoved = receiverConnectionContext->bytesMoved;
 
                 receiverConnectionContext->maybeSaveResumeState();
+
+                ui::UIProgressSnapshot snapshot{
+                    .ewmaThroughput = ewmaThroughput,
+                    .bytesMoved = receiverConnectionContext->bytesMoved,
+                    .skippedBytes = receiverConnectionContext->skippedBytes,
+                    .percent =  p,
+                    .filesMoved = receiverConnectionContext->filesMoved,
+                    .totalExpectedFilesCount = receiverConnectionContext->totalExpectedFilesCount,
+                    .isRelayed = receiverConnectionContext->connectionType == common::ConnectionContext::RELAYED,
+                };
+
+
+                ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+
                 return G_SOURCE_CONTINUE;
             }, nullptr, nullptr);
         }
@@ -166,6 +185,20 @@ namespace receiver {
                         //delete resume state
                         std::error_code ec;
                         std::filesystem::remove(ctx->resumeStatePath, ec);
+
+                        ui::UIProgressSnapshot snapshot{
+                            .ewmaThroughput = ctx->ewmaThroughput,
+                            .bytesMoved = ctx->bytesMoved,
+                            .skippedBytes = ctx->skippedBytes,
+                            .percent =  100,
+                            .filesMoved = ctx->filesMoved,
+                            .totalExpectedFilesCount = ctx->totalExpectedFilesCount,
+                            .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
+                        };
+
+
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+
                     } else {
                         const auto &progressBar = ctx->progressBar;
                         std::string postfix;
@@ -186,6 +219,20 @@ namespace receiver {
                             indicators::option::ForegroundColor{indicators::Color::red});
                         progressBar->mark_as_completed();
                         ctx->maybeSaveResumeState(true);
+
+                        ui::UIProgressSnapshot snapshot{
+                            .ewmaThroughput = ctx->ewmaThroughput,
+                            .bytesMoved = ctx->bytesMoved,
+                            .skippedBytes = ctx->skippedBytes,
+                            .percent =  static_cast<int>(progressBar->current()),
+                            .filesMoved = ctx->filesMoved,
+                            .totalExpectedFilesCount = ctx->totalExpectedFilesCount,
+                            .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
+                            .hasError = true
+                        };
+
+
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
                     }
                     ctx->connection = nullptr;
                 }
@@ -240,6 +287,7 @@ namespace receiver {
                             if (now - connCtx->lastManifestProgressPrint >= std::chrono::milliseconds(250)) {
                                 connCtx->manifestProgressBar.print_progress();
                                 connCtx->lastManifestProgressPrint = now;
+                                ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete", false}}.dump());
                             }
                         } else if (nr == 0) {
                             std::string postfix;
@@ -248,6 +296,7 @@ namespace receiver {
                             postfix += " received";
                             connCtx->manifestProgressBar.set_option(indicators::option::PostfixText(postfix));
                             connCtx->manifestProgressBar.mark_as_completed();
+                            ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete",true}}.dump());
 
                             connCtx->parseManifest();
                             connCtx->manifestParsed = true;
@@ -262,6 +311,7 @@ namespace receiver {
                                 break;
                             }
                             spdlog::error("Unexpected error while reading manifest stream: error code={}", errno);
+                            ui::eventStream.sendMessage("manifest_receive_error", nlohmann::json{{"code", errno}}.dump());
                             break;
                         }
                     }
@@ -382,6 +432,7 @@ namespace receiver {
             .on_hsk_done = [](lsquic_conn_t *c, enum lsquic_hsk_status status) {
                 if (status == LSQ_HSK_OK || status == LSQ_HSK_RESUMED_OK) {
                     spdlog::info("QUIC Handshake Successful");
+                    ui::eventStream.sendMessage("quic_handshake_success","");
                 }
             }
         };
@@ -437,6 +488,7 @@ namespace receiver {
             NiceCandidate *local = nullptr, *remote = nullptr;
             if (!nice_agent_get_selected_pair(agent, streamId, 1, &local, &remote)) {
                 spdlog::error("ICE not ready for QUIC connection");
+                ui::eventStream.sendMessage("ice_not_ready", "");
                 return;
             }
 
