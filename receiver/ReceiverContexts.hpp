@@ -96,7 +96,7 @@ namespace receiver {
             resumeOffset = 0;
 
             if (!ReceiverConfig::overwrite) {
-                //more robust way: calculate resume state from disk instead of manual resume sidecar files
+                //calculate resume state from disk instead of manual resume sidecar files
 
                 uint64_t resumedBytes = 0;
                 for (uint32_t id = 0; id < count; id++) {
