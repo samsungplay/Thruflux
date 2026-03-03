@@ -4,6 +4,7 @@
 #include "../receiver/ReceiverEntryPoint.hpp"
 #include <clocale>
 
+#include "../ui/UIConfig.hpp"
 #include "../ui/UIEntryPoint.hpp"
 
 #ifdef _WIN32
@@ -48,6 +49,7 @@ int runApp(const int argc, char **argv) {
     server::ServerConfig::initialize(server);
     sender::SenderConfig::initialize(host);
     receiver::ReceiverConfig::initialize(join);
+    ui::UIConfig::initialize(ui);
 
     try {
         app.parse(argc, argv);

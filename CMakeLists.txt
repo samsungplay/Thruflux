@@ -64,6 +64,7 @@ add_executable(thru
         common/Stream.hpp
         ui/UIEntryPoint.hpp
         ui/UIData.hpp
+        ui/UIConfig.hpp
 )
 
 target_link_libraries(thru PRIVATE

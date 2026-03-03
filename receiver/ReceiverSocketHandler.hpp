@@ -17,12 +17,12 @@ namespace receiver {
     public:
         static void onConnect(ix::WebSocket &socket) {
             spdlog::info("Signaling Server Connected: {}", ReceiverConfig::serverUrl);
-            ui::eventStream.sendMessage("connect_success","");
+            ui::eventStream.sendMessage("connect_success");
         }
 
         static void onClose(ix::WebSocket &socket, std::string_view reason) {
             spdlog::info("Signaling Server Disconnected: {} Reason: {}", ReceiverConfig::serverUrl, reason);
-            ui::eventStream.sendMessage("disconnected",nlohmann::json{{"reason", reason}}.dump());
+            ui::eventStream.sendMessage("disconnected",nlohmann::json{{"reason", reason}});
             common::ThreadManager::terminate();
         }
 
@@ -49,13 +49,13 @@ namespace receiver {
 
                                                                           if (result.serializedCandidates.empty()) {
                                                                             spdlog::error("P2P Negotiation failed: Route unavailable.");
-                                                                              ui::eventStream.sendMessage("p2p_failed", "");
+                                                                              ui::eventStream.sendMessage("p2p_failed");
                                                                               common::ThreadManager::terminate();
                                                                               return;
                                                                           }
 
                                                                           spdlog::info("Joining session : {}", ReceiverConfig::joinCode);
-                                                                          ui::eventStream.sendMessage("joining_session","");
+                                                                          ui::eventStream.sendMessage("joining_session");
                                                                           socket.send(nlohmann::json(
                                                                               common::JoinTransferSessionPayload{
                                                                                   .candidatesResult = std::move(result),
@@ -66,7 +66,7 @@ namespace receiver {
                 } else if (type == "accept_transfer_session_payload") {
                     const auto acceptedTransferSessionPayload = j.get<common::AcceptTransferSessionPayload>();
                     spdlog::info("Access verified. Starting P2P negotiation...");
-                    ui::eventStream.sendMessage("p2p_start", "");
+                    ui::eventStream.sendMessage("p2p_start");
                     common::ThreadManager::postTask([payload = std::move(acceptedTransferSessionPayload), &socket]() {
                         common::IceHandler::establishConnection(
                             false, "",
@@ -76,7 +76,7 @@ namespace receiver {
                                 if (success) {
                                     spdlog::info(
                                         "P2P Route Established.");
-                                    ui::eventStream.sendMessage("p2p_success", "");
+                                    ui::eventStream.sendMessage("p2p_success");
                                     ReceiverStream::receiveTransfer(
                                         agent, streamId);
                                     socket.send(nlohmann::json(common::AcknowledgeTransferSessionPayload{
@@ -84,7 +84,7 @@ namespace receiver {
                                     }).dump());
                                 } else {
                                     spdlog::error("P2P Negotiation failed: Route unavailable.");
-                                    ui::eventStream.sendMessage("p2p_failed", "");
+                                    ui::eventStream.sendMessage("p2p_failed");
                                     common::ThreadManager::terminate();
                                 }
                             });

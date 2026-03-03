@@ -51,7 +51,7 @@ namespace sender {
                 indicators::option::ForegroundColor{indicators::Color::white}
             };
 
-            ui::eventStream.sendMessage("manifest_build_start","");
+            ui::eventStream.sendMessage("manifest_build_start");
 
             for (auto &path: paths) {
                 auto root = std::filesystem::u8path(path);
@@ -72,11 +72,16 @@ namespace sender {
                     });
 
                     if (filesCount % 1000 == 0) {
-                        std::string stats = std::to_string(filesCount) + " file(s), " +
-                                            common::Utils::sizeToReadableFormat(totalSize);
-                        scannerBar.set_option(indicators::option::PostfixText{stats});
-                        scannerBar.print_progress();
-                        ui::eventStream.sendMessage("manifest_build_progress", nlohmann::json{{"files_count", filesCount, "total_size", totalSize}}.dump());
+                        if (!ui::isEnabled.load()) {
+                            std::string stats = std::to_string(filesCount) + " file(s), " +
+                                                common::Utils::sizeToReadableFormat(totalSize);
+                            scannerBar.set_option(indicators::option::PostfixText{stats});
+                            scannerBar.print_progress();
+                        }
+                        ui::eventStream.sendMessage("manifest_build_progress",
+                                                    nlohmann::json{
+                                                        {"files_count", filesCount, "total_size", totalSize}
+                                                    });
                     }
                 } else {
                     for (const auto &entry: std::filesystem::recursive_directory_iterator(root)) {
@@ -94,12 +99,18 @@ namespace sender {
                                 relativePath
                             });
                             if (filesCount % 1000 == 0) {
-                                std::string stats =
-                                        std::to_string(filesCount) + " file(s), " + common::Utils::sizeToReadableFormat(
-                                            totalSize);
-                                scannerBar.set_option(indicators::option::PostfixText{stats});
-                                scannerBar.print_progress();
-                                ui::eventStream.sendMessage("manifest_build_progress", nlohmann::json{{"files_count", filesCount, "total_size", totalSize}}.dump());
+                                if (!ui::isEnabled.load()) {
+                                    std::string stats =
+                                            std::to_string(filesCount) + " file(s), " +
+                                            common::Utils::sizeToReadableFormat(
+                                                totalSize);
+                                    scannerBar.set_option(indicators::option::PostfixText{stats});
+                                    scannerBar.print_progress();
+                                }
+                                ui::eventStream.sendMessage("manifest_build_progress", nlohmann::json{
+                                                                {"files_count", filesCount},
+                                                                {"total_size", totalSize}
+                                                            });
                             }
                         }
                     }
@@ -120,13 +131,15 @@ namespace sender {
                 cache.registerPath(f.id, f.path);
             }
 
+            if (!ui::isEnabled.load()) {
+                std::string stats = std::to_string(filesCount) + " file(s), " + common::Utils::sizeToReadableFormat(
+                                        totalSize);
+                scannerBar.set_option(indicators::option::PrefixText{"Encoding Manifest... "});
+                scannerBar.set_option(indicators::option::PostfixText{stats});
+                scannerBar.print_progress();
+            }
 
-            std::string stats = std::to_string(filesCount) + " file(s), " + common::Utils::sizeToReadableFormat(
-                                    totalSize);
-            scannerBar.set_option(indicators::option::PrefixText{"Encoding Manifest... "});
-            scannerBar.set_option(indicators::option::PostfixText{stats});
-            scannerBar.print_progress();
-            ui::eventStream.sendMessage("manifest_encoding", "");
+            ui::eventStream.sendMessage("manifest_encoding");
 
 
             totalExpectedBytes = totalSize;
@@ -163,9 +176,12 @@ namespace sender {
                 totalChunks += common::Utils::ceilDiv(f.size, common::CHUNK_SIZE);
             }
 
-            scannerBar.set_option(indicators::option::PrefixText{"Manifest Sealed. "});
-            scannerBar.mark_as_completed();
-            ui::eventStream.sendMessage("manifest_sealed","");
+            if (ui::isEnabled.load()) {
+                scannerBar.set_option(indicators::option::PrefixText{"Manifest Sealed. "});
+                scannerBar.mark_as_completed();
+            }
+
+            ui::eventStream.sendMessage("manifest_sealed", nlohmann::json{{"files_count", filesCount}, {"total_size", totalSize}});
         }
 
 

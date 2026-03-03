@@ -91,7 +91,6 @@ namespace receiver {
                 receiverConnectionContext->lastTime = now;
                 receiverConnectionContext->lastBytesMoved = receiverConnectionContext->bytesMoved;
 
-                receiverConnectionContext->maybeSaveResumeState();
 
                 ui::UIProgressSnapshot snapshot{
                     .ewmaThroughput = ewmaThroughput,
@@ -104,7 +103,7 @@ namespace receiver {
                 };
 
 
-                ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
 
                 return G_SOURCE_CONTINUE;
             }, nullptr, nullptr);
@@ -163,25 +162,29 @@ namespace receiver {
                 lsquic_conn_set_ctx(c, nullptr);
                 if (ctx) {
                     if (ctx->complete) {
-                        const auto &progressBar = ctx->progressBar;
-                        progressBar->set_option(
-                            indicators::option::ForegroundColor{indicators::Color::green});
 
-                        std::string postfix;
-                        postfix.reserve(256);
-                        postfix += " received ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
-                        postfix += " resumed ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
-                        postfix += " files ";
-                        postfix += std::to_string(ctx->filesMoved);
-                        postfix += "/";
-                        postfix += std::to_string(ctx->totalExpectedFilesCount);
-                        postfix += " ";
-                        postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
-                        postfix += " [DONE]";
-                        progressBar->set_option(indicators::option::PostfixText{postfix});
-                        progressBar->set_progress(100);
+                        if (!ui::isEnabled.load()) {
+                            const auto &progressBar = ctx->progressBar;
+                            progressBar->set_option(
+                                indicators::option::ForegroundColor{indicators::Color::green});
+
+                            std::string postfix;
+                            postfix.reserve(256);
+                            postfix += " received ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += " resumed ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
+                            postfix += " files ";
+                            postfix += std::to_string(ctx->filesMoved);
+                            postfix += "/";
+                            postfix += std::to_string(ctx->totalExpectedFilesCount);
+                            postfix += " ";
+                            postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
+                            postfix += " [DONE]";
+                            progressBar->set_option(indicators::option::PostfixText{postfix});
+                            progressBar->set_progress(100);
+                        }
+
                         //delete resume state
                         std::error_code ec;
                         std::filesystem::remove(ctx->resumeStatePath, ec);
@@ -197,34 +200,41 @@ namespace receiver {
                         };
 
 
-                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
 
                     } else {
-                        const auto &progressBar = ctx->progressBar;
-                        std::string postfix;
-                        postfix.reserve(256);
-                        postfix += " received ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
-                        postfix += " resumed ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
-                        postfix += " files ";
-                        postfix += std::to_string(ctx->filesMoved);
-                        postfix += "/";
-                        postfix += std::to_string(ctx->totalExpectedFilesCount);
-                        postfix += " ";
-                        postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
-                        postfix += " [FAILED]";
-                        progressBar->set_option(indicators::option::PostfixText(postfix));
-                        progressBar->set_option(
-                            indicators::option::ForegroundColor{indicators::Color::red});
-                        progressBar->mark_as_completed();
-                        ctx->maybeSaveResumeState(true);
+
+                        if (!ui::isEnabled.load()) {
+                            const auto &progressBar = ctx->progressBar;
+                            std::string postfix;
+                            postfix.reserve(256);
+                            postfix += " received ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += " resumed ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
+                            postfix += " files ";
+                            postfix += std::to_string(ctx->filesMoved);
+                            postfix += "/";
+                            postfix += std::to_string(ctx->totalExpectedFilesCount);
+                            postfix += " ";
+                            postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
+                            postfix += " [FAILED]";
+                            progressBar->set_option(indicators::option::PostfixText(postfix));
+                            progressBar->set_option(
+                                indicators::option::ForegroundColor{indicators::Color::red});
+                            progressBar->mark_as_completed();
+                        }
+
+                        const double percent = (ctx->totalExpectedBytes <= 0)
+                                            ? 0.0
+                                            : static_cast<double>(ctx->bytesMoved) / ctx->totalExpectedBytes * 100.0;
+                        int p = static_cast<int>(std::lround(percent));
 
                         ui::UIProgressSnapshot snapshot{
                             .ewmaThroughput = ctx->ewmaThroughput,
                             .bytesMoved = ctx->bytesMoved,
                             .skippedBytes = ctx->skippedBytes,
-                            .percent =  static_cast<int>(progressBar->current()),
+                            .percent =  p,
                             .filesMoved = ctx->filesMoved,
                             .totalExpectedFilesCount = ctx->totalExpectedFilesCount,
                             .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
@@ -232,7 +242,7 @@ namespace receiver {
                         };
 
 
-                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
                     }
                     ctx->connection = nullptr;
                 }
@@ -285,18 +295,24 @@ namespace receiver {
                             connCtx->manifestProgressBar.set_option(indicators::option::PostfixText(postfix));
                             const auto now = std::chrono::steady_clock::now();
                             if (now - connCtx->lastManifestProgressPrint >= std::chrono::milliseconds(250)) {
-                                connCtx->manifestProgressBar.print_progress();
+                                if (!ui::isEnabled.load()) {
+                                    connCtx->manifestProgressBar.print_progress();
+                                }
                                 connCtx->lastManifestProgressPrint = now;
-                                ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete", false}}.dump());
+                                ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete", false}});
                             }
                         } else if (nr == 0) {
-                            std::string postfix;
-                            postfix.reserve(64);
-                            postfix += common::Utils::sizeToReadableFormat((double) connCtx->manifestBuf.size());
-                            postfix += " received";
-                            connCtx->manifestProgressBar.set_option(indicators::option::PostfixText(postfix));
-                            connCtx->manifestProgressBar.mark_as_completed();
-                            ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete",true}}.dump());
+
+                            if (!ui::isEnabled.load()) {
+                                std::string postfix;
+                                postfix.reserve(64);
+                                postfix += common::Utils::sizeToReadableFormat((double) connCtx->manifestBuf.size());
+                                postfix += " received";
+                                connCtx->manifestProgressBar.set_option(indicators::option::PostfixText(postfix));
+                                connCtx->manifestProgressBar.mark_as_completed();
+                            }
+
+                            ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete",true}});
 
                             connCtx->parseManifest();
                             connCtx->manifestParsed = true;
@@ -311,7 +327,7 @@ namespace receiver {
                                 break;
                             }
                             spdlog::error("Unexpected error while reading manifest stream: error code={}", errno);
-                            ui::eventStream.sendMessage("manifest_receive_error", nlohmann::json{{"code", errno}}.dump());
+                            ui::eventStream.sendMessage("manifest_receive_error", nlohmann::json{{"code", errno}});
                             break;
                         }
                     }
@@ -432,7 +448,7 @@ namespace receiver {
             .on_hsk_done = [](lsquic_conn_t *c, enum lsquic_hsk_status status) {
                 if (status == LSQ_HSK_OK || status == LSQ_HSK_RESUMED_OK) {
                     spdlog::info("QUIC Handshake Successful");
-                    ui::eventStream.sendMessage("quic_handshake_success","");
+                    ui::eventStream.sendMessage("quic_handshake_success");
                 }
             }
         };
@@ -488,7 +504,7 @@ namespace receiver {
             NiceCandidate *local = nullptr, *remote = nullptr;
             if (!nice_agent_get_selected_pair(agent, streamId, 1, &local, &remote)) {
                 spdlog::error("ICE not ready for QUIC connection");
-                ui::eventStream.sendMessage("ice_not_ready", "");
+                ui::eventStream.sendMessage("ice_not_ready");
                 return;
             }
 

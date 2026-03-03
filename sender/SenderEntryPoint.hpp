@@ -41,8 +41,8 @@ namespace sender {
         socketClient.setTLSOptions(tlsOptions);
         socketClient.disableAutomaticReconnection();
         common::IceHandler::initialize();
-
         SenderStream::initialize();
+
 
 
         socketClient.setUrl(SenderConfig::serverUrl);
@@ -62,13 +62,13 @@ namespace sender {
             } else if (msg->type == ix::WebSocketMessageType::Error) {
                 spdlog::error("Could not connect to relay: HTTP Status: {}", msg->errorInfo.http_status);
                 spdlog::error("Error Description: {}", msg->errorInfo.reason);
-                ui::eventStream.sendMessage("connect_error",nlohmann::json{{"code", msg->errorInfo.http_status}, {"reason", msg->errorInfo.reason}}.dump());
+                ui::eventStream.sendMessage("connect_error",nlohmann::json{{"code", msg->errorInfo.http_status}, {"reason", msg->errorInfo.reason}});
                 common::ThreadManager::terminate();
             }
         });
 
         spdlog::info("Connecting to signaling server... {} ", SenderConfig::serverUrl);
-        ui::eventStream.sendMessage("connecting","");
+        ui::eventStream.sendMessage("connecting");
 
         socketClient.start();
 
