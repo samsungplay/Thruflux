@@ -19,8 +19,6 @@ namespace receiver {
     inline static constexpr size_t FLUSH_AT = 8 * 1024 * 1024;
 
     struct ReceiverConnectionContext : common::ConnectionContext {
-        std::chrono::steady_clock::time_point lastResumeFlush{};
-        bool resumeDirty = false;
         common::FileHandleCache cache;
         std::vector<uint8_t> manifestBuf;
         bool manifestParsed = false;
@@ -45,6 +43,7 @@ namespace receiver {
             indicators::option::ForegroundColor{indicators::Color::white}
         };
 
+
         std::chrono::steady_clock::time_point lastManifestProgressPrint{};
 
         void createProgressBar(std::string prefix) {
@@ -52,8 +51,9 @@ namespace receiver {
         };
 
 
-
         void parseManifest() {
+            ui::eventStream.sendMessage("manifest_parsing");
+
             uint8_t *p = manifestBuf.data();
             uint32_t count;
             memcpy(&count, p, 4);
@@ -82,7 +82,7 @@ namespace receiver {
 
                 std::filesystem::path fullPath = outPath / relativePath;
                 std::error_code ec;
-                std::filesystem::create_directories(fullPath.parent_path(),ec);
+                std::filesystem::create_directories(fullPath.parent_path(), ec);
                 cache.registerPath(id, fullPath);
             }
 
@@ -92,93 +92,66 @@ namespace receiver {
                              (".thruflux_resume_" + std::to_string(manifestHash) + ".state");
             resumeStatePath = statePath.string();
 
-            if (ReceiverConfig::overwrite) {
-                std::error_code ec;
-                std::filesystem::remove(statePath, ec);
-                resumeFileId = 0;
-                resumeOffset = 0;
-            } else {
-                if (std::filesystem::exists(statePath)) {
-                    resumeFileId = 0;
-                    resumeOffset = 0;
-                    {
-                        std::ifstream in(statePath, std::ios::binary);
-                        if (in) {
-                            uint32_t fid = 0;
-                            uint64_t off = 0;
-                            in.read(reinterpret_cast<char *>(&fid), sizeof(fid));
-                            in.read(reinterpret_cast<char *>(&off), sizeof(off));
+            resumeFileId = 0;
+            resumeOffset = 0;
 
-                            if (in.good() && in.gcount() == sizeof(off) && fid < fileSizes.size()) {
-                                resumeFileId = fid;
-                                resumeOffset = std::min(off, fileSizes[fid]);
-                            }
-                        }
-                    }
+            if (!ReceiverConfig::overwrite) {
+                //more robust way: calculate resume state from disk instead of manual resume sidecar files
 
-                    while (resumeFileId < fileSizes.size() && resumeOffset >= fileSizes[resumeFileId]) {
+                uint64_t resumedBytes = 0;
+                for (uint32_t id = 0; id < count; id++) {
+                    const auto &fullPath = cache.paths[id];
+                    std::error_code ec;
+                    if (!std::filesystem::exists(fullPath, ec)) {
+                        resumeFileId = id;
                         resumeOffset = 0;
-                        resumeFileId++;
+                        break;
                     }
 
-                    if (resumeFileId >= fileSizes.size()) {
-                        resumeFileId = fileSizes.size();
+                    auto actualSize = std::filesystem::file_size(fullPath, ec);
+                    if (ec) {
+                        resumeFileId = id;
                         resumeOffset = 0;
+                        break;
                     }
 
-                    uint64_t resumedBytes = 0;
-                    for (uint32_t id = 0; id < resumeFileId && id < fileSizes.size(); ++id) {
-                        resumedBytes += fileSizes[id];
+                    const auto expectedSize = fileSizes[id];
+
+                    if (actualSize < expectedSize) {
+                        resumeFileId = id;
+                        resumeOffset = actualSize;
+                        break;
                     }
-                    resumedBytes += resumeOffset;
 
-                    bytesMoved = resumedBytes;
-                    lastBytesMoved = resumedBytes;
-                    skippedBytes = resumedBytes;
-                    filesMoved = resumeFileId;
+                    if (actualSize > expectedSize) {
+                        resumeFileId = id;
+                        resumeOffset = 0;
+                        break;
+                    }
 
-                    const auto resumePercent = bytesMoved / static_cast<double>(totalExpectedBytes) * 100;
-
-                    spdlog::info("Automatically resuming from around {}%. Pass --overwrite flag to disable.",
-                                 resumePercent);
+                    resumedBytes += fileSizes[id];
                 }
+
+                resumedBytes += resumeOffset;
+
+                bytesMoved = resumedBytes;
+                lastBytesMoved = resumedBytes;
+                skippedBytes = resumedBytes;
+                filesMoved = resumeFileId;
+
+                const auto resumePercent = bytesMoved / static_cast<double>(totalExpectedBytes) * 100;
+
+                spdlog::info("Automatically resuming from around {}%. Pass --overwrite flag to disable.",
+                             resumePercent);
+                ui::eventStream.sendMessage("resume_notice", nlohmann::json{{"percent", resumePercent}});
             }
 
+            ui::eventStream.sendMessage("manifest_unsealed",
+                                        nlohmann::json{{"files_count", count}, {"total_size", totalExpectedBytes}});
             spdlog::info("Manifest unsealed: {} file(s) , Total size: {}", count,
                          common::Utils::sizeToReadableFormat(totalExpectedBytes));
         }
 
-        void maybeSaveResumeState(bool force = false) {
-            if (!resumeDirty) return;
-
-            const auto now = std::chrono::steady_clock::now();
-            const bool timeOk = lastResumeFlush.time_since_epoch().count() == 0 ||
-                                std::chrono::duration<double>(now - lastResumeFlush).count() >= 1.0;
-
-            if (!force && !timeOk) {
-                return;
-            }
-
-            const std::string tmp = resumeStatePath + ".tmp";
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            if (!out) return;
-
-            out.write(reinterpret_cast<const char *>(&resumeFileId), sizeof(resumeFileId));
-            out.write(reinterpret_cast<const char *>(&resumeOffset), sizeof(resumeOffset));
-
-            out.flush();
-
-            std::error_code ec;
-            std::filesystem::rename(tmp, resumeStatePath, ec);
-            if (ec) {
-                std::filesystem::remove(resumeStatePath, ec);
-                ec.clear();
-                std::filesystem::rename(tmp, resumeStatePath, ec);
-            }
-
-            resumeDirty = false;
-            lastResumeFlush = now;
-        }
     };
 
     struct ReceiverStreamContext {
@@ -246,7 +219,6 @@ namespace receiver {
 
             connCtx->resumeFileId = curFileId;
             connCtx->resumeOffset = flushOff;
-            connCtx->resumeDirty = true;
 
             return true;
         }

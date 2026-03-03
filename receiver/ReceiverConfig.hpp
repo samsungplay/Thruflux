@@ -70,33 +70,33 @@ namespace receiver {
                     ->check(CLI::ExistingDirectory)
                     ->capture_default_str();
 
-            app->add_option("--server-url", serverUrl, "HTTP(S) URL of signaling server")
+            app->add_option("--server-url,--serverUrl", serverUrl, "HTTP(S) URL of signaling server")
                     ->check(isWsUrl)
                     ->capture_default_str();
 
-            app->add_option("--stun-server", stunServers, "STUN server URL")
+            app->add_option("--stun-server,--stunServer", stunServers, "STUN server URL")
                     ->check(isStunUrl)
                     ->capture_default_str();
 
-            app->add_option("--turn-server", turnServers,
+            app->add_option("--turn-server,--turnServer", turnServers,
                            "TURN server URL (optional). Example: turn://user:pass@turn.example.com:3478")
                     ->check(isTurnUrl);
 
-            app->add_flag("--force-turn", forceTurn, "Force TURN relay");
+            app->add_flag("--force-turn,--forceTurn", forceTurn, "Force TURN relay");
 
-            app->add_option("--quic-conn-window-bytes", quicConnWindowBytes,
+            app->add_option("--quic-conn-window-bytes,--quicConnWindowBytes", quicConnWindowBytes,
                            "Initial QUIC connection flow-control window (bytes)")
                     ->check(CLI::Range(1 * MiB, 8 * GiB))
                     ->capture_default_str();
 
-            app->add_option("--quic-stream-window-bytes", quicStreamWindowBytes,
+            app->add_option("--quic-stream-window-bytes,--quicStreamWindowBytes", quicStreamWindowBytes,
                            "Initial QUIC stream flow-control window (bytes)")
                     ->check(CLI::Range(256 * KiB, 2 * GiB))
                     ->capture_default_str();
 
             app->add_flag("--overwrite", overwrite, "Overwrite existing files (disable resume)");
 
-            app->add_option("--udp-buffer-bytes", udpBufferBytes,
+            app->add_option("--udp-buffer-bytes,--udpBufferBytes", udpBufferBytes,
                            "UDP socket buffer size (bytes). You must raise the max on your OS too. Default installer should have raised it to 16 MiB.")
                     ->check(CLI::Range(256 * 1024, 256 * 1024 * 1024))
                     ->capture_default_str();

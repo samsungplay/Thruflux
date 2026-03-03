@@ -30,9 +30,12 @@ namespace sender {
                         if (context->lastTime.time_since_epoch().count() == 0) {
                             context->lastTime = now;
                             context->lastBytesMoved = context->bytesMoved;
-                            progressBar.set_option(
-                                indicators::option::PostfixText{"starting..."});
-                            progressBar.set_progress(0);
+                            if (!ui::isEnabled.load()) {
+                                progressBar.set_option(
+                                    indicators::option::PostfixText{"starting..."});
+                                progressBar.set_progress(0);
+                            }
+
                             continue;
                         }
 
@@ -65,25 +68,28 @@ namespace sender {
                         if (p < 0) p = 0;
                         if (p > 100) p = 100;
 
-                        std::string connectionType = context->connectionType == common::ConnectionContext::RELAYED
-                                                         ? "relayed"
-                                                         : "direct";
-                        std::string postfix;
-                        postfix.reserve(256);
-                        postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
-                        postfix += "/s sent ";
-                        postfix += common::Utils::sizeToReadableFormat(context->bytesMoved);
-                        postfix += " resumed ";
-                        postfix += common::Utils::sizeToReadableFormat(context->skippedBytes);
-                        postfix += " files ";
-                        postfix += std::to_string(context->filesMoved);
-                        postfix += "/";
-                        postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
-                        postfix += " ";
-                        postfix += connectionType;
+                        if (!ui::isEnabled.load()) {
+                            std::string connectionType = context->connectionType == common::ConnectionContext::RELAYED
+                                                             ? "relayed"
+                                                             : "direct";
+                            std::string postfix;
+                            postfix.reserve(256);
+                            postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
+                            postfix += "/s sent ";
+                            postfix += common::Utils::sizeToReadableFormat(context->bytesMoved);
+                            postfix += " resumed ";
+                            postfix += common::Utils::sizeToReadableFormat(context->skippedBytes);
+                            postfix += " files ";
+                            postfix += std::to_string(context->filesMoved);
+                            postfix += "/";
+                            postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
+                            postfix += " ";
+                            postfix += connectionType;
 
-                        progressBar.set_option(indicators::option::PostfixText{postfix});
-                        progressBar.set_progress(p);
+                            progressBar.set_option(indicators::option::PostfixText{postfix});
+                            progressBar.set_progress(p);
+                        }
+
 
                         context->lastTime = now;
                         context->lastBytesMoved = context->bytesMoved;
@@ -100,7 +106,7 @@ namespace sender {
                         };
 
 
-                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
                     }
 
                     return G_SOURCE_CONTINUE;
@@ -125,26 +131,30 @@ namespace sender {
                 lsquic_conn_set_ctx(connection, nullptr);
                 if (ctx) {
                     if (ctx->complete) {
-                        auto &progressBar = senderPersistentContext.progressBars[ctx->progressBarIndex];
-                        progressBar.set_option(
-                            indicators::option::ForegroundColor{indicators::Color::green});
-                        std::string postfix;
-                        postfix.reserve(256);
-                        postfix += " sent ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
-                        postfix += " resumed ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
-                        postfix += " files ";
-                        postfix += std::to_string(ctx->filesMoved);
-                        postfix += "/";
-                        postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
-                        postfix += " ";
-                        postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
-                        postfix += " [DONE]";
 
-                        progressBar.set_option(indicators::option::PostfixText{postfix});
-                        progressBar.set_progress(100);
-                        senderPersistentContext.progressBars.print_progress();
+                        if (!ui::isEnabled.load()) {
+                            auto &progressBar = senderPersistentContext.progressBars[ctx->progressBarIndex];
+                            progressBar.set_option(
+                                indicators::option::ForegroundColor{indicators::Color::green});
+                            std::string postfix;
+                            postfix.reserve(256);
+                            postfix += " sent ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += " resumed ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
+                            postfix += " files ";
+                            postfix += std::to_string(ctx->filesMoved);
+                            postfix += "/";
+                            postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
+                            postfix += " ";
+                            postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
+                            postfix += " [DONE]";
+
+                            progressBar.set_option(indicators::option::PostfixText{postfix});
+                            progressBar.set_progress(100);
+                            senderPersistentContext.progressBars.print_progress();
+                        }
+
 
                         ui::UIProgressSnapshot snapshot{
                             .receiverId = ctx->receiverId,
@@ -158,42 +168,49 @@ namespace sender {
                         };
 
 
-                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
                     } else {
-                        auto &progressBar = senderPersistentContext.progressBars[ctx->progressBarIndex];
-                        progressBar.set_option(
-                            indicators::option::ForegroundColor{indicators::Color::red});
-                        std::string postfix;
-                        postfix.reserve(256);
-                        postfix += " sent ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
-                        postfix += " resumed ";
-                        postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
-                        postfix += " files ";
-                        postfix += std::to_string(ctx->filesMoved);
-                        postfix += "/";
-                        postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
-                        postfix += " ";
-                        postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
-                        postfix += " [FAILED]";
-                        progressBar.set_option(indicators::option::PostfixText{postfix});
-                        progressBar.mark_as_completed();
-                        senderPersistentContext.progressBars.print_progress();
+
+                        if (!ui::isEnabled.load()) {
+                            auto &progressBar = senderPersistentContext.progressBars[ctx->progressBarIndex];
+                            progressBar.set_option(
+                                indicators::option::ForegroundColor{indicators::Color::red});
+                            std::string postfix;
+                            postfix.reserve(256);
+                            postfix += " sent ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += " resumed ";
+                            postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
+                            postfix += " files ";
+                            postfix += std::to_string(ctx->filesMoved);
+                            postfix += "/";
+                            postfix += std::to_string(senderPersistentContext.totalExpectedFilesCount);
+                            postfix += " ";
+                            postfix += ctx->connectionType == common::ConnectionContext::RELAYED ? "relayed" : "direct";
+                            postfix += " [FAILED]";
+                            progressBar.set_option(indicators::option::PostfixText{postfix});
+                            progressBar.mark_as_completed();
+                            senderPersistentContext.progressBars.print_progress();
+                        }
+
+                        const double percent = (senderPersistentContext.totalExpectedBytes <= 0)
+                                               ? 0.0
+                                               : static_cast<double>(ctx->logicalBytesMoved) / senderPersistentContext.totalExpectedBytes * 100.0;
+                        int p = static_cast<int>(std::lround(percent));
 
                         ui::UIProgressSnapshot snapshot{
                             .receiverId = ctx->receiverId,
                             .ewmaThroughput = ctx->ewmaThroughput,
                             .bytesMoved = ctx->bytesMoved,
                             .skippedBytes = ctx->skippedBytes,
-                            .percent = 100,
+                            .percent = p,
                             .filesMoved = ctx->filesMoved,
                             .totalExpectedFilesCount = senderPersistentContext.totalExpectedFilesCount,
                             .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
                             .hasError = true
                         };
 
-
-                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot).dump());
+                        ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
                     }
                     std::erase(connectionContexts_, ctx);
                     ctx->connection = nullptr;
@@ -285,9 +302,11 @@ namespace sender {
 
                         //Time to blast data!
                         if (!connCtx->started) {
-                            auto &progressBar = senderPersistentContext.progressBars[connCtx->progressBarIndex];
-                            progressBar.set_option(indicators::option::PostfixText{"starting..."});
-                            progressBar.set_progress(0);
+                            if (!ui::isEnabled.load()) {
+                                auto &progressBar = senderPersistentContext.progressBars[connCtx->progressBarIndex];
+                                progressBar.set_option(indicators::option::PostfixText{"starting..."});
+                                progressBar.set_progress(0);
+                            }
                             connCtx->started = true;
                             connCtx->startTime = std::chrono::steady_clock::now();
                         }

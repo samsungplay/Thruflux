@@ -4,22 +4,31 @@
 #include <nlohmann/json.hpp>
 
 namespace ui {
+    inline std::atomic isEnabled{false};
 
     struct EventStream {
         std::mutex mutex;
         std::condition_variable cv;
         std::queue<std::string> messageQueue;
 
-        void sendMessage(const std::string type, const std::string message) {
-            const auto jsonMessage = nlohmann::json{{"type",std::move(type)},{"message",std::move(message)}}.dump() + "\n\n";
+        void sendMessage(const std::string type, const nlohmann::json jsonMessage = nullptr) {
+            if (!isEnabled.load()) {
+                return;
+            }
+            nlohmann::json j = nlohmann::json::object();
+            j["type"] = type;
+            if (!jsonMessage.is_null()) {
+                j["message"] = jsonMessage;
+            } else {
+                j["message"] = "";
+            }
+            const auto msg = j.dump();
             {
                 std::lock_guard lock(mutex);
-                messageQueue.push(jsonMessage);
+                messageQueue.push(std::move(msg));
             }
             cv.notify_all();
         }
-
-
     };
 
     inline EventStream eventStream;
@@ -38,6 +47,5 @@ namespace ui {
     };
 
     NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UIProgressSnapshot, totalExpectedBytes, ewmaThroughput, bytesMoved, skippedBytes,
-                                       percent, filesMoved, totalExpectedFilesCount, isRelayed);
-
+                                       percent, filesMoved, totalExpectedFilesCount, isRelayed, receiverId, hasError);
 }
