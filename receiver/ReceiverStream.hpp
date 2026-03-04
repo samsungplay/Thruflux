@@ -268,9 +268,12 @@ namespace receiver {
                             }
 
                             connCtx->startTime = std::chrono::steady_clock::now();
-                            connCtx->progressBar->set_option(
-                                indicators::option::PostfixText{"starting..."});
-                            connCtx->progressBar->set_progress(0);
+                            if (!ui::isEnabled.load()) {
+                                connCtx->progressBar->set_option(
+                                    indicators::option::PostfixText{"starting..."});
+                                connCtx->progressBar->set_progress(0);
+                            }
+
                             connCtx->started = true;
                         }
                     } else {
