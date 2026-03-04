@@ -1,0 +1,72 @@
+{
+  "name": "thruflux-frontend",
+  "version": "0.1.0",
+  "description": "Thruflux desktop frontend built with Electron",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "esbuild src/renderer/main.tsx --bundle --platform=browser --format=iife --sourcemap --jsx=automatic --outfile=dist/renderer/renderer.js",
+    "copy:renderer": "mkdir -p dist/renderer && cp src/renderer/index.html dist/renderer/index.html",
+    "build": "npm run build:main && npm run build:renderer && npm run copy:renderer",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "directories": {
+      "buildResources": "build"
+    },
+    "extraResources": [
+      {
+        "from": "binaries",
+        "to": "binaries"
+      }
+    ],
+    "appId": "app.thruflux.desktop",
+    "productName": "Thruflux",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icons/icons/mac/icon.icns",
+      "target": [
+        "pkg"
+      ]
+    },
+    "pkg": {
+      "scripts": "pkg-scripts"
+    },
+    "win": {
+      "icon": "build/icons/icons/win/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "include": "build/windows/installer.nsh"
+    },
+    "linux": {
+      "icon": "build/icons/icons/png/512x512.png",
+      "target": [
+        "deb"
+      ]
+    },
+    "deb": {
+      "afterInstall": "build/linux/deb-after-install.sh"
+    }
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.24.2",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2"
+  }
+}
