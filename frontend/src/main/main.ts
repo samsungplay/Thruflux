@@ -593,6 +593,7 @@ const ensureEngineReady = async (): Promise<void> => {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     windowsVerbatimArguments: process.platform === "win32",
+    argv0: process.platform === "win32" ? engineBinaryPath : undefined,
   });
   child.once("spawn", () => {
     console.log(`[engine] spawned pid=${String(child.pid)}`);
