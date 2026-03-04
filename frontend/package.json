@@ -30,17 +30,33 @@
     ],
     "mac": {
       "icon": "build/icons/icons/mac/icon.icns",
+      "artifactName": "Thruflux-macos-arm64.${ext}",
       "target": [
-        "pkg"
+        {
+          "target": "pkg",
+          "arch": [
+            "arm64"
+          ]
+        }
       ]
     },
     "pkg": {
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": false,
+      "installLocation": "/Applications",
       "scripts": "pkg-scripts"
     },
     "win": {
       "icon": "build/icons/icons/win/icon.ico",
+      "artifactName": "Thruflux-windows-amd64.${ext}",
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -48,8 +64,14 @@
     },
     "linux": {
       "icon": "build/icons/icons/png/512x512.png",
+      "artifactName": "Thruflux-linux-amd64.${ext}",
       "target": [
-        "deb"
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "deb": {
