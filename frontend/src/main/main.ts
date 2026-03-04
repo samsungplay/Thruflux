@@ -342,16 +342,6 @@ const forceUiSubcommand = (args: string[]): string[] => {
   return ["ui", ...normalized];
 };
 
-const quoteWindowsArg = (arg: string): string => {
-  if (!/[\s"]/u.test(arg)) {
-    return arg;
-  }
-  const escaped = arg
-    .replace(/(\\*)"/g, '$1$1\\"')
-    .replace(/(\\+)$/g, "$1$1");
-  return `"${escaped}"`;
-};
-
 const getEngineArgs = (): string[] => {
   const fromEnv = process.env.THRUFLUX_ENGINE_ARGS;
   if (!fromEnv || fromEnv.trim().length === 0) {
@@ -579,20 +569,15 @@ const ensureEngineReady = async (): Promise<void> => {
 
   const engineBinaryPath = await resolveEngineBinaryPath();
   const engineArgs = buildEngineArgs(uiHeartbeatPort, engineApiPort);
-  const spawnArgs =
-    process.platform === "win32"
-      ? engineArgs.map((arg) => quoteWindowsArg(arg))
-      : engineArgs;
   console.log(
     `[engine] spawning binary=${engineBinaryPath} args=${engineArgs.join(" ")}`,
   );
   console.log(`[engine] argv=${JSON.stringify(engineArgs)}`);
-  console.log(`[engine] spawnArgs=${JSON.stringify(spawnArgs)}`);
+  console.log(`[engine] spawnArgs=${JSON.stringify(engineArgs)}`);
 
-  const child = spawn(engineBinaryPath, spawnArgs, {
+  const child = spawn(engineBinaryPath, engineArgs, {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-    windowsVerbatimArguments: process.platform === "win32",
     argv0: process.platform === "win32" ? engineBinaryPath : undefined,
   });
   child.once("spawn", () => {
