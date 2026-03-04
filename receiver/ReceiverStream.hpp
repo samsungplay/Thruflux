@@ -31,9 +31,11 @@ namespace receiver {
                 const auto now = std::chrono::steady_clock::now();
                 if (receiverConnectionContext->lastTime.time_since_epoch().count() == 0) {
                     receiverConnectionContext->lastTime = now;
-                    receiverConnectionContext->progressBar->set_option(
-                        indicators::option::PostfixText{"starting..."});
-                    receiverConnectionContext->progressBar->set_progress(0);
+                    if (!ui::isEnabled.load()) {
+                        receiverConnectionContext->progressBar->set_option(
+                            indicators::option::PostfixText{"starting..."});
+                        receiverConnectionContext->progressBar->set_progress(0);
+                    }
                     return G_SOURCE_CONTINUE;
                 }
 

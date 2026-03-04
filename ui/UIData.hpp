@@ -4,7 +4,7 @@
 #include <nlohmann/json.hpp>
 
 namespace ui {
-    inline std::atomic isEnabled{false};
+    inline std::atomic isEnabled{true};
 
     struct EventStream {
         std::mutex mutex;
