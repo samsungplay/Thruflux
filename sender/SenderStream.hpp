@@ -24,16 +24,18 @@ namespace sender {
                     for (const auto &context: connectionContexts_) {
                         if (!context || !context->started || context->complete) continue;
 
-                        auto &progressBar = senderPersistentContext.progressBars[static_cast<SenderConnectionContext *>(
-                            context)->progressBarIndex];
+
+
+                        auto progressBar = !ui::isEnabled.load() ? &senderPersistentContext.progressBars[static_cast<SenderConnectionContext *>(
+                            context)->progressBarIndex] : nullptr;
 
                         if (context->lastTime.time_since_epoch().count() == 0) {
                             context->lastTime = now;
                             context->lastBytesMoved = context->bytesMoved;
                             if (!ui::isEnabled.load()) {
-                                progressBar.set_option(
+                                progressBar->set_option(
                                     indicators::option::PostfixText{"starting..."});
-                                progressBar.set_progress(0);
+                                progressBar->set_progress(0);
                             }
 
                             continue;
@@ -86,8 +88,8 @@ namespace sender {
                             postfix += " ";
                             postfix += connectionType;
 
-                            progressBar.set_option(indicators::option::PostfixText{postfix});
-                            progressBar.set_progress(p);
+                            progressBar->set_option(indicators::option::PostfixText{postfix});
+                            progressBar->set_progress(p);
                         }
 
 
