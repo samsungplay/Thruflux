@@ -193,7 +193,7 @@ namespace receiver {
             if (pinnedFileId != fileId) {
                 if (pinnedFileId != UINT32_MAX) connCtx->cache.release(pinnedFileId);
                 pinnedFileId = fileId;
-                pinnedHandle = connCtx->cache.acquire(fileId, true);
+                pinnedHandle = connCtx->cache.acquire(fileId, true, startOff > 0);
                 if (!pinnedHandle) return false;
             }
             return true;
