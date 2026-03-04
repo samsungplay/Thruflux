@@ -72,7 +72,7 @@ namespace sender {
 
         socketClient.start();
 
-        common::ThreadManager::runMainLoop();
+        common::ThreadManager::runMainLoop(true);
 
         socketClient.stop();
 

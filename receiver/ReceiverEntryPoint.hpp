@@ -73,7 +73,7 @@ namespace receiver {
         socketClient.start();
 
 
-        common::ThreadManager::runMainLoop();
+        common::ThreadManager::runMainLoop(false);
 
         socketClient.stop();
 

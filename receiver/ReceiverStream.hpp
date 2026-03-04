@@ -185,10 +185,6 @@ namespace receiver {
                             progressBar->set_progress(100);
                         }
 
-                        //delete resume state
-                        std::error_code ec;
-                        std::filesystem::remove(ctx->resumeStatePath, ec);
-
                         ui::UIProgressSnapshot snapshot{
                             .ewmaThroughput = ctx->ewmaThroughput,
                             .bytesMoved = ctx->bytesMoved,
