@@ -29,7 +29,7 @@ namespace server {
 
 
 
-            app->set_version_flag("--version", "Thruflux Server v0.3.1");
+            app->set_version_flag("--version", "Thruflux Server v0.3.2");
 
             app->add_option("--port", port, "Port to run the server on.")
                     ->capture_default_str()
