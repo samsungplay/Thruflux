@@ -289,6 +289,10 @@ const parseEngineArgs = (value: string): string[] => {
     }
 
     if (ch === "\\") {
+      if (!quote) {
+        current += ch;
+        continue;
+      }
       escaped = true;
       continue;
     }
@@ -328,6 +332,16 @@ const parseEngineArgs = (value: string): string[] => {
   return out;
 };
 
+const forceUiSubcommand = (args: string[]): string[] => {
+  const normalized = args
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (normalized.length > 0 && normalized[0].toLowerCase() === "ui") {
+    return normalized;
+  }
+  return ["ui", ...normalized];
+};
+
 const getEngineArgs = (): string[] => {
   const fromEnv = process.env.THRUFLUX_ENGINE_ARGS;
   if (!fromEnv || fromEnv.trim().length === 0) {
@@ -347,7 +361,7 @@ const buildEngineArgs = (
   heartbeatPort: number,
   enginePort: number,
 ): string[] => {
-  const base = getEngineArgs();
+  const base = forceUiSubcommand(getEngineArgs());
   const filtered: string[] = [];
   for (let i = 0; i < base.length; i += 1) {
     const token = base[i];
@@ -558,6 +572,7 @@ const ensureEngineReady = async (): Promise<void> => {
   console.log(
     `[engine] spawning binary=${engineBinaryPath} args=${engineArgs.join(" ")}`,
   );
+  console.log(`[engine] argv=${JSON.stringify(engineArgs)}`);
 
   const child = spawn(engineBinaryPath, engineArgs, {
     stdio: ["ignore", "pipe", "pipe"],
