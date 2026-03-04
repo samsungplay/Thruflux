@@ -8,7 +8,9 @@ namespace common {
         inline static GMainContext *context_;
         inline static GMainLoop *mainLoop_;
 
+
     public:
+        inline static std::atomic<bool> isRunningSender {false};
         //run some task on the main thread
         static void postTask(std::function<void()> task) {
 
@@ -51,9 +53,10 @@ namespace common {
             return mainLoop_ != nullptr && g_main_loop_is_running(mainLoop_);
         }
 
-        static void runMainLoop() {
+        static void runMainLoop(const bool isSender) {
             context_ = g_main_context_default();
             mainLoop_ = g_main_loop_new(context_, FALSE);
+            isRunningSender.store(isSender);
             g_main_loop_run(mainLoop_);
             g_main_loop_quit(mainLoop_);
             g_main_loop_unref(mainLoop_);

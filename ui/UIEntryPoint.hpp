@@ -77,6 +77,36 @@ namespace ui {
             });
         });
 
+        server.Post("/abortReceiver", [](const httplib::Request &req, httplib::Response &res) {
+            //abort a single receiver..
+            if (!common::ThreadManager::isBusy() || !common::ThreadManager::isRunningSender.load()) {
+                res.status = 503;
+                return;
+            }
+            const auto payload = nlohmann::json::parse(req.body);
+            if (!payload.contains("receiverId")) {
+                res.status = 400;
+                return;
+            }
+            const auto receiverId = payload["receiverId"].get<std::string>();
+
+            std::latch latch {1};
+            common::ThreadManager::postTask([&receiverId, &latch]() {
+                sender::SenderStream::disposeReceiverConnection(receiverId);
+                latch.count_down();
+            });
+
+            const auto start = std::chrono::steady_clock::now();
+            while (!latch.try_wait()) {
+                if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(10)) {
+                    res.status = 504;
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            res.status = 200;
+        });
 
         server.Post("/abort", [](const httplib::Request &req, httplib::Response &res) {
             common::ThreadManager::terminate();
@@ -196,12 +226,10 @@ namespace ui {
                 spdlog::info("Running local web interface on port {}", port);
                 isEnabled.store(true, std::memory_order::relaxed);
                 server.listen_after_bind();
-            }
-            else {
+            } else {
                 spdlog::error("No available port found to start the local web interface.");
             }
-        }
-        else {
+        } else {
             if (!server.bind_to_port("localhost", UIConfig::port)) {
                 spdlog::error(
                     "Could not start local web interface on specified port {}", UIConfig::port);
@@ -211,7 +239,6 @@ namespace ui {
                 server.listen_after_bind();
             }
         }
-
 
 
         workGuard.reset();

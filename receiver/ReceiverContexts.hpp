@@ -30,7 +30,6 @@ namespace receiver {
         std::unique_ptr<indicators::ProgressBar> progressBar;
         uint32_t resumeFileId = 0;
         uint64_t resumeOffset = 0;
-        std::string resumeStatePath;
         int manifestAckSent = 0;
 
         indicators::ProgressBar manifestProgressBar{
@@ -87,16 +86,15 @@ namespace receiver {
             }
 
 
-            const auto manifestHash = common::Utils::fnv1a64(manifestBuf.data(), manifestBuf.size());
-            auto statePath = outPath /
-                             (".thruflux_resume_" + std::to_string(manifestHash) + ".state");
-            resumeStatePath = statePath.string();
+            if (ReceiverConfig::overwrite) {
+                resumeFileId = 0;
+                resumeOffset = 0;
+            }
 
-            resumeFileId = 0;
-            resumeOffset = 0;
-
-            if (!ReceiverConfig::overwrite) {
+            else {
                 //calculate resume state from disk instead of manual resume sidecar files
+                resumeFileId = count;
+                resumeOffset = 0;
 
                 uint64_t resumedBytes = 0;
                 for (uint32_t id = 0; id < count; id++) {
@@ -134,6 +132,14 @@ namespace receiver {
 
                 resumedBytes += resumeOffset;
 
+                if (resumeFileId == count) {
+                    // when complete, assume user wants to overwrite..
+                    resumeFileId = 0;
+                    resumeOffset = 0;
+                    resumedBytes = 0;
+                }
+
+
                 bytesMoved = resumedBytes;
                 lastBytesMoved = resumedBytes;
                 skippedBytes = resumedBytes;
@@ -141,9 +147,11 @@ namespace receiver {
 
                 const auto resumePercent = bytesMoved / static_cast<double>(totalExpectedBytes) * 100;
 
-                spdlog::info("Automatically resuming from around {}%. Pass --overwrite flag to disable.",
-                             resumePercent);
-                ui::eventStream.sendMessage("resume_notice", nlohmann::json{{"percent", resumePercent}});
+                if (resumePercent > 0) {
+                    spdlog::info("Automatically resuming from around {}%. Pass --overwrite flag to disable.",
+                                 resumePercent);
+                    ui::eventStream.sendMessage("resume_notice", nlohmann::json{{"percent", resumePercent}});
+                }
             }
 
             ui::eventStream.sendMessage("manifest_unsealed",
