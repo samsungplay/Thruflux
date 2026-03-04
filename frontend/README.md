@@ -2,6 +2,8 @@
 
 Electron desktop frontend for Thruflux.
 
+Build and run scripts are cross-platform (macOS, Linux, Windows).
+
 ## Prerequisites
 
 - Node.js 18+ (recommended)

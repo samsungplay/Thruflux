@@ -7,9 +7,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "esbuild src/renderer/main.tsx --bundle --platform=browser --format=iife --sourcemap --jsx=automatic --outfile=dist/renderer/renderer.js",
-    "copy:renderer": "mkdir -p dist/renderer && cp src/renderer/index.html dist/renderer/index.html",
+    "copy:renderer": "node scripts/copy-renderer.mjs",
     "build": "npm run build:main && npm run build:renderer && npm run copy:renderer",
-    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder"
   },
   "build": {
