@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+UDP_BYTES=$((16 * 1024 * 1024))
+PLIST="/Library/LaunchDaemons/com.thruflux.udptune.plist"
+LABEL="com.thruflux.udptune"
+
+/usr/sbin/sysctl -w kern.ipc.maxsockbuf="$UDP_BYTES" >/dev/null 2>&1 || true
+/usr/sbin/sysctl -w net.inet.udp.recvspace="$UDP_BYTES" >/dev/null 2>&1 || true
+/usr/sbin/sysctl -w net.inet.udp.maxdgram=65535 >/dev/null 2>&1 || true
+
+cat > "$PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>RunAtLoad</key><true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>/usr/sbin/sysctl -w kern.ipc.maxsockbuf=${UDP_BYTES} && /usr/sbin/sysctl -w net.inet.udp.recvspace=${UDP_BYTES} && /usr/sbin/sysctl -w net.inet.udp.maxdgram=65535</string>
+  </array>
+</dict>
+</plist>
+PLISTEOF
+
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+
+if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "system/${LABEL}" >/dev/null 2>&1 || true
+fi
+launchctl bootstrap system "$PLIST" >/dev/null 2>&1 || true
+launchctl enable "system/${LABEL}" >/dev/null 2>&1 || true
+
+exit 0
