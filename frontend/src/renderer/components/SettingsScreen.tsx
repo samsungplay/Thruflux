@@ -64,6 +64,7 @@ export function SettingsScreen({
           <span>{t("turnServers")}</span>
           <textarea
             rows={4}
+            placeholder="turn://user:password@host:port"
             value={state.turnServers}
             onChange={(e) => onPatch({ turnServers: e.currentTarget.value })}
           ></textarea>
