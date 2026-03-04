@@ -7,13 +7,15 @@
 
 Built in C++, Thruflux is a cross-platform, **highly speed-focused, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**. Unlike traditional p2p file tools, Thruflux is entirely focused on use of the modern QUIC UDP protocol.
 
-It consists of three core subcommands:
+It consists of four core subcommands:
 
 thru server - opens a lightweight signaling server for discovery & ICE negotiation (for self-hosting).
 
 thru host - share any number of file of any size with other peers
 
 thru join - join an existing host session to download the files served by the host
+
+thru ui - opens a local web interface that lets you host/join via REST endpoint (mainly for internal use for the app version)
 
 ## Demo
 
@@ -474,6 +476,218 @@ thru join JOIN_CODE \
 | `--quic-stream-window-bytes` | `33554432`                        | Initial QUIC stream flow-control window (bytes)         |
 | `--overwrite`                | `false`                           | Overwrite existing files (disable resume)               |
 | `--udp-buffer-bytes`         | `8388608`                         | UDP socket buffer size (bytes). Must be raised on your OS as well. Default installer raises max to 16 MiB                   |
+
+### `thru ui` (local web interface)
+```
+thru ui [--port N] [--ui-heartbeat-port N]
+```
+
+| Option | Default | Description |
+| ---- | ---- | ---- |
+| `--port` | 0 | Port to open the local webinterface at. Value of 0 delegates to the OS to assign a random port. |
+| `--ui-heartbeat-port` | -1 | Port to periodically check the life of the attached UI app. The UI must expose a `/health` endpoint returning HTTP 200. Auto-kills the process if the UI app dies to prevent orphans. Set to -1 to disable. |
+
+Got it — you want a **clean Markdown section** for a README, but **not** one giant fenced “raw markdown” block. Here it is as normal README Markdown (with code fences only for JSON examples).
+
+---
+
+## Local Web Interface HTTP REST API
+
+### `POST /receive`
+
+Starts receiving files.
+
+**Example request payload**
+
+```json
+{
+  "joinCode": "ALPHA-BRAVO-123",
+  "out": "./downloads",
+  "serverUrl": "wss://bytepipe.app/ws",
+  "stunServers": "stun://stun.cloudflare.com:3478",
+  "turnServers": "",
+  "forceTurn": false,
+  "quicConnWindowBytes": 268435456,
+  "quicStreamWindowBytes": 33554432,
+  "overwrite": true,
+  "udpBufferBytes": 8388608
+}
+```
+
+**Status codes**
+
+* **200**: Receiver logic has begun. This only confirms startup — the frontend should listen on **`/events`** for ongoing progress.
+* **503**: Engine is busy (already sending or receiving).
+* **500**: Internal server error (response includes key: `error`).
+* **400**: Invalid config/payload (response includes key: `error`).
+
+---
+
+### `POST /host`
+
+Starts hosting files (supports multiple receivers).
+
+**Example request payload**
+
+```json
+{
+  "paths": ["/home/user/photos", "/var/data/logs"],
+  "serverUrl": "wss://bytepipe.app/ws",
+  "maxReceivers": 10,
+  "stunServer": "stun://stun.cloudflare.com:3478",
+  "turnServers": "user:pass@turn.example.com",
+  "forceTurn": false,
+  "quicStreamWindowBytes": 33554432,
+  "quicConnWindowBytes": 268435456,
+  "udpBufferBytes": 8388608
+}
+```
+
+**Status codes**
+
+* **200**: Sender logic has begun. This only confirms startup — the frontend should listen on **`/events`** for ongoing progress.
+* **503**: Engine is busy (already sending or receiving).
+* **500**: Internal server error (response includes key: `error`).
+* **400**: Invalid config/payload (response includes key: `error`).
+
+---
+
+### `POST /abort`
+
+Aborts whatever process is ongoing (sending or receiving).
+
+**Status codes**
+
+* **200**: Aborted successfully. Engine is free to start a new receive/host task.
+* **504**: Abort was attempted, but the process did not end within 10s+ (possible deadlock).
+
+---
+
+### `POST /abortReceiver`
+
+Aborts a single receiver from the sender side.
+
+**Example request payload**
+
+```json
+{
+  "receiverId": "eadjaeoid"
+}
+```
+
+**Status codes**
+
+* **200**: Abort handled by the engine.
+* **503**: No sender session is currently running (endpoint not applicable).
+* **504**: Abort attempted, but was not handled by the engine for 10s+.
+* **400**: Invalid payload.
+
+---
+
+## Event Stream
+
+### `GET /events` (SSE)
+
+A continuous **Server-Sent Events (SSE)** endpoint.
+
+All events are formatted as:
+
+```json
+{
+  "type": "type",
+  "message": ""
+}
+```
+
+Events are organized by the `type` field below.
+
+---
+
+## Common event types
+
+* **`connecting`**: Ongoing connection attempt to signaling server.
+  `message`: empty
+
+* **`connect_error`**: Failed connection attempt to signaling server.
+  `message`: `{ "code": ..., "reason": ... }`
+
+* **`connect_success`**: Connected to signaling server successfully.
+  `message`: empty
+
+* **`disconnected`**: Disconnected from signaling server.
+  `message`: `{ "reason": ... }`
+
+* **`progress`**: File transfer progress event.
+  `message` fields:
+
+  * `receiverId` (empty for receiver)
+  * `ewmaThroughput`
+  * `bytesMoved`
+  * `skippedBytes`
+  * `filesMoved`
+  * `totalExpectedFilesCount`
+  * `isRelayed`
+  * `percent` (integer 0–100; **100 signals completion**)
+  * `hasError` (boolean; **true signals transfer aborted with error**)
+
+---
+
+## Sender-only event types
+
+* **`join_code_issued`**: Join code issued by server.
+  `message`: `{ "join_code": ... }`
+
+* **`manifest_build_start`**: Manifest scanning has begun.
+  `message`: empty
+
+* **`manifest_build_progress`**: Manifest build progress.
+  `message`: `{ "files_count": ..., "total_size": ... }` (bytes)
+
+* **`manifest_encoding`**: Encoding manifest into blob has begun.
+  `message`: empty
+
+* **`manifest_sealed`**: Manifest build/encode fully completed.
+  `message`: empty
+
+---
+
+## Receiver-only event types
+
+* **`p2p_failed`**: P2P negotiation failed.
+  `message`: empty
+
+* **`joining_session`**: Attempting to join the session.
+  `message`: empty
+
+* **`p2p_start`**: Join code verified; P2P negotiation started.
+  `message`: empty
+
+* **`p2p_success`**: P2P negotiation succeeded.
+  `message`: empty
+
+* **`manifest_receive_progress`**: Manifest receive progress.
+  `message`: `{ "total_size": ..., "complete": ... }` (`total_size` in bytes)
+
+* **`manifest_receive_error`**: Unexpected error receiving manifest.
+  `message`: `{ "errno": ... }`
+
+* **`quic_handshake_success`**: QUIC handshake successful (after `p2p_success`).
+  `message`: empty
+
+* **`ice_not_ready`**: ICE not ready for QUIC connection (unexpected).
+  `message`: empty
+
+* **`resume_notice`**: Session is resuming from previous progress.
+  `message`: `{ "percent": ... }` (double 0–100)
+
+* **`manifest_parsing`**: Manifest is being parsed.
+  `message`: empty
+
+* **`manifest_unsealed`**: Manifest fully processed and parsed.
+  `message`: `{ "files_count": ..., "total_size": ... }` (bytes)
+
+* **`receive_complete`**: Receiving completed.
+  `message`: empty
 
 ## Self‑hosting guide (Ubuntu) 🐧
 
