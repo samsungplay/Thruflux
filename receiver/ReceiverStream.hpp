@@ -513,12 +513,14 @@ namespace receiver {
             auto *ctx = new ReceiverConnectionContext();
             ctx->agent = agent;
             ctx->streamId = streamId;
-            ctx->createProgressBar("Receiving ");
+            if (!ui::isEnabled.load()) {
+                ctx->createProgressBar("Receiving ");
+            }
             ctx->connectionType = (local->type == NICE_CANDIDATE_TYPE_RELAYED || remote->type ==
                                    NICE_CANDIDATE_TYPE_RELAYED)
                                       ? common::ConnectionContext::RELAYED
                                       : common::ConnectionContext::DIRECT;
-            if (ctx->connectionType == common::ConnectionContext::RELAYED) {
+            if (!ui::isEnabled.load() && ctx->connectionType == common::ConnectionContext::RELAYED) {
                 ctx->progressBar->set_option(indicators::option::ForegroundColor{indicators::Color::yellow});
             }
 
