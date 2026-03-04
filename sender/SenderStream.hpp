@@ -477,12 +477,14 @@ namespace sender {
             ctx->agent = agent;
             ctx->streamId = streamId;
             ctx->receiverId = receiverId;
-            ctx->progressBarIndex = senderPersistentContext.addNewProgressBar("Receiver ID: " + ctx->receiverId);
+            if (!ui::isEnabled.load()) {
+                ctx->progressBarIndex = senderPersistentContext.addNewProgressBar("Receiver ID: " + ctx->receiverId);
+            }
             ctx->connectionType = (local->type == NICE_CANDIDATE_TYPE_RELAYED || remote->type ==
                                    NICE_CANDIDATE_TYPE_RELAYED)
                                       ? common::ConnectionContext::RELAYED
                                       : common::ConnectionContext::DIRECT;
-            if (ctx->connectionType == common::ConnectionContext::RELAYED) {
+            if (!ui::isEnabled.load() && ctx->connectionType == common::ConnectionContext::RELAYED) {
                 senderPersistentContext.progressBars[ctx->progressBarIndex].set_option(
                     indicators::option::ForegroundColor{indicators::Color::yellow});
             }
