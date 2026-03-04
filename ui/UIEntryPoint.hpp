@@ -90,19 +90,17 @@ namespace ui {
             }
             const auto receiverId = payload["receiverId"].get<std::string>();
 
-            std::latch latch {1};
-            common::ThreadManager::postTask([&receiverId, &latch]() {
+            auto promisePtr = std::make_shared<std::promise<void> >();
+            auto f = promisePtr->get_future();
+
+            common::ThreadManager::postTask([receiverId, promisePtr]() {
                 sender::SenderStream::disposeReceiverConnection(receiverId);
-                latch.count_down();
+                promisePtr->set_value();
             });
 
-            const auto start = std::chrono::steady_clock::now();
-            while (!latch.try_wait()) {
-                if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(10)) {
-                    res.status = 504;
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (f.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+                res.status = 504;
+                return;
             }
 
             res.status = 200;
