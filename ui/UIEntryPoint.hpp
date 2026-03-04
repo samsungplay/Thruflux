@@ -41,12 +41,12 @@ namespace ui {
                     auto res = cli.Get("/health");
                     if (res == nullptr || !res || res->status != 200) {
                         spdlog::error("Failed to health check attached UI. Terminating to prevent orphan process...");
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
                         std::exit(1);
                     }
                     std::this_thread::sleep_for(std::chrono::seconds(30));
                 }
             });
-
             uiHealthCheckThread.detach();
         }
 

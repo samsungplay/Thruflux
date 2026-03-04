@@ -65,29 +65,32 @@ namespace receiver {
                 if (p < 0) p = 0;
                 if (p > 100) p = 100;
 
+                if (!ui::isEnabled.load()) {
+                    std::string connectionType = receiverConnectionContext->connectionType ==
+                                                 common::ConnectionContext::RELAYED
+                                                     ? "relayed"
+                                                     : "direct";
+                    std::string postfix;
 
-                std::string connectionType = receiverConnectionContext->connectionType ==
-                                             common::ConnectionContext::RELAYED
-                                                 ? "relayed"
-                                                 : "direct";
-                std::string postfix;
+                    postfix.reserve(256);
+                    postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
+                    postfix += "/s received ";
+                    postfix += common::Utils::sizeToReadableFormat(receiverConnectionContext->bytesMoved);
+                    postfix += " resumed ";
+                    postfix += common::Utils::sizeToReadableFormat(receiverConnectionContext->skippedBytes);
 
-                postfix.reserve(256);
-                postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
-                postfix += "/s received ";
-                postfix += common::Utils::sizeToReadableFormat(receiverConnectionContext->bytesMoved);
-                postfix += " resumed ";
-                postfix += common::Utils::sizeToReadableFormat(receiverConnectionContext->skippedBytes);
+                    postfix += " files ";
 
-                postfix += " files ";
+                    postfix += std::to_string(receiverConnectionContext->filesMoved);
+                    postfix += "/";
+                    postfix += std::to_string(receiverConnectionContext->totalExpectedFilesCount);
+                    postfix += " ";
+                    postfix += connectionType;
+                    receiverConnectionContext->progressBar->set_option(indicators::option::PostfixText{postfix});
+                    receiverConnectionContext->progressBar->set_progress(p);;
+                }
 
-                postfix += std::to_string(receiverConnectionContext->filesMoved);
-                postfix += "/";
-                postfix += std::to_string(receiverConnectionContext->totalExpectedFilesCount);
-                postfix += " ";
-                postfix += connectionType;
-                receiverConnectionContext->progressBar->set_option(indicators::option::PostfixText{postfix});
-                receiverConnectionContext->progressBar->set_progress(p);;
+
                 receiverConnectionContext->lastTime = now;
                 receiverConnectionContext->lastBytesMoved = receiverConnectionContext->bytesMoved;
 
@@ -96,7 +99,7 @@ namespace receiver {
                     .ewmaThroughput = ewmaThroughput,
                     .bytesMoved = receiverConnectionContext->bytesMoved,
                     .skippedBytes = receiverConnectionContext->skippedBytes,
-                    .percent =  p,
+                    .percent = p,
                     .filesMoved = receiverConnectionContext->filesMoved,
                     .totalExpectedFilesCount = receiverConnectionContext->totalExpectedFilesCount,
                     .isRelayed = receiverConnectionContext->connectionType == common::ConnectionContext::RELAYED,
@@ -162,7 +165,6 @@ namespace receiver {
                 lsquic_conn_set_ctx(c, nullptr);
                 if (ctx) {
                     if (ctx->complete) {
-
                         if (!ui::isEnabled.load()) {
                             const auto &progressBar = ctx->progressBar;
                             progressBar->set_option(
@@ -189,7 +191,7 @@ namespace receiver {
                             .ewmaThroughput = ctx->ewmaThroughput,
                             .bytesMoved = ctx->bytesMoved,
                             .skippedBytes = ctx->skippedBytes,
-                            .percent =  100,
+                            .percent = 100,
                             .filesMoved = ctx->filesMoved,
                             .totalExpectedFilesCount = ctx->totalExpectedFilesCount,
                             .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
@@ -197,9 +199,7 @@ namespace receiver {
 
 
                         ui::eventStream.sendMessage("progress", nlohmann::json(snapshot));
-
                     } else {
-
                         if (!ui::isEnabled.load()) {
                             const auto &progressBar = ctx->progressBar;
                             std::string postfix;
@@ -222,15 +222,16 @@ namespace receiver {
                         }
 
                         const double percent = (ctx->totalExpectedBytes <= 0)
-                                            ? 0.0
-                                            : static_cast<double>(ctx->bytesMoved) / ctx->totalExpectedBytes * 100.0;
+                                                   ? 0.0
+                                                   : static_cast<double>(ctx->bytesMoved) / ctx->totalExpectedBytes *
+                                                     100.0;
                         int p = static_cast<int>(std::lround(percent));
 
                         ui::UIProgressSnapshot snapshot{
                             .ewmaThroughput = ctx->ewmaThroughput,
                             .bytesMoved = ctx->bytesMoved,
                             .skippedBytes = ctx->skippedBytes,
-                            .percent =  p,
+                            .percent = p,
                             .filesMoved = ctx->filesMoved,
                             .totalExpectedFilesCount = ctx->totalExpectedFilesCount,
                             .isRelayed = ctx->connectionType == common::ConnectionContext::RELAYED,
@@ -295,10 +296,12 @@ namespace receiver {
                                     connCtx->manifestProgressBar.print_progress();
                                 }
                                 connCtx->lastManifestProgressPrint = now;
-                                ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete", false}});
+                                ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{
+                                                                {"total_size", connCtx->manifestBuf.size()},
+                                                                {"complete", false}
+                                                            });
                             }
                         } else if (nr == 0) {
-
                             if (!ui::isEnabled.load()) {
                                 std::string postfix;
                                 postfix.reserve(64);
@@ -308,7 +311,10 @@ namespace receiver {
                                 connCtx->manifestProgressBar.mark_as_completed();
                             }
 
-                            ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{{"total_size", connCtx->manifestBuf.size()}, {"complete",true}});
+                            ui::eventStream.sendMessage("manifest_receive_progress", nlohmann::json{
+                                                            {"total_size", connCtx->manifestBuf.size()},
+                                                            {"complete", true}
+                                                        });
 
                             connCtx->parseManifest();
                             connCtx->manifestParsed = true;
