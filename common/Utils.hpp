@@ -86,6 +86,15 @@ namespace common {
     class Utils {
     public:
 
+        static std::string trim(const std::string& s) {
+            const char* whitespace = " \t\n\r\f\v";
+            size_t start = s.find_first_not_of(whitespace);
+            size_t end = s.find_last_not_of(whitespace);
+
+            if (start == std::string::npos) return "";
+            return s.substr(start, end - start + 1);
+        }
+
         static void checkUpdates() {
             httplib::Client cli("https://raw.githubusercontent.com");
             cli.set_follow_location(true);
@@ -94,7 +103,7 @@ namespace common {
 
             if (auto res = cli.Get(path)) {
                 if (res->status == 200) {
-                    std::string latest = res->body;
+                    std::string latest = trim(res->body);
                     if (latest != versionString) {
                         spdlog::warn("Update available for latest version: {}. "
                                      "It is highly recommended to update otherwise things might not work properly. Please visit the quick start section in repo: https://github.com/samsungplay/Thruflux and run the installation commands again.",
