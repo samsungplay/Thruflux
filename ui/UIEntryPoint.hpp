@@ -33,7 +33,7 @@ namespace ui {
         //ui health check
         if (UIConfig::uiHeartBeatPort > 0) {
             std::thread uiHealthCheckThread([]() {
-                httplib::Client cli{"http://localhost:" + std::to_string(UIConfig::uiHeartBeatPort)};
+                httplib::Client cli{"127.0.0.1",UIConfig::uiHeartBeatPort};
                 cli.set_connection_timeout(30);
                 cli.set_read_timeout(30);
                 cli.set_write_timeout(30);

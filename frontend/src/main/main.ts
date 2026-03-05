@@ -351,10 +351,6 @@ const startUiHeartbeatServer = async (): Promise<number> => {
     server.close();
     throw new Error("Failed to determine heartbeat server address");
   }
-  console.log(
-    `[engine] ui heartbeat bound on ${address.address}:${String(address.port)} (${address.family})`,
-  );
-
   uiHeartbeatServer = server;
   uiHeartbeatPort = address.port;
   return address.port;
