@@ -83,6 +83,8 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
       "Unless you know what you are doing, it is recommended not to modify these values.",
     settingsPanelTitle: "For advanced users...",
     settingsPanelBody: "Tune transfer behavior",
+    appVersionNote: "v0.3.2 Beta",
+    appMadeBy: "Made by infiniteplayapps",
     openSettings: "Open advanced settings",
     serverUrl: "Server URL",
     stunServer: "STUN server",

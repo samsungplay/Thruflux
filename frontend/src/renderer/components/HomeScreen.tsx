@@ -49,6 +49,10 @@ export function HomeScreen({
           <span>{t("openSettings")}</span>
         </button>
       </section>
+      <p className="home-version-note">
+        <span>{t("appVersionNote")}</span>
+        <span>{t("appMadeBy")}</span>
+      </p>
     </main>
   )
 }

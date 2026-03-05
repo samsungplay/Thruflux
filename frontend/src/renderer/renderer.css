@@ -315,6 +315,17 @@ body {
   cursor: pointer;
 }
 
+.home-version-note {
+  margin: 2px 0 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  text-align: right;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
 .send-shell,
 .settings-shell {
   min-height: 0;

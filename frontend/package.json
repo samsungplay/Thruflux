@@ -2,7 +2,7 @@
   "name": "thruflux-frontend",
   "version": "0.1.0",
   "author": "infiniteplayapps",
-  "description": "Thruflux desktop frontend built with Electron",
+  "description": "Thruflux",
   "main": "dist/main/main.js",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",

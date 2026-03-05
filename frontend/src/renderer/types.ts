@@ -107,6 +107,8 @@ export type TranslationKey =
   | "settingsWarning"
   | "settingsPanelTitle"
   | "settingsPanelBody"
+  | "appVersionNote"
+  | "appMadeBy"
   | "openSettings"
   | "serverUrl"
   | "stunServer"
