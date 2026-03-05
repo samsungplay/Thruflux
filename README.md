@@ -211,12 +211,16 @@ From the project root:
 git clone https://github.com/samsungplay/Thruflux.git
 cd Thruflux/
 
-cmake -B build -S . \
+cmake -S . -B build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake \
-  -DCMAKE_BUILD_TYPE=Release
-  -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+  -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -flto=auto" \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -flto=auto" \
+  -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -Wl,-O1"
   
-cmake --build build --config Release --parallel
+cmake --build build --parallel
 ```
 
 ### 6) Output binary
@@ -261,8 +265,8 @@ cd vcpkg
 
 ```powershell
 cd C:\dev
-git clone https://github.com/samsungplay/Thruflux-C-.git
-cd Thruflux-C-
+git clone https://github.com/samsungplay/Thruflux.git
+cd Thruflux
 ```
 
 ### 3) Install prerequisites
@@ -274,10 +278,14 @@ choco install winflexbison3 nasm -y
 ### 4) Configure and build
 - **Note**: The x64-windows-static target is important. There are some patches I made without which build will fail.
 ```powershell
-cmake -B build -S .
-  -DCMAKE_TOOLCHAIN_FILE="C:\dev\vcpkg\scripts\buildsystems\vcpkg.cmake"
-  -DCMAKE_BUILD_TYPE=Release
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static
+cmake -S . -B build-windows `
+  -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="C:\dev\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON `
+  -DCMAKE_C_FLAGS_RELEASE="/O2 /DNDEBUG /GL" `
+  -DCMAKE_CXX_FLAGS_RELEASE="/O2 /DNDEBUG /GL" `
+  -DCMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG /OPT:REF /OPT:ICF"
 
 cmake --build build --config Release --parallel
 ```
@@ -316,7 +324,7 @@ xcode-select --install
 
 ```bash
 brew update
-brew install cmake pkg-config bison nasm
+brew install cmake pkg-config bison nasm ninja
 ```
 
 Verify CMake version:
@@ -334,8 +342,8 @@ git clone https://github.com/microsoft/vcpkg.git
 ### 5) Clone the repo
 
 ```bash
-git clone https://github.com/samsungplay/Thruflux-C-.git
-cd Thruflux-C-
+git clone https://github.com/samsungplay/Thruflux.git
+cd Thruflux
 ```
 
 ### 6) Configure and build (Release)
@@ -344,25 +352,33 @@ cd Thruflux-C-
 ```bash
 export MACOSX_DEPLOYMENT_TARGET=11.0
 
-cmake -B build -S . \
-  -DCMAKE_TOOLCHAIN_FILE=~/dev/vcpkg/scripts/buildsystems/vcpkg.cmake \
+cmake -S . -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="~/dev/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_TARGET_TRIPLET=x64-osx \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \ 
-  -DCMAKE_OSX_ARCHITECTURES="x86_64" 
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+  -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+  -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG" \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
  
-cmake --build build --config Release --parallel
+cmake --build build --parallel
 ```
 - If you want to build for apple silicon mac:
 ```bash
 export MACOSX_DEPLOYMENT_TARGET=11.0
 
-cmake -B build -S . \
-  -DCMAKE_TOOLCHAIN_FILE=~/dev/vcpkg/scripts/buildsystems/vcpkg.cmake \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \ 
-  -DCMAKE_OSX_ARCHITECTURES="arm64" 
+cmake -S . -B build -G Ninja \
+-DCMAKE_TOOLCHAIN_FILE="~/dev/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+-DVCPKG_TARGET_TRIPLET=arm64-osx \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+-DCMAKE_OSX_ARCHITECTURES=arm64 \
+-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+-DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG" \
+-DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
  
-cmake --build build --config Release --parallel
+cmake --build build --parallel
 ```
 
 ### 7) Output binary
