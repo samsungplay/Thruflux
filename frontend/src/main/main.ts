@@ -63,6 +63,7 @@ const createWindow = (): void => {
     height: 800,
     minWidth: 960,
     minHeight: 640,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -207,46 +208,49 @@ const registerIpc = (): void => {
     },
   );
 
-  ipcMain.handle("app:shareText", async (_event, title: string, text: string) => {
-    if (
-      typeof title !== "string" ||
-      title.trim().length === 0 ||
-      typeof text !== "string" ||
-      text.trim().length === 0
-    ) {
-      return { ok: false, error: "Invalid share payload" };
-    }
+  ipcMain.handle(
+    "app:shareText",
+    async (_event, title: string, text: string) => {
+      if (
+        typeof title !== "string" ||
+        title.trim().length === 0 ||
+        typeof text !== "string" ||
+        text.trim().length === 0
+      ) {
+        return { ok: false, error: "Invalid share payload" };
+      }
 
-    const window =
-      BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const window =
+        BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
 
-    if (process.platform === "darwin" && window) {
+      if (process.platform === "darwin" && window) {
+        try {
+          const menu = new ShareMenu({
+            texts: [text],
+          });
+          menu.popup({
+            window,
+          });
+          return { ok: true, method: "share-menu" };
+        } catch {}
+      }
+
       try {
-        const menu = new ShareMenu({
-          texts: [text],
-        });
-        menu.popup({
-          window,
-        });
-        return { ok: true, method: "share-menu" };
+        clipboard.writeText(text);
       } catch {}
-    }
 
-    try {
-      clipboard.writeText(text);
-    } catch {}
-
-    try {
-      const params = new URLSearchParams({
-        subject: title.trim(),
-        body: text,
-      });
-      await shell.openExternal(`mailto:?${params.toString()}`);
-      return { ok: true, method: "clipboard-mailto" };
-    } catch {
-      return { ok: true, method: "clipboard-only" };
-    }
-  });
+      try {
+        const params = new URLSearchParams({
+          subject: title.trim(),
+          body: text,
+        });
+        await shell.openExternal(`mailto:?${params.toString()}`);
+        return { ok: true, method: "clipboard-mailto" };
+      } catch {
+        return { ok: true, method: "clipboard-only" };
+      }
+    },
+  );
 };
 
 const sleep = async (ms: number): Promise<void> => {
