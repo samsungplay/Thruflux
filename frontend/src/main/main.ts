@@ -290,13 +290,23 @@ const buildEngineArgs = (
 
 const reserveFreePort = async (): Promise<number> => {
   const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "::", () => {
+        server.off("error", reject);
+        resolve();
+      });
     });
-  });
+  } catch {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+  }
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();
@@ -341,6 +351,9 @@ const startUiHeartbeatServer = async (): Promise<number> => {
     server.close();
     throw new Error("Failed to determine heartbeat server address");
   }
+  console.log(
+    `[engine] ui heartbeat bound on ${address.address}:${String(address.port)} (${address.family})`,
+  );
 
   uiHeartbeatServer = server;
   uiHeartbeatPort = address.port;
