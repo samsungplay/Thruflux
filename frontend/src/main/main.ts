@@ -275,116 +275,17 @@ const getEngineBinaryName = (): string => {
   return "thru_linux";
 };
 
-const parseEngineArgs = (value: string): string[] => {
-  const out: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaped = false;
-
-  for (const ch of value) {
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      if (!quote) {
-        current += ch;
-        continue;
-      }
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        out.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (escaped) {
-    current += "\\";
-  }
-  if (current.length > 0) {
-    out.push(current);
-  }
-
-  return out;
-};
-
-const forceUiSubcommand = (args: string[]): string[] => {
-  const normalized = args
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-  if (normalized.length > 0 && normalized[0].toLowerCase() === "ui") {
-    return normalized;
-  }
-  return ["ui", ...normalized];
-};
-
-const getEngineArgs = (): string[] => {
-  const fromEnv = process.env.THRUFLUX_ENGINE_ARGS;
-  if (!fromEnv || fromEnv.trim().length === 0) {
-    return ["ui"];
-  }
-  const parsed = parseEngineArgs(fromEnv);
-  if (parsed.length === 0) {
-    return ["ui"];
-  }
-  if (parsed[0].startsWith("-")) {
-    return ["ui", ...parsed];
-  }
-  return parsed;
-};
-
 const buildEngineArgs = (
   heartbeatPort: number,
   enginePort: number,
 ): string[] => {
-  const base = forceUiSubcommand(getEngineArgs());
-  const filtered: string[] = [];
-  for (let i = 0; i < base.length; i += 1) {
-    const token = base[i];
-    if (token === "--port" || token === "--ui-heartbeat-port") {
-      i += 1;
-      continue;
-    }
-    if (
-      token.startsWith("--port=") ||
-      token.startsWith("--ui-heartbeat-port=")
-    ) {
-      continue;
-    }
-    filtered.push(token);
-  }
-
-  filtered.push(
+  return [
+    "ui",
     "--port",
     String(enginePort),
     "--ui-heartbeat-port",
     String(heartbeatPort),
-  );
-  return filtered;
+  ];
 };
 
 const reserveFreePort = async (): Promise<number> => {
@@ -572,13 +473,10 @@ const ensureEngineReady = async (): Promise<void> => {
   console.log(
     `[engine] spawning binary=${engineBinaryPath} args=${engineArgs.join(" ")}`,
   );
-  console.log(`[engine] argv=${JSON.stringify(engineArgs)}`);
-  console.log(`[engine] spawnArgs=${JSON.stringify(engineArgs)}`);
 
   const child = spawn(engineBinaryPath, engineArgs, {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-    argv0: process.platform === "win32" ? engineBinaryPath : undefined,
   });
   child.once("spawn", () => {
     console.log(`[engine] spawned pid=${String(child.pid)}`);
