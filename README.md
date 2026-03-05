@@ -192,7 +192,7 @@ cd vcpkg
 sudo apt update
 sudo apt install -y software-properties-common
 sudo apt install -y python3-distutils
-sudo apt install bison nasm build-essential zip unzip tar pkg-config curl ninja
+sudo apt install bison nasm build-essential zip unzip tar pkg-config curl ninja-build
 ```
 
 ### 4) Install GCC 10 & Set it as default
