@@ -192,7 +192,7 @@ cd vcpkg
 sudo apt update
 sudo apt install -y software-properties-common
 sudo apt install -y python3-distutils
-sudo apt install bison nasm build-essential zip unzip tar pkg-config curl
+sudo apt install bison nasm build-essential zip unzip tar pkg-config curl ninja-build
 ```
 
 ### 4) Install GCC 10 & Set it as default
@@ -278,7 +278,7 @@ choco install winflexbison3 nasm -y
 ### 4) Configure and build
 - **Note**: The x64-windows-static target is important. There are some patches I made without which build will fail.
 ```powershell
-cmake -S . -B build-windows `
+cmake -S . -B build `
   -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE="C:\dev\vcpkg\scripts\buildsystems\vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
