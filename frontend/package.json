@@ -1,6 +1,7 @@
 {
   "name": "thruflux-frontend",
   "version": "0.1.0",
+  "author": "infiniteplayapps",
   "description": "Thruflux desktop frontend built with Electron",
   "main": "dist/main/main.js",
   "scripts": {
