@@ -4,12 +4,14 @@ interface HomeScreenProps {
   onGoSend: () => void
   onGoReceive: () => void
   onGoSettings: () => void
+  versionString: string
 }
 
 export function HomeScreen({
   onGoSend,
   onGoReceive,
   onGoSettings,
+  versionString,
 }: HomeScreenProps): JSX.Element {
   return (
     <main className="home-shell">
@@ -50,7 +52,7 @@ export function HomeScreen({
         </button>
       </section>
       <p className="home-version-note">
-        <span>{t("appVersionNote")}</span>
+        <span>{versionString}</span>
         <span>{t("appMadeBy")}</span>
       </p>
     </main>

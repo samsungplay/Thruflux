@@ -1,15 +1,16 @@
 {
   "name": "thruflux-frontend",
-  "version": "v0.3.2 Beta",
+  "version": "0.3.2-beta",
   "author": "infiniteplayapps",
   "description": "Thruflux",
   "main": "dist/main/main.js",
   "scripts": {
+    "clean": "node scripts/clean-dist.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "esbuild src/renderer/main.tsx --bundle --platform=browser --format=iife --sourcemap --jsx=automatic --outfile=dist/renderer/renderer.js",
     "copy:renderer": "node scripts/copy-renderer.mjs",
-    "build": "npm run build:main && npm run build:renderer && npm run copy:renderer",
+    "build": "npm run clean && npm run build:main && npm run build:renderer && npm run copy:renderer",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder"
   },

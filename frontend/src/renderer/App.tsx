@@ -107,6 +107,7 @@ export default function App(): JSX.Element {
   const [isGoingHome, setIsGoingHome] = useState(false);
   const [dialogState, setDialogState] = useState<AppDialogState | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [versionString, setVersionString] = useState("");
   const [settingsState, setSettingsState] = useState<SettingsState>(() =>
     loadSettingsFromStorage(),
   );
@@ -179,16 +180,17 @@ export default function App(): JSX.Element {
     void (async () => {
       try {
         const appInfo = await window.thruflux.getAppInfo();
-        const versionString = appInfo.version.trim();
+        const currentVersion = appInfo.version.trim();
+        setVersionString(currentVersion);
         const versionResponse = await fetch(VERSION_CHECK_URL, {
           cache: "no-store",
         });
         if (versionResponse.ok) {
           const latestVersion = (await versionResponse.text()).trim();
-          if (latestVersion.length > 0 && latestVersion !== versionString) {
+          if (latestVersion.length > 0 && latestVersion !== currentVersion) {
             setDialogState({
               title: t("updateAvailableTitle"),
-              message: `${t("updateAvailableBody")}\nLatest: ${latestVersion}\nCurrent: ${versionString}`,
+              message: `${t("updateAvailableBody")}\nLatest: ${latestVersion}\nCurrent: ${currentVersion}`,
               tone: "error",
               actionLabel: t("updateNow"),
               onAction: () => {
@@ -1079,6 +1081,7 @@ export default function App(): JSX.Element {
           onGoSend={() => setScreen("send")}
           onGoReceive={() => setScreen("receive")}
           onGoSettings={() => setScreen("settings")}
+          versionString={versionString}
         />
       ) : null}
 
