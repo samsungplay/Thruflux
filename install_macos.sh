@@ -6,7 +6,7 @@ INSTALL_DIR="/usr/local/bin"
 TARGET="${INSTALL_DIR}/${APP}"
 UDP_BYTES=$((16 * 1024 * 1024))
 
-URL_MAC="https://github.com/samsungplay/Thruflux/releases/download/v0.3.1/thru_mac"
+URL_MAC="https://github.com/samsungplay/Thruflux/raw/refs/heads/main/frontend/binaries/macos/thru_mac"
 PLIST="/Library/LaunchDaemons/com.thruflux.udptune.plist"
 LABEL="com.thruflux.udptune"
 
