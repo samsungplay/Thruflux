@@ -219,7 +219,7 @@ namespace ui {
 
 
         if (UIConfig::port == 0) {
-            int port = server.bind_to_any_port("localhost");
+            int port = server.bind_to_any_port("127.0.0.1");
             if (port != -1) {
                 spdlog::info("Running local web interface on port {}", port);
                 isEnabled.store(true, std::memory_order::relaxed);
@@ -228,7 +228,7 @@ namespace ui {
                 spdlog::error("No available port found to start the local web interface.");
             }
         } else {
-            if (!server.bind_to_port("localhost", UIConfig::port)) {
+            if (!server.bind_to_port("127.0.0.1", UIConfig::port)) {
                 spdlog::error(
                     "Could not start local web interface on specified port {}", UIConfig::port);
             } else {
