@@ -109,6 +109,9 @@ export type TranslationKey =
   | "settingsPanelBody"
   | "appVersionNote"
   | "appMadeBy"
+  | "updateAvailableTitle"
+  | "updateAvailableBody"
+  | "updateNow"
   | "openSettings"
   | "serverUrl"
   | "stunServer"
@@ -227,6 +230,8 @@ export interface AppDialogState {
   title: string
   message: string
   tone: DialogTone
+  actionLabel?: string
+  onAction?: () => void
 }
 
 export interface ManifestProgressState {

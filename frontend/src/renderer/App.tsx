@@ -48,6 +48,10 @@ import {
   validateSettings,
 } from "./utils";
 
+const VERSION_CHECK_URL =
+  "https://raw.githubusercontent.com/samsungplay/Thruflux/refs/heads/main/frontend/version.txt";
+const UPDATE_LINK_PLACEHOLDER = "https://example.com/thruflux-update";
+
 export default function App(): JSX.Element {
   const [themePreference, setThemePreference] = useState<ThemePreference>(
     () => {
@@ -172,9 +176,28 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     document.title = t("appName");
-    void window.thruflux.getAppInfo();
     void (async () => {
       try {
+        const appInfo = await window.thruflux.getAppInfo();
+        const versionString = appInfo.version.trim();
+        const versionResponse = await fetch(VERSION_CHECK_URL, {
+          cache: "no-store",
+        });
+        if (versionResponse.ok) {
+          const latestVersion = (await versionResponse.text()).trim();
+          if (latestVersion.length > 0 && latestVersion !== versionString) {
+            setDialogState({
+              title: t("updateAvailableTitle"),
+              message: `${t("updateAvailableBody")}\nLatest: ${latestVersion}\nCurrent: ${versionString}`,
+              tone: "error",
+              actionLabel: t("updateNow"),
+              onAction: () => {
+                void window.thruflux.openExternal(UPDATE_LINK_PLACEHOLDER);
+              },
+            });
+          }
+        }
+
         const endpoint = await window.thruflux.getEngineEndpoint();
         if (endpoint.baseUrl) {
           setPreferredBaseUrl(endpoint.baseUrl);

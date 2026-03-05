@@ -1048,8 +1048,15 @@ html[data-theme="dark"] .send-item-main i {
   line-height: 1.45;
 }
 
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .dialog-btn {
-  justify-self: end;
   border: 0;
   border-radius: 10px;
   background: linear-gradient(140deg, #1976ff, #3ba6ff);
@@ -1064,6 +1071,16 @@ html[data-theme="dark"] .send-item-main i {
   max-width: 100%;
   flex: 0 0 auto;
   cursor: pointer;
+}
+
+@media (max-width: 520px) {
+  .dialog-actions {
+    justify-content: stretch;
+  }
+
+  .dialog-actions .dialog-btn {
+    flex: 1 1 140px;
+  }
 }
 
 @keyframes spinIcon {

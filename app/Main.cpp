@@ -40,6 +40,8 @@ static void forceUtf8Locale() {
 
 int runApp(const int argc, char **argv) {
     forceUtf8Locale();
+
+    common::Utils::checkUpdates();
     CLI::App app{"Thruflux"};
     app.require_subcommand(1);
     CLI::App* host = app.add_subcommand("host", "Share files with other multiple receivers");
@@ -50,6 +52,8 @@ int runApp(const int argc, char **argv) {
     sender::SenderConfig::initialize(host);
     receiver::ReceiverConfig::initialize(join);
     ui::UIConfig::initialize(ui);
+
+
 
     try {
         app.parse(argc, argv);

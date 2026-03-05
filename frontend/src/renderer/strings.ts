@@ -85,6 +85,10 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     settingsPanelBody: "Tune transfer behavior",
     appVersionNote: "v0.3.2 Beta",
     appMadeBy: "Made by infiniteplayapps",
+    updateAvailableTitle: "Update available",
+    updateAvailableBody:
+      "A new version is available. If you do not update, some features may not work properly.",
+    updateNow: "Update now",
     openSettings: "Open advanced settings",
     serverUrl: "Server URL",
     stunServer: "STUN server",

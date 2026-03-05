@@ -23,9 +23,16 @@ export function AppDialog({ dialog, onClose }: AppDialogProps): JSX.Element | nu
         <div className="dialog-accent" aria-hidden="true"></div>
         <h2>{dialog.title}</h2>
         <p>{dialog.message}</p>
-        <button className="dialog-btn" type="button" onClick={onClose}>
-          {t("dismiss")}
-        </button>
+        <div className="dialog-actions">
+          {dialog.actionLabel ? (
+            <button className="dialog-btn" type="button" onClick={dialog.onAction}>
+              {dialog.actionLabel}
+            </button>
+          ) : null}
+          <button className="dialog-btn" type="button" onClick={onClose}>
+            {t("dismiss")}
+          </button>
+        </div>
       </section>
     </div>
   )

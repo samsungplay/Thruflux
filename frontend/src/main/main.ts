@@ -172,6 +172,21 @@ const registerIpc = (): void => {
     }
   });
 
+  ipcMain.handle("app:openExternal", async (_event, targetUrl: string) => {
+    if (!targetUrl || typeof targetUrl !== "string") {
+      return { ok: false, error: "Invalid URL" };
+    }
+    try {
+      await shell.openExternal(targetUrl);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Failed to open URL",
+      };
+    }
+  });
+
   ipcMain.handle(
     "app:showNotification",
     (_event, title: string, body: string) => {

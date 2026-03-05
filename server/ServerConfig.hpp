@@ -4,6 +4,8 @@
 #include <CLI/Validators.hpp>
 #include <string>
 
+#include "../common/Utils.hpp"
+
 namespace server {
     class ServerConfig {
     public:
@@ -29,7 +31,7 @@ namespace server {
 
 
 
-            app->set_version_flag("--version", "Thruflux Server v0.3.2");
+            app->set_version_flag("--version", common::versionString);
 
             app->add_option("--port", port, "Port to run the server on.")
                     ->capture_default_str()
