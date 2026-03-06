@@ -1,6 +1,6 @@
-# Thruflux (Open Alpha, Newly Re-written in C++)
+# Thruflux (Open Beta, Newly Re-written in C++)
 
-**News:** UI integration is under development, likely going to use Electron for frontend, and expose the engine via local web interface.
+**News:** Desktop UI version is coming very soon (within a week from March 4th). The implementation is more or less complete, just needs some additional tests to ensure the basic functionalities and installers work as expected across different platforms.
 
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
