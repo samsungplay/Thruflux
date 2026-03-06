@@ -481,7 +481,7 @@ namespace receiver {
             settings.es_init_max_stream_data_bidi_remote = ReceiverConfig::quicStreamWindowBytes;
             settings.es_handshake_to = 16777215;
             settings.es_allow_migration = 0;
-            settings.es_pace_packets = 1;
+            settings.es_pace_packets = 0;
             settings.es_delayed_acks = 0;
             settings.es_max_batch_size = 64;
             settings.es_scid_len = 8;
