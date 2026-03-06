@@ -6,20 +6,17 @@ endif()
 
 vcpkg_from_github(OUT_SOURCE_PATH SOURCE_PATH
     REPO litespeedtech/lsquic
-    REF v${VERSION}
-    SHA512 40d742779bfa2dc6fdaf0ee8e9349498d373dcffcc6dd27867c18d87309a288ea6811d693043b5d98364d816b818b49445214497475844201241193c0f37b349
+    REF v4.6.0
+    SHA512 7de5d13e6252c2451586ecbe5a9c31f8cd2c22506d7ebbdca208944048e3e3d970b94bf2d9e66e1602a55cae830446eb0e3fe1fb309a5c59ec2ae711b9831ba9
     HEAD_REF master
-    PATCHES 
-        disable-asan.patch
-        fix-found-boringssl.patch
 )
 
 # Submodules
 vcpkg_from_github(OUT_SOURCE_PATH LSQPACK_SOURCE_PATH
     REPO litespeedtech/ls-qpack
-    REF v2.5.3
+    REF v2.6.2
     HEAD_REF master
-    SHA512 f90502c763abc84532f33d1b8f952aea7869e4e0c5f6bd344532ddd51c4a180958de4086d88b9ec96673a059c806eec9e70007651d4d4e1a73395919dee47ce0
+    SHA512 9b38ba1b4b12d921385a285e8c833a0ae9cdcc153cff4f1857f88ceb82174304decb5fccbdf9267d08a21c5a26c71fdd884dcacd12afd19256a347a8306b9b90
 )
 if(NOT EXISTS "${SOURCE_PATH}/src/ls-hpack/CMakeLists.txt")
     file(REMOVE_RECURSE "${SOURCE_PATH}/src/liblsquic/ls-qpack")
@@ -31,18 +28,6 @@ vcpkg_from_github(OUT_SOURCE_PATH LSHPACK_SOURCE_PATH
     REF v2.3.2
     HEAD_REF master
     SHA512 45d6c8296e8eee511e6a083f89460d5333fc9a49bc078dac55fdec6c46db199de9f150379f02e054571f954a5e3c79af3864dbc53dc57d10a8d2ed26a92d4278
-)
-
-vcpkg_replace_string(
-	"${SOURCE_PATH}/CMakeLists.txt"
-	"-WX"
-	""
-)
-
-vcpkg_replace_string(
-	"${SOURCE_PATH}/CMakeLists.txt",
-	"-Zi"
-	""
 )
 if(NOT EXISTS "${SOURCE_PATH}/src/lshpack/CMakeLists.txt")
     file(REMOVE_RECURSE "${SOURCE_PATH}/src/lshpack")

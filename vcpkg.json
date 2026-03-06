@@ -6,7 +6,10 @@
     "name" : "ixwebsocket",
     "default-features" : false,
     "features" : [ "mbedtls" ]
-  }, "liblsquic", "libnice", "nlohmann-json", "spdlog", "uwebsockets", "mbedtls", "pkgconf", "llfio", {
+  }, {
+    "name": "liblsquic",
+    "version>=": "4.6.0"
+  }, "libnice", "nlohmann-json", "spdlog", "uwebsockets", "mbedtls", "pkgconf", "llfio", {
     "name" : "cpp-httplib",
     "version>=" : "0.30.2"
   } ],
