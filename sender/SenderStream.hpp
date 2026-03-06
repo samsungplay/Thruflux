@@ -1,6 +1,5 @@
 #pragma once
 #include <lsquic.h>
-
 #include "SenderConfig.hpp"
 #include "../common/Stream.hpp"
 #include "SenderContexts.hpp"
@@ -441,7 +440,7 @@ namespace sender {
             settings.es_allow_migration = 0;
             settings.es_pace_packets = 1;
             settings.es_delayed_acks = 1;
-            settings.es_max_batch_size = 256;
+            settings.es_max_batch_size = 0;
             settings.es_scid_len = 8;
             settings.es_max_cfcw = SenderConfig::quicConnWindowBytes * 2;
             settings.es_max_sfcw = SenderConfig::quicStreamWindowBytes * 2;
