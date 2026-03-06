@@ -471,7 +471,7 @@ namespace receiver {
             lsquic_engine_settings settings;
             lsquic_engine_init_settings(&settings, LSENG_SERVER);
             settings.es_versions = (1 << LSQVER_I001);
-            settings.es_cc_algo = 2;
+            settings.es_cc_algo = 1;
             settings.es_init_max_data = ReceiverConfig::quicConnWindowBytes;
             settings.es_init_max_streams_uni = 0;
             settings.es_init_max_streams_bidi = 2;
@@ -483,11 +483,11 @@ namespace receiver {
             settings.es_allow_migration = 0;
             settings.es_pace_packets = 1;
             settings.es_delayed_acks = 0;
-            settings.es_max_batch_size = 8;
+            settings.es_max_batch_size = 64;
             settings.es_scid_len = 8;
             settings.es_max_cfcw = ReceiverConfig::quicConnWindowBytes * 2;
             settings.es_max_sfcw = ReceiverConfig::quicStreamWindowBytes * 2;
-            settings.es_progress_check = 1000;
+            settings.es_progress_check = 10000;
 
 
             char err_buf[256];
