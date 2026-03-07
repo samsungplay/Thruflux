@@ -131,7 +131,7 @@
             <i class="fa-solid fa-memory"></i>
             <span
               ><strong>Light on your system</strong>: Thruflux keeps file
-              sending on one path, so it uses less CPU and memory while
+              sending on single connection, so it uses less CPU and memory while
               transfers run.</span
             >
           </li>
@@ -139,11 +139,13 @@
         <div class="comparison-callout">
           <i class="fa-solid fa-scale-balanced"></i>
           <p>
-            Browser-based share tools are convenient, but they run in a web
-            stack and usually follow an upload-then-download model. Thruflux
-            runs as a native desktop app on a C++ engine with direct transfer
-            sessions, which is why it is built to deliver stronger performance
-            for large and many-file workloads.
+            Browser-based sharing tools are convenient, but browsers aren’t
+            built for heavy file transfers. They add extra overhead and usually
+            rely on an upload-then-download process through a server, which can
+            slow things down - especially with large files or lots of files.
+            Thruflux runs as a native desktop app powered by a C++ engine and
+            uses direct transfer sessions between devices, allowing it to move
+            large or many files more efficiently and with better performance.
           </p>
         </div>
         <p class="cpp-note">
@@ -164,7 +166,13 @@
             </thead>
             <tbody>
               <tr class="highlight">
-                <td><strong>Thruflux</strong></td>
+                <td>
+                  <strong>Thruflux</strong>
+                  <small class="tool-note"
+                    >Modern desktop app / commandline-tool hybrid made for fast
+                    direct file sharing</small
+                  >
+                </td>
                 <td>QUIC</td>
                 <td>Yes</td>
                 <td>Yes</td>
@@ -172,7 +180,13 @@
                 <td><strong>2m 18s</strong></td>
               </tr>
               <tr>
-                <td>Croc</td>
+                <td>
+                  Croc
+                  <small class="tool-note"
+                    >Code-based command-line tool for sending files to other
+                    people</small
+                  >
+                </td>
                 <td>TCP</td>
                 <td>Yes</td>
                 <td>No</td>
@@ -180,7 +194,13 @@
                 <td>19m 33s</td>
               </tr>
               <tr>
-                <td>Wormhole</td>
+                <td>
+                  Wormhole
+                  <small class="tool-note"
+                    >Code-based command-line sharing tool that often uses a
+                    relay path</small
+                  >
+                </td>
                 <td>TCP (relay)</td>
                 <td>Yes</td>
                 <td>No</td>
@@ -188,7 +208,13 @@
                 <td>N/A (stalled around ~38:59)</td>
               </tr>
               <tr>
-                <td>SCP</td>
+                <td>
+                  SCP
+                  <small class="tool-note"
+                    >Classic secure copy command commonly used by developers and
+                    server admins</small
+                  >
+                </td>
                 <td>TCP</td>
                 <td>No</td>
                 <td>No</td>
@@ -196,7 +222,13 @@
                 <td>26m 14s</td>
               </tr>
               <tr>
-                <td>Rsync</td>
+                <td>
+                  Rsync
+                  <small class="tool-note"
+                    >Popular command-line sync tool for copying many files and
+                    folders</small
+                  >
+                </td>
                 <td>TCP</td>
                 <td>No</td>
                 <td>No</td>
@@ -206,21 +238,25 @@
             </tbody>
           </table>
         </div>
+        <div class="benchmark-note-box">
+          <p class="fineprint">
+            Results are medians of 3 runs over the public internet on a
+            high-latency route (Chicago sender to Seoul receiver). Times are
+            end-to-end wall-clock duration from sender command execution until
+            receiver completion (or sender completion when no separate receive
+            command exists), not raw transfer-only timing.
+          </p>
+          <p class="env-note">
+            Benchmark environment: Vultr instance (2 vCPU AMD EPYC Genoa), 4 GB
+            RAM, NVMe SSD, Ubuntu 24.04.
+          </p>
+        </div>
         <p class="fineprint">
-          Results are medians of 3 runs over the public internet on a
-          high-latency route (Chicago sender to Seoul receiver). Times are
-          end-to-end wall-clock duration from sender command execution until
-          receiver completion (or sender completion when no separate receive
-          command exists), not raw transfer-only timing.
-        </p>
-        <p class="env-note">
-          Benchmark environment: Vultr instance (2 vCPU AMD EPYC Genoa), 4 GB
-          RAM, NVMe SSD, Ubuntu 24.04.
-        </p>
-        <p class="fineprint">
-          TURN relay mode is fallback-only in Thruflux when direct ICE
-          connectivity cannot be established. Relay throughput is mainly limited
-          by relay server bandwidth, load, and location.
+          While rare - if a direct connection is not possible, for example on
+          restrictive networks, Thruflux automatically falls back to a relay so
+          the transfer can still complete. In this case, speeds mainly depend on
+          the relay server’s distance, capacity, and current load. Even in relay
+          mode, Thruflux is designed to maintain solid performance. 🚀
         </p>
         <div class="speed-table-wrap">
           <table class="speed-table" aria-label="TURN relay benchmark">

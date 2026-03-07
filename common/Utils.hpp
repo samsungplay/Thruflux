@@ -48,7 +48,7 @@ namespace common {
             "1txyM/1d8iC9djwj2ij3+RvrWWTV3F9yfiD8zYm1kGdNYno/Tq0dwzn+evQoFt9B\n9kiABdcPUXmsEKvU7ANm5mqwujGSQkBqvjrTcuFqN1W8rB2Vt2lh8kORdOag0wok\nRqEIr9baRRmW1FMdW4R58MD3R++Lj8UGrp1MYp3/RgT408m2ECVAdf4WqslKYIYv\nuu8wd+RU4riEmViAqhOLUTpPSPaLtrM=\n-----END CERTIFICATE-----\n";
 
 
-    inline const std::string versionString = "0.3.2-beta";
+    inline const std::string versionString = "0.4.0-beta";
     class TokenBucket {
     public:
         TokenBucket(const double ratesPerSec, const double burst)

@@ -387,6 +387,25 @@ body {
   line-height: 1.5;
 }
 
+.benchmark-note-box {
+  margin-top: 14px;
+  border: 1px solid rgba(147, 178, 223, 0.26);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 10px 12px;
+}
+
+.benchmark-note-box .fineprint,
+.benchmark-note-box .env-note {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.benchmark-note-box .env-note {
+  margin-top: 8px;
+}
+
 .speed-points,
 .simple-points {
   margin: 14px 0 0;
