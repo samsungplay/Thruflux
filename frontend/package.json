@@ -1,9 +1,13 @@
 {
   "name": "thruflux-frontend",
   "version": "0.4.0-beta",
-  "author": "infiniteplayapps",
+  "author": {
+    "name": "Infiniteplayapps",
+    "email": "infiniteplayapps@gmail.com"
+  },
   "description": "Thruflux",
   "main": "dist/main/main.js",
+  "homepage": "https://example.com",
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
