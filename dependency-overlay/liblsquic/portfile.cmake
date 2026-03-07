@@ -11,6 +11,12 @@ vcpkg_from_github(OUT_SOURCE_PATH SOURCE_PATH
     HEAD_REF master
 )
 
+vcpkg_replace_string(
+    "${SOURCE_PATH}/CMakeLists.txt"
+    "-W4 -WX"
+    "-W4"
+)
+
 # Submodules
 vcpkg_from_github(OUT_SOURCE_PATH LSQPACK_SOURCE_PATH
     REPO litespeedtech/ls-qpack
