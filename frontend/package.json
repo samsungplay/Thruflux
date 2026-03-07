@@ -17,6 +17,7 @@
   },
   "build": {
     "directories": {
+      "output": "release",
       "buildResources": "build"
     },
     "extraResources": [
@@ -33,12 +34,13 @@
     ],
     "mac": {
       "icon": "build/icons/icons/mac/icon.icns",
-      "artifactName": "Thruflux-macos-arm64.${ext}",
+      "artifactName": "Thruflux-macos-universal.${ext}",
+      "x64ArchFiles": "Contents/Resources/binaries/macos/thru_mac",
       "target": [
         {
           "target": "pkg",
           "arch": [
-            "arm64"
+            "universal"
           ]
         }
       ]

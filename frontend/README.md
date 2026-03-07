@@ -41,10 +41,10 @@ Build output:
 npm run dist
 ```
 
-Installer output directory: `dist/`
+Installer output directory: `release/`
 
 Configured installer artifact names:
 
-- macOS: `Thruflux-macos-arm64.pkg`
+- macOS: `Thruflux-macos-universal.pkg`
 - Windows: `Thruflux-windows-amd64.exe`
 - Linux: `Thruflux-linux-amd64.deb`
