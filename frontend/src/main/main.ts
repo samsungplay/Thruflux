@@ -141,6 +141,54 @@ const registerIpc = (): void => {
     return entries;
   });
 
+  ipcMain.handle("app:pickSendFiles", async () => {
+    const window =
+      BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(window, {
+      properties: ["openFile", "multiSelections"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return [] as PickedPathEntry[];
+    }
+
+    const entries: PickedPathEntry[] = [];
+    for (const selectedPath of result.filePaths) {
+      try {
+        const stats = await fs.stat(selectedPath);
+        entries.push({
+          path: selectedPath,
+          isDirectory: stats.isDirectory(),
+          size: stats.isDirectory() ? null : stats.size,
+        });
+      } catch {}
+    }
+    return entries;
+  });
+
+  ipcMain.handle("app:pickSendDirectories", async () => {
+    const window =
+      BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(window, {
+      properties: ["openDirectory", "multiSelections"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return [] as PickedPathEntry[];
+    }
+
+    const entries: PickedPathEntry[] = [];
+    for (const selectedPath of result.filePaths) {
+      try {
+        const stats = await fs.stat(selectedPath);
+        entries.push({
+          path: selectedPath,
+          isDirectory: stats.isDirectory(),
+          size: stats.isDirectory() ? null : stats.size,
+        });
+      } catch {}
+    }
+    return entries;
+  });
+
   ipcMain.handle("app:pickReceivePath", async () => {
     const window =
       BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];

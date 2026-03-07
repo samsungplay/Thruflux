@@ -432,8 +432,8 @@ body {
   text-align: center;
   gap: 14px;
   padding: 24px;
-  cursor: pointer;
-  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+  cursor: default;
+  transition: none;
   overflow: hidden;
 }
 
@@ -443,11 +443,6 @@ body {
   justify-items: stretch;
   text-align: left;
   grid-template-rows: auto minmax(0, 1fr);
-}
-
-.send-unified:hover {
-  transform: translateY(-2px);
-  border-color: rgba(53, 160, 255, 0.78);
 }
 
 .send-unified.drag-hover {
@@ -488,13 +483,59 @@ html[data-theme="dark"] .send-empty-hero i {
 }
 
 .send-drop-hint {
-  margin: 0 0 6px;
+  margin: 0;
   color: var(--text-soft);
   font-size: 0.9rem;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   justify-self: start;
+}
+
+.send-drop-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.send-picker-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.send-empty-hero .send-picker-actions {
+  justify-content: center;
+}
+
+.send-picker-btn {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 8px 12px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.send-picker-btn i {
+  color: #3a95ff;
+  font-size: 0.84rem;
+}
+
+.send-picker-btn:hover {
+  border-color: rgba(53, 160, 255, 0.72);
+  background: rgba(53, 160, 255, 0.09);
 }
 
 .drop-zone-overlay {

@@ -766,14 +766,25 @@ export default function App(): JSX.Element {
     };
   }, []);
 
-  const openPicker = async (): Promise<void> => {
+  const appendPickedEntries = (picked: Awaited<ReturnType<typeof window.thruflux.pickSendPaths>>): void => {
+    if (!picked || picked.length === 0) {
+      return;
+    }
+    const incoming = entriesFromNativePicker(picked);
+    setSendEntries((prev) => mergeUniqueEntries(prev, incoming));
+  };
+
+  const openFilePicker = async (): Promise<void> => {
     try {
-      const picked = await window.thruflux.pickSendPaths();
-      if (!picked || picked.length === 0) {
-        return;
-      }
-      const incoming = entriesFromNativePicker(picked);
-      setSendEntries((prev) => mergeUniqueEntries(prev, incoming));
+      const picked = await window.thruflux.pickSendFiles();
+      appendPickedEntries(picked);
+    } catch {}
+  };
+
+  const openDirectoryPicker = async (): Promise<void> => {
+    try {
+      const picked = await window.thruflux.pickSendDirectories();
+      appendPickedEntries(picked);
     } catch {}
   };
 
@@ -1094,8 +1105,11 @@ export default function App(): JSX.Element {
           isDropHovering={isDropHovering}
           onBack={goHome}
           onAbort={goHome}
-          onOpenPicker={() => {
-            void openPicker();
+          onOpenFilePicker={() => {
+            void openFilePicker();
+          }}
+          onOpenDirectoryPicker={() => {
+            void openDirectoryPicker();
           }}
           onDragOver={(e) => {
             e.preventDefault();

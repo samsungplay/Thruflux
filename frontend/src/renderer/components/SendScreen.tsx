@@ -1,4 +1,4 @@
-import type { DragEvent, KeyboardEvent } from "react"
+import type { DragEvent } from "react"
 import { t } from "../strings"
 import { formatSize } from "../utils"
 import type {
@@ -13,7 +13,8 @@ interface SendScreenProps {
   isDropHovering: boolean
   onBack: () => void
   onAbort: () => void
-  onOpenPicker: () => void
+  onOpenFilePicker: () => void
+  onOpenDirectoryPicker: () => void
   onDrop: (e: DragEvent<HTMLDivElement>) => void
   onDragEnter: (e: DragEvent<HTMLDivElement>) => void
   onDragLeave: (e: DragEvent<HTMLDivElement>) => void
@@ -35,7 +36,8 @@ export function SendScreen({
   isDropHovering,
   onBack,
   onAbort,
-  onOpenPicker,
+  onOpenFilePicker,
+  onOpenDirectoryPicker,
   onDrop,
   onDragEnter,
   onDragLeave,
@@ -53,13 +55,6 @@ export function SendScreen({
 }: SendScreenProps): JSX.Element {
   const fileCount = entries.filter((entry) => !entry.isDirectory).length
   const folderCount = entries.filter((entry) => entry.isDirectory).length
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault()
-      onOpenPicker()
-    }
-  }
 
   if (flowStage !== "idle") {
     return (
@@ -316,11 +311,6 @@ export function SendScreen({
           className={`send-unified ${entries.length > 0 ? "has-items" : ""} ${
             isDropHovering ? "drag-hover" : ""
           }`}
-          role="button"
-          tabIndex={0}
-          aria-label={t("sendScreenTitle")}
-          onClick={onOpenPicker}
-          onKeyDown={handleKeyDown}
           onDragOver={onDragOver}
           onDragEnter={onDragEnter}
           onDragLeave={onDragLeave}
@@ -328,10 +318,36 @@ export function SendScreen({
         >
           {entries.length > 0 ? (
             <>
-              <p className="send-drop-hint">
-                <i className="fa-solid fa-circle-plus"></i>
-                <span>{t("sendDropMoreHint")}</span>
-              </p>
+              <div className="send-drop-topbar">
+                <p className="send-drop-hint">
+                  <i className="fa-solid fa-circle-plus"></i>
+                  <span>{t("sendDropMoreHint")}</span>
+                </p>
+                <div className="send-picker-actions">
+                  <button
+                    className="send-picker-btn"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onOpenFilePicker()
+                    }}
+                  >
+                    <i className="fa-solid fa-file"></i>
+                    <span>{t("sendSelectFiles")}</span>
+                  </button>
+                  <button
+                    className="send-picker-btn"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onOpenDirectoryPicker()
+                    }}
+                  >
+                    <i className="fa-solid fa-folder"></i>
+                    <span>{t("sendSelectFolders")}</span>
+                  </button>
+                </div>
+              </div>
               <ul className="send-list">
                 {entries.map((entry, index) => (
                   <li className="send-item" key={`${entry.isDirectory}:${entry.path}`}>
@@ -370,6 +386,20 @@ export function SendScreen({
               <h1>{t("sendScreenTitle")}</h1>
               <p>{t("sendScreenBody")}</p>
               <span>{t("sendScreenHint")}</span>
+              <div className="send-picker-actions">
+                <button className="send-picker-btn" type="button" onClick={onOpenFilePicker}>
+                  <i className="fa-solid fa-file"></i>
+                  <span>{t("sendSelectFiles")}</span>
+                </button>
+                <button
+                  className="send-picker-btn"
+                  type="button"
+                  onClick={onOpenDirectoryPicker}
+                >
+                  <i className="fa-solid fa-folder"></i>
+                  <span>{t("sendSelectFolders")}</span>
+                </button>
+              </div>
             </div>
           )}
 

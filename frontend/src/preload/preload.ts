@@ -6,6 +6,8 @@ const bridge: ThrufluxBridge = {
   getEngineHealth: () => ipcRenderer.invoke("app:getEngineHealth"),
   getEngineEndpoint: () => ipcRenderer.invoke("app:getEngineEndpoint"),
   pickSendPaths: () => ipcRenderer.invoke("app:pickSendPaths"),
+  pickSendFiles: () => ipcRenderer.invoke("app:pickSendFiles"),
+  pickSendDirectories: () => ipcRenderer.invoke("app:pickSendDirectories"),
   pickReceivePath: () => ipcRenderer.invoke("app:pickReceivePath"),
   getDefaultReceiveDirectory: () =>
     ipcRenderer.invoke("app:getDefaultReceiveDirectory"),

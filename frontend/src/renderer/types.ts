@@ -45,6 +45,8 @@ export type TranslationKey =
   | "sendScreenTitle"
   | "sendScreenBody"
   | "sendScreenHint"
+  | "sendSelectFiles"
+  | "sendSelectFolders"
   | "sendSummaryFiles"
   | "sendSummaryFolders"
   | "sendDropMoreHint"

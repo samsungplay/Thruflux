@@ -25,6 +25,8 @@ export interface ThrufluxBridge {
   getEngineHealth: () => Promise<EngineHealthInfo>
   getEngineEndpoint: () => Promise<EngineEndpointInfo>
   pickSendPaths: () => Promise<PickedPathEntry[]>
+  pickSendFiles: () => Promise<PickedPathEntry[]>
+  pickSendDirectories: () => Promise<PickedPathEntry[]>
   pickReceivePath: () => Promise<string | null>
   getDefaultReceiveDirectory: () => Promise<string | null>
   openPath: (targetPath: string) => Promise<{ ok: boolean; error?: string }>
