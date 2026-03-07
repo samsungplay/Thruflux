@@ -127,6 +127,14 @@
               wait. Files start moving right away once connected.</span
             >
           </li>
+          <li>
+            <i class="fa-solid fa-memory"></i>
+            <span
+              ><strong>Light on your system</strong>: Thruflux keeps file
+              sending on one path, so it uses less CPU and memory while
+              transfers run.</span
+            >
+          </li>
         </ul>
         <div class="comparison-callout">
           <i class="fa-solid fa-scale-balanced"></i>
@@ -147,90 +155,91 @@
             <thead>
               <tr>
                 <th>Tool</th>
-                <th>10 GiB</th>
-                <th>1000 x10 MiB files</th>
-                <th>Relative pace</th>
-                <th>Layperson takeaway</th>
+                <th>Transport</th>
+                <th>Random remote peers</th>
+                <th>Multi-receiver</th>
+                <th>10 GiB file</th>
+                <th>1000 x 10 MiB</th>
               </tr>
             </thead>
             <tbody>
               <tr class="highlight">
-                <td>
-                  Thruflux (direct)
-                  <small class="tool-note"
-                    >Modern app flow with direct device-to-device
-                    transfer</small
-                  >
-                </td>
-                <td><strong>1m34s</strong></td>
-                <td><strong>1m31s</strong></td>
-                <td>
-                  <span class="badge badge-best">Fastest in this test</span>
-                </td>
-                <td>Fast on both single big files and many-file folders</td>
+                <td><strong>Thruflux</strong></td>
+                <td>QUIC</td>
+                <td>Yes</td>
+                <td>Yes</td>
+                <td><strong>2m 20s</strong></td>
+                <td><strong>2m 18s</strong></td>
               </tr>
               <tr>
-                <td>
-                  rsync
-                  <small class="tool-note"
-                    >Popular advanced command-line sync tool</small
-                  >
-                </td>
-                <td>1m43s</td>
-                <td>1m39s</td>
-                <td><span class="badge badge-close">Close behind</span></td>
-                <td>Close, but a bit slower in this test</td>
+                <td>Croc</td>
+                <td>TCP</td>
+                <td>Yes</td>
+                <td>No</td>
+                <td>2m 40s</td>
+                <td>19m 33s</td>
               </tr>
               <tr>
-                <td>
-                  scp
-                  <small class="tool-note"
-                    >Classic secure copy command used by technical users</small
-                  >
-                </td>
-                <td>1m41s</td>
-                <td>2m20s</td>
-                <td><span class="badge badge-mixed">Mixed</span></td>
-                <td>Many-file transfers took notably longer</td>
+                <td>Wormhole</td>
+                <td>TCP (relay)</td>
+                <td>Yes</td>
+                <td>No</td>
+                <td>22m 20s</td>
+                <td>N/A (stalled around ~38:59)</td>
               </tr>
               <tr>
-                <td>
-                  croc
-                  <small class="tool-note"
-                    >Code-based sharing tool that often relies on relays</small
-                  >
-                </td>
-                <td>2m42s</td>
-                <td>9m22s</td>
-                <td><span class="badge badge-slower">Much slower</span></td>
-                <td>Convenient, but much slower in this setup</td>
+                <td>SCP</td>
+                <td>TCP</td>
+                <td>No</td>
+                <td>No</td>
+                <td>15m 06s</td>
+                <td>26m 14s</td>
               </tr>
               <tr>
-                <td>
-                  wormhole
-                  <small class="tool-note"
-                    >Code-based transfer tool for direct person-to-person
-                    sending</small
-                  >
-                </td>
-                <td>2m45s</td>
-                <td>stalled in this run</td>
-                <td><span class="badge badge-slower">Unstable here</span></td>
-                <td>Could not finish the many-file test here</td>
+                <td>Rsync</td>
+                <td>TCP</td>
+                <td>No</td>
+                <td>No</td>
+                <td>15m 18s</td>
+                <td>14m 53s</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p class="fineprint">
-          Source: public README benchmark. Conditions in that run: public
-          internet path, specific server and locations, median of three runs,
-          wall-clock timing including setup/closing phases.
+          Results are medians of 3 runs over the public internet on a
+          high-latency route (Chicago sender to Seoul receiver). Times are
+          end-to-end wall-clock duration from sender command execution until
+          receiver completion (or sender completion when no separate receive
+          command exists), not raw transfer-only timing.
         </p>
         <p class="env-note">
-          Benchmark environment: Vultr dedicated CPU (2 vCPU AMD EPYC Genoa), 4
-          GB RAM, NVMe SSD, Ubuntu 22.04. Test route was Chicago (sender) to New
-          Jersey (receiver), median of 3 runs.
+          Benchmark environment: Vultr instance (2 vCPU AMD EPYC Genoa), 4 GB
+          RAM, NVMe SSD, Ubuntu 24.04.
         </p>
+        <p class="fineprint">
+          TURN relay mode is fallback-only in Thruflux when direct ICE
+          connectivity cannot be established. Relay throughput is mainly limited
+          by relay server bandwidth, load, and location.
+        </p>
+        <div class="speed-table-wrap">
+          <table class="speed-table" aria-label="TURN relay benchmark">
+            <thead>
+              <tr>
+                <th>Mode</th>
+                <th>10 GiB file</th>
+                <th>1000 x 10 MiB</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="highlight">
+                <td>Thruflux (TURN relay)</td>
+                <td><strong>5m 40s</strong></td>
+                <td><strong>5m 35s</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="card security reveal">
