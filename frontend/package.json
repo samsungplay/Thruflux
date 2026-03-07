@@ -12,7 +12,8 @@
     "copy:renderer": "node scripts/copy-renderer.mjs",
     "build": "npm run clean && npm run build:main && npm run build:renderer && npm run copy:renderer",
     "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "publishLandingPage": "node scripts/publish-landing-page.mjs"
   },
   "build": {
     "directories": {

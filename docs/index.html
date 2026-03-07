@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thruflux | Modern file sharing app</title>
+    <meta
+      name="description"
+      content="Thruflux moves files between devices with speed, privacy, and simplicity in one clean experience."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script
+      src="https://kit.fontawesome.com/30fc441d4e.js"
+      crossorigin="anonymous"
+    ></script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-glow bg-glow-a"></div>
+    <div class="bg-glow bg-glow-b"></div>
+
+    <header class="hero reveal">
+      <div class="hero-brand">
+        <img src="./assets/logo.png" alt="Thruflux logo" class="hero-logo" />
+        <div class="hero-brand-text">
+          <h1>Thruflux</h1>
+          <p>Built for speed. Direct for security. Simple by design.</p>
+        </div>
+      </div>
+
+      <h2 class="hero-punchline">
+        <span>Need to send big files and folders?</span>
+        <span>It doesn’t get this fast. Or this easy.</span>
+      </h2>
+
+      <p class="hero-intro">
+        Thruflux is a modern file-sharing desktop app powered by a
+        high-performance C++ engine. It is built for large real-world transfers,
+        from single files to huge folder trees, and from one receiver to many at
+        once.
+      </p>
+      <div class="hero-chips">
+        <span><i class="fa-solid fa-bolt"></i> C++ transfer engine</span>
+        <span><i class="fa-solid fa-users"></i> Multi-receiver sharing</span>
+        <span
+          ><i class="fa-solid fa-folder-tree"></i> Multi-file and folder
+          ready</span
+        >
+        <span><i class="fa-solid fa-infinity"></i> Free forever</span>
+        <span
+          ><i class="fa-solid fa-database"></i> Unlimited transfer size</span
+        >
+        <span
+          ><i class="fa-brands fa-github"></i> Open source and
+          community-driven</span
+        >
+      </div>
+      <br />
+      <div class="video">
+        <iframe
+          src="https://www.youtube.com/embed/pEkgviSjEvY?autoplay=1&loop=1&playlist=pEkgviSjEvY&mute=1&controls=0&modestbranding=1&rel=0"
+          title="YouTube video"
+          frameborder="0"
+          allow="autoplay; encrypted-media"
+          allowfullscreen
+        >
+        </iframe>
+      </div>
+    </header>
+
+    <main class="sections">
+      <section class="card speed reveal">
+        <div class="card-icon"><i class="fa-solid fa-gauge-high"></i></div>
+        <h2>Built for speed</h2>
+        <p>
+          Thruflux is built on a proven native <strong>C++ engine</strong> and a
+          modern transport model that focuses on raw transfer performance in
+          real conditions.
+        </p>
+        <ul class="speed-points">
+          <li>
+            <i class="fa-solid fa-folder-tree"></i>
+            <span
+              ><strong>No zip/unzip fuss</strong>: folders and many files move
+              as they are, with first-class multi-file transfer support.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-bolt"></i>
+            <span
+              ><strong>Modern QUIC protocol</strong>: optimized for fast,
+              reliable movement over today’s networks.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-microchip"></i>
+            <span
+              ><strong>Mature C++ libraries and frameworks</strong>: tuned for
+              performance-sensitive networking and transfer workloads.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-rotate"></i>
+            <span
+              ><strong>Resumability</strong>: interrupted sessions can continue
+              without restarting from zero.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-forward-fast"></i>
+            <span
+              ><strong>Quick start and quick resume</strong>: Thruflux starts
+              sending fast and resumes fast by keeping transfer order
+              structured, so it does not need heavy up-front file checking
+              before files begin moving.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-link"></i>
+            <span
+              ><strong>Direct transfer path</strong>: no upload-then-download
+              wait. Files start moving right away once connected.</span
+            >
+          </li>
+          <li>
+            <i class="fa-solid fa-memory"></i>
+            <span
+              ><strong>Light on your system</strong>: Thruflux keeps file
+              sending on single connection, so it uses less CPU and memory while
+              transfers run.</span
+            >
+          </li>
+        </ul>
+        <div class="comparison-callout">
+          <i class="fa-solid fa-scale-balanced"></i>
+          <p>
+            Browser-based sharing tools are convenient, but browsers aren’t
+            built for heavy file transfers. They add extra overhead and usually
+            rely on an upload-then-download process through a server, which can
+            slow things down - especially with large files or lots of files.
+            Thruflux runs as a native desktop app powered by a C++ engine and
+            uses direct transfer sessions between devices, allowing it to move
+            large or many files more efficiently and with better performance.
+          </p>
+        </div>
+        <p class="cpp-note">
+          <i class="fa-solid fa-award"></i>
+          <span>Backed by a proven, strong transfer engine.</span>
+        </p>
+        <div class="speed-table-wrap">
+          <table class="speed-table" aria-label="Benchmark comparison">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Transport</th>
+                <th>Random remote peers</th>
+                <th>Multi-receiver</th>
+                <th>10 GiB file</th>
+                <th>1000 x 10 MiB</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="highlight">
+                <td>
+                  <strong>Thruflux</strong>
+                  <small class="tool-note"
+                    >Modern desktop app / commandline-tool hybrid made for fast
+                    direct file sharing</small
+                  >
+                </td>
+                <td>QUIC</td>
+                <td>Yes</td>
+                <td>Yes</td>
+                <td><strong>2m 20s</strong></td>
+                <td><strong>2m 18s</strong></td>
+              </tr>
+              <tr>
+                <td>
+                  Croc
+                  <small class="tool-note"
+                    >Code-based command-line tool for sending files to other
+                    people</small
+                  >
+                </td>
+                <td>TCP</td>
+                <td>Yes</td>
+                <td>No</td>
+                <td>2m 40s</td>
+                <td>19m 33s</td>
+              </tr>
+              <tr>
+                <td>
+                  Wormhole
+                  <small class="tool-note"
+                    >Code-based command-line sharing tool that often uses a
+                    relay path</small
+                  >
+                </td>
+                <td>TCP (relay)</td>
+                <td>Yes</td>
+                <td>No</td>
+                <td>22m 20s</td>
+                <td>N/A (stalled around ~38:59)</td>
+              </tr>
+              <tr>
+                <td>
+                  SCP
+                  <small class="tool-note"
+                    >Classic secure copy command commonly used by developers and
+                    server admins</small
+                  >
+                </td>
+                <td>TCP</td>
+                <td>No</td>
+                <td>No</td>
+                <td>15m 06s</td>
+                <td>26m 14s</td>
+              </tr>
+              <tr>
+                <td>
+                  Rsync
+                  <small class="tool-note"
+                    >Popular command-line sync tool for copying many files and
+                    folders</small
+                  >
+                </td>
+                <td>TCP</td>
+                <td>No</td>
+                <td>No</td>
+                <td>15m 18s</td>
+                <td>14m 53s</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="benchmark-note-box">
+          <p class="fineprint">
+            Results are medians of 3 runs over the public internet on a
+            high-latency route (Chicago sender to Seoul receiver). Times are
+            end-to-end wall-clock duration from sender command execution until
+            receiver completion (or sender completion when no separate receive
+            command exists), not raw transfer-only timing.
+          </p>
+          <p class="env-note">
+            Benchmark environment: Vultr instance (2 vCPU AMD EPYC Genoa), 4 GB
+            RAM, NVMe SSD, Ubuntu 24.04.
+          </p>
+        </div>
+        <p class="fineprint">
+          While rare - if a direct connection is not possible, for example on
+          restrictive networks, Thruflux automatically falls back to a relay so
+          the transfer can still complete. In this case, speeds mainly depend on
+          the relay server’s distance, capacity, and current load. Even in relay
+          mode, Thruflux is designed to maintain solid performance. 🚀
+        </p>
+        <div class="speed-table-wrap">
+          <table class="speed-table" aria-label="TURN relay benchmark">
+            <thead>
+              <tr>
+                <th>Mode</th>
+                <th>10 GiB file</th>
+                <th>1000 x 10 MiB</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="highlight">
+                <td>Thruflux (TURN relay)</td>
+                <td><strong>5m 40s</strong></td>
+                <td><strong>5m 35s</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card security reveal">
+        <div class="card-icon"><i class="fa-solid fa-link"></i></div>
+        <h2>Direct for security</h2>
+        <p>
+          Thruflux is designed around a direct model so your data path stays as
+          tight as possible.
+        </p>
+        <ul class="security-list">
+          <li>
+            <i class="fa-solid fa-user-shield"></i>No middleman: your data is
+            never uploaded and parked on a third-party cloud step. It flows
+            straight from your PC to other PC.
+          </li>
+          <li>
+            <i class="fa-solid fa-lock"></i>With strong encryption in transit
+            via modern QUIC-based transport security, no one can ever peek at
+            your data.
+          </li>
+          <li>
+            <i class="fa-solid fa-key"></i>High-entropy join codes designed to
+            be difficult to guess.
+          </li>
+        </ul>
+        <p class="fineprint">
+          If a strict network blocks direct links, Thruflux can still fall back
+          so your transfer completes reliably.
+        </p>
+      </section>
+
+      <section class="card simple reveal">
+        <div class="card-icon"><i class="fa-solid fa-circle-check"></i></div>
+        <h2>Simple by design</h2>
+        <p>
+          Thruflux keeps sharing simple for everyone while staying powerful.
+        </p>
+        <ul class="simple-points">
+          <li>
+            <i class="fa-solid fa-user-xmark"></i>No accounts. No sign up.
+          </li>
+          <li><i class="fa-solid fa-infinity"></i>Unlimited file size.</li>
+          <li>
+            <i class="fa-brands fa-github"></i>Open source and free forever.
+          </li>
+        </ul>
+        <div class="flow-steps">
+          <div>
+            <span>1</span>
+            <p>Sender: pick files and folders.</p>
+          </div>
+          <img
+            src="./assets/sender_picker_screen.png"
+            width="100%"
+            height="auto"
+          />
+          <div>
+            <span>2</span>
+            <p>Sender: share the join code.</p>
+          </div>
+          <img
+            src="./assets/sender_join_code_screen.png"
+            width="100%"
+            height="auto"
+          />
+          <div>
+            <span>3</span>
+            <p>Receiver: enter join code and press Receive.</p>
+          </div>
+          <img
+            src="./assets/receiver_join_screen.png"
+            width="100%"
+            height="auto"
+          />
+
+          <div>
+            <span>4</span>
+            <p>Watch the files transfer at fast speed.</p>
+          </div>
+
+          <img
+            src="./assets/receiver_progress_screen.png"
+            width="100%"
+            height="auto"
+          />
+        </div>
+      </section>
+
+      <section class="card downloads reveal">
+        <h2>Get Thruflux</h2>
+        <p>Available cross-platform. Download now!</p>
+        <div class="download-grid">
+          <button type="button" class="download-btn" aria-disabled="true">
+            <i class="fa-brands fa-apple"></i>
+            <span>macOS</span>
+            <small>Coming soon</small>
+          </button>
+          <button type="button" class="download-btn" aria-disabled="true">
+            <i class="fa-brands fa-linux"></i>
+            <span>Linux</span>
+            <small>Coming soon</small>
+          </button>
+          <button type="button" class="download-btn" aria-disabled="true">
+            <i class="fa-brands fa-windows"></i>
+            <span>Windows</span>
+            <small>Coming soon</small>
+          </button>
+          <button type="button" class="download-btn repo" aria-disabled="true">
+            <i class="fa-brands fa-github"></i>
+            <span>Command Line Interface</span>
+            <small>Docs link coming soon</small>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <section class="disclaimer-notes" aria-label="Important notes">
+      <p>
+        <strong>Notes:</strong> Thruflux is in beta, so occasional bugs may
+        still happen.
+      </p>
+      <p>
+        Demo footage was recorded on a local setup. Real network conditions can
+        vary, so speed and stability may differ.
+      </p>
+      <p>
+        On extremely restrictive networks (for example, some corporate firewalls
+        that fully block UDP), transfers may not work.
+      </p>
+      <p>
+        Current free shared capacity: fallback relay bandwidth is about 900 Mbps
+        total (fair-share across active users), and the signaling service
+        currently supports around 2,000 concurrent users. Capacity can be
+        expanded over time as needed.
+      </p>
+    </section>
+
+    <footer class="footer">
+      <i class="fa-solid fa-heart"></i>
+      <span>Made with passion by infiniteplayapps</span>
+    </footer>
+    <script>
+      (() => {
+        const nodes = Array.from(document.querySelectorAll(".reveal"));
+        if (!("IntersectionObserver" in window)) {
+          nodes.forEach((node) => node.classList.add("in"));
+          return;
+        }
+        const observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) {
+                continue;
+              }
+              entry.target.classList.add("in");
+              observer.unobserve(entry.target);
+            }
+          },
+          { root: null, rootMargin: "0px 0px -12% 0px", threshold: 0.14 },
+        );
+        nodes.forEach((node) => observer.observe(node));
+      })();
+    </script>
+  </body>
+</html>
