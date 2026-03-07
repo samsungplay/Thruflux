@@ -95,71 +95,38 @@ Thruflux is under **active development**, and performance improvements are ongoi
 This section will be **updated over time** as the implementation evolves.
 
 ### Environment
-- Vultur dedicated CPU 2vCPU(AMD EPYC Genoa) 4GB RAM, NVMe SSD, Ubuntu 22.04
-- Tested over public internet, where sender is located in Chicago and receiver is located in New Jersey.
-- Method: median of 3 runs, and all times are end-to-end wall clock times including setup / closing phase, not just the pure transfer time.
-
-**Benchmark commands (wall-clock measured with `time`)**
-
-```bash
-# scp — single file
-time scp test_10GiB.bin root@207.246.86.142:/root/
-
-# scp — many files
-time scp -r benchmark_files root@207.246.86.142:/root/
-
-# rsync — single file
-time rsync -a --info=progress2 --no-compress --whole-file --inplace \
-  test_10GiB.bin root@207.246.86.142:/root/
-
-# rsync — many files
-time rsync -a --info=progress2 --no-compress --whole-file --inplace \
-  benchmark_files root@207.246.86.142:/root/
-
-# croc — single file
-time CROC_SECRET="code" croc --yes
-
-# croc — many files
-time CROC_SECRET="code" croc --yes
-
-# Thruflux — direct (single + many files)
-time ./thru join --overwrite <CODE>
-
-# Thruflux — forced TURN relay
-time ./thru join --overwrite --force-turn <CODE>
-
-# wormhole — single / many files
-time wormhole receive <CODE> --accept-file
-```
+- Vultr instance: 2 vCPU (AMD EPYC Genoa), 4 GB RAM, NVMe SSD, Ubuntu 24.04
+- Tests conducted over the public internet between Chicago (sender) and Seoul (receiver), representing a high-latency link.
+- Methodology: results show the median of 3 runs. Times represent end-to-end wall-clock duration, measured from the moment the sender command is executed until the receiver completes (or the sender finishes if no separate receive command exists), not just the raw transfer time.
+- For specific benchmarking script used, refer to the ultimate_bench.sh script in the repo
 
 ### Summary
 
-| Tool       | Transport   | Random Remote Peers | Multi-Receiver | 10 GiB File | 1000×10 MiB |
-|------------|------------|---------------------|----------------|------------|-------------|
-| **thruflux(direct)** | QUIC       | ✅                  | ✅             | **1m34s**  | **1m31s**   |
-| rsync      | TCP (SSH)  | ❌                  | ❌             | 1m43s      | 1m39s       |
-| scp        | TCP (SSH)  | ❌                  | ❌             | 1m41s      | 2m20s       |
-| croc       | TCP relay  | ✅       | ❌             | 2m42s      | 9m22s       |
-| wormhole   | TCP relay  | ✅      | ❌             | 2m45s      | ❌ stalled ~8.8 GiB around 3m |
+| Tool | Transport | Random Remote Peers | Multi-Receiver | 10 GiB File | 1000 × 10 MiB |
+|-----|-----|-----|-----|-----|-----|
+| Thruflux | QUIC | Yes | Yes | **2m 20s** | **2m 18s** |
+| Croc | TCP | Yes | No | 2m 40s | 19m 33s |
+| Wormhole | TCP (relay) | Yes | No | 22m 20s | N/A (stalled around ~38:59) |
+| SCP | TCP | No | No | 15m 06s | 26m 14s |
+| Rsync | TCP | No | No | 15m 18s | 14m 53s |
 
-> **Note on TURN relay performance:**  
-> TURN is only used when a direct peer-to-peer path cannot be established via ICE. In normal conditions, ICE prioritizes direct connectivity for maximum throughput. Using QUIC over UDP increases the likelihood of establishing a direct peer-to-peer connection compared to TCP, and Thruflux benefits from this advantage. 
+> **Note (TURN relay mode)**  
+> Thruflux supports TURN relay fallback when a direct peer-to-peer connection cannot be established via ICE.  
+> In normal conditions, ICE prioritizes direct connectivity for maximum throughput. Using QUIC over UDP improves the likelihood of establishing a direct connection compared to TCP.  
 >  
-> Relay performance depends heavily on the relay server’s bandwidth and load. My TURN server is relatively modest, so **Thruflux via TURN averaged ~13m18s** for both workloads. Because relay speed reflects the capacity of server and its geographic location rather than protocol efficiency, TURN results are excluded from the primary benchmark comparison. Basically, they are meant to be used as last resort fallback.
-
-
-Notes
-
-- Croc wall clock time excludes sender hashing time
-- Wormhole compresses multi-file sends, and compression time has been excluded for the benchmark
-
+> Relay performance depends primarily on the relay server’s bandwidth, load, and location rather than the transfer protocol itself. For this reason, TURN results are excluded from the primary benchmark comparison and are intended only as a fallback scenario.
+>
+> | Mode | 10 GiB File | 1000 × 10 MiB |
+> |-----|-----|-----|
+> | Thruflux (TURN relay) | **5m 40s** | **5m 35s** |
 
 ---
 
 ### What this table shows
 
-- **Strong P2P performance:** Among other peer to peer tools, thruflux delivers substantially higher throughput, displaying dominant performance especially for directory transfers, while preserving NAT traversal and relay fallback.
-- **Faster or competitive with industry tools:** Thruflux matches or beats rsync/scp on both large and many-file workloads, demonstrating that QUIC-based P2P transfer can rival mature TCP pipelines.
+- **Strong P2P performance:** Thruflux delivers the fastest throughput among peer-to-peer tools tested, particularly for large directory transfers.
+- **Competitive with established tools:** Thruflux significantly outperforms SCP and Rsync on high-latency links, demonstrating the efficiency of QUIC-based P2P transfers.
+- **Reliable fallback via relay:** When direct connections are not possible, TURN relay mode still provides solid performance, remaining competitive with or faster than several traditional tools.
 
 
 
