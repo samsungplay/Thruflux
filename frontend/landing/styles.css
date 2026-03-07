@@ -617,8 +617,10 @@ body {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   display: grid;
-  gap: 4px;
+  gap: 6px;
   justify-items: start;
+  align-content: start;
+  text-align: left;
   cursor: not-allowed;
 }
 
@@ -634,7 +636,8 @@ body {
 
 .download-btn small {
   color: var(--text-soft);
-  font-size: 1.08rem;
+  font-size: 0.94rem;
+  line-height: 1.38;
 }
 
 .download-btn.repo {
@@ -644,6 +647,8 @@ body {
     rgba(31, 212, 167, 0.12),
     rgba(47, 144, 255, 0.12)
   );
+  cursor: pointer;
+  text-decoration: none;
 }
 
 .footer {
