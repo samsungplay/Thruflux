@@ -2,6 +2,7 @@ export interface AppInfo {
   name: string
   version: string
   platform: NodeJS.Platform
+  homepage: string | null
 }
 
 export interface EngineHealthInfo {

@@ -77,11 +77,23 @@ const createWindow = (): void => {
 };
 
 const registerIpc = (): void => {
-  ipcMain.handle("app:getInfo", () => {
+  ipcMain.handle("app:getInfo", async () => {
+    let homepage: string | null = null;
+    try {
+      const pkgPath = path.join(app.getAppPath(), "package.json");
+      const raw = await fs.readFile(pkgPath, "utf8");
+      const parsed = JSON.parse(raw) as { homepage?: unknown };
+      homepage =
+        typeof parsed.homepage === "string" && parsed.homepage.trim().length > 0
+          ? parsed.homepage.trim()
+          : null;
+    } catch {}
+
     const info: AppInfo = {
       name: app.getName(),
       version: app.getVersion(),
       platform: process.platform,
+      homepage,
     };
     return info;
   });
