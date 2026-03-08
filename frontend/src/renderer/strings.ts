@@ -92,6 +92,10 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     updateAvailableBody:
       "A new version is available. If you do not update, some features may not work properly.",
     updateNow: "Update now",
+    engineNotReadyRestartTitle: "Engine connection is not ready",
+    engineNotReadyRestartBody:
+      "Thruflux cannot connect to its local engine right now. Please restart the app to recover.",
+    restartAppNow: "Restart app",
     openSettings: "Open advanced settings",
     serverUrl: "Server URL",
     stunServer: "STUN server",

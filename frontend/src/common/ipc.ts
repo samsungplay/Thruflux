@@ -31,6 +31,7 @@ export interface ThrufluxBridge {
   getDefaultReceiveDirectory: () => Promise<string | null>
   openPath: (targetPath: string) => Promise<{ ok: boolean; error?: string }>
   openExternal: (targetUrl: string) => Promise<{ ok: boolean; error?: string }>
+  restartApp: () => Promise<{ ok: boolean; error?: string }>
   showNotification: (
     title: string,
     body: string,

@@ -115,6 +115,9 @@ export type TranslationKey =
   | "updateAvailableTitle"
   | "updateAvailableBody"
   | "updateNow"
+  | "engineNotReadyRestartTitle"
+  | "engineNotReadyRestartBody"
+  | "restartAppNow"
   | "openSettings"
   | "serverUrl"
   | "stunServer"
@@ -235,6 +238,7 @@ export interface AppDialogState {
   tone: DialogTone
   actionLabel?: string
   onAction?: () => void
+  blocking?: boolean
 }
 
 export interface ManifestProgressState {

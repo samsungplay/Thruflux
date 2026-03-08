@@ -247,6 +247,21 @@ const registerIpc = (): void => {
     }
   });
 
+  ipcMain.handle("app:restartApp", async () => {
+    try {
+      setTimeout(() => {
+        app.relaunch();
+        app.exit(0);
+      }, 0);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Failed to restart app",
+      };
+    }
+  });
+
   ipcMain.handle(
     "app:showNotification",
     (_event, title: string, body: string) => {

@@ -13,6 +13,7 @@ const bridge: ThrufluxBridge = {
     ipcRenderer.invoke("app:getDefaultReceiveDirectory"),
   openPath: (targetPath: string) => ipcRenderer.invoke("app:openPath", targetPath),
   openExternal: (targetUrl: string) => ipcRenderer.invoke("app:openExternal", targetUrl),
+  restartApp: () => ipcRenderer.invoke("app:restartApp"),
   showNotification: (title: string, body: string) =>
     ipcRenderer.invoke("app:showNotification", title, body),
   shareText: (title: string, text: string) =>

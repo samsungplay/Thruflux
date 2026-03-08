@@ -123,6 +123,7 @@ export default function App(): JSX.Element {
   const receiverSessionCompleteNotifiedRef = useRef(false);
   const receiverSessionFailedNotifiedRef = useRef(false);
   const receiverTransferFailedRef = useRef(false);
+  const restartPromptActiveRef = useRef(false);
 
   const theme = useMemo<Theme>(() => {
     if (themePreference !== "system") {
@@ -214,6 +215,37 @@ export default function App(): JSX.Element {
   useEffect(() => {
     activeTransferRoleRef.current = activeTransferRole;
   }, [activeTransferRole]);
+
+  useEffect(() => {
+    if (!hasSettledHealth) {
+      return;
+    }
+    if (healthState === "failed") {
+      if (restartPromptActiveRef.current) {
+        return;
+      }
+      restartPromptActiveRef.current = true;
+      setDialogState({
+        title: t("engineNotReadyRestartTitle"),
+        message: t("engineNotReadyRestartBody"),
+        tone: "error",
+        actionLabel: t("restartAppNow"),
+        onAction: () => {
+          void window.thruflux.restartApp();
+        },
+        blocking: true,
+      });
+      return;
+    }
+    if (healthState === "success") {
+      restartPromptActiveRef.current = false;
+      setDialogState((prev) =>
+        prev?.blocking && prev.title === t("engineNotReadyRestartTitle")
+          ? null
+          : prev,
+      );
+    }
+  }, [hasSettledHealth, healthState]);
 
   useEffect(() => {
     senderTransfersRef.current = senderTransfers;

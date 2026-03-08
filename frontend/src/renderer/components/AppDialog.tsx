@@ -12,7 +12,11 @@ export function AppDialog({ dialog, onClose }: AppDialogProps): JSX.Element | nu
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className="dialog-backdrop"
+      role="presentation"
+      onClick={dialog.blocking ? undefined : onClose}
+    >
       <section
         className={`dialog-card tone-${dialog.tone}`}
         role="dialog"
@@ -29,9 +33,11 @@ export function AppDialog({ dialog, onClose }: AppDialogProps): JSX.Element | nu
               {dialog.actionLabel}
             </button>
           ) : null}
-          <button className="dialog-btn" type="button" onClick={onClose}>
-            {t("dismiss")}
-          </button>
+          {dialog.blocking ? null : (
+            <button className="dialog-btn" type="button" onClick={onClose}>
+              {t("dismiss")}
+            </button>
+          )}
         </div>
       </section>
     </div>
