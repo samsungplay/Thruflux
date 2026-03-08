@@ -3,7 +3,7 @@ import type {
   ReceiveFlowStage,
   ReceiveTransferProgressState,
 } from "../types"
-import { formatSize } from "../utils"
+import { formatEta, formatSize, formatThroughput } from "../utils"
 
 interface ReceiveScreenProps {
   joinCode: string
@@ -23,19 +23,6 @@ interface ReceiveScreenProps {
   onAbort: () => void
   onOpenSaveFolder: () => void
   onRetry: () => void
-}
-
-const formatThroughput = (bytesPerSecond: number): string => {
-  if (bytesPerSecond < 1024) {
-    return `${bytesPerSecond.toFixed(0)} B/s`
-  }
-  if (bytesPerSecond < 1024 * 1024) {
-    return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`
-  }
-  if (bytesPerSecond < 1024 * 1024 * 1024) {
-    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`
-  }
-  return `${(bytesPerSecond / (1024 * 1024 * 1024)).toFixed(2)} GB/s`
 }
 
 export function ReceiveScreen({
@@ -250,6 +237,17 @@ export function ReceiveScreen({
                     {transferProgress.isRelayed
                       ? t("receiveRouteRelayed")
                       : t("receiveRouteDirect")}
+                  </strong>
+                </div>
+                <div>
+                  <span>{t("receiveEtaLabel")}</span>
+                  <strong>
+                    {formatEta(
+                      manifestSummaryTotalSize,
+                      transferProgress.bytesMoved,
+                      transferProgress.skippedBytes,
+                      transferProgress.ewmaThroughput,
+                    )}
                   </strong>
                 </div>
               </div>

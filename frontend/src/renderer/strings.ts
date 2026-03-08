@@ -66,6 +66,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     receiveSkippedLabel: "Skipped",
     receiveFilesDoneLabel: "Files done",
     receiveRouteLabel: "Route",
+    receiveEtaLabel: "ETA",
     receivePercentLabel: "Progress",
     receiveRouteDirect: "Direct",
     receiveRouteRelayed: "Routed",

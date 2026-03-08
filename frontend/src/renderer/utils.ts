@@ -15,6 +15,47 @@ export const formatSize = (size: number): string => {
   return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+export const formatThroughput = (bytesPerSecond: number): string => {
+  if (bytesPerSecond < 1024) {
+    return `${bytesPerSecond.toFixed(0)} B/s`
+  }
+  if (bytesPerSecond < 1024 * 1024) {
+    return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`
+  }
+  if (bytesPerSecond < 1024 * 1024 * 1024) {
+    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`
+  }
+  return `${(bytesPerSecond / (1024 * 1024 * 1024)).toFixed(2)} GB/s`
+}
+
+export const formatEta = (
+  totalBytes: number,
+  movedBytes: number,
+  skippedBytes: number,
+  bytesPerSecond: number,
+): string => {
+  const done = Math.max(0, movedBytes + skippedBytes)
+  const remaining = Math.max(0, totalBytes - done)
+  if (remaining <= 0) {
+    return "0s"
+  }
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return "Calculating..."
+  }
+  const seconds = Math.ceil(remaining / bytesPerSecond)
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+  const minutes = Math.floor(seconds / 60)
+  const remSeconds = seconds % 60
+  if (minutes < 60) {
+    return remSeconds === 0 ? `${minutes}m` : `${minutes}m ${remSeconds}s`
+  }
+  const hours = Math.floor(minutes / 60)
+  const remMinutes = minutes % 60
+  return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`
+}
+
 export const splitTurnServers = (raw: string): string[] =>
   raw
     .split(/\n|,/g)

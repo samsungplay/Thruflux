@@ -1,6 +1,6 @@
 import type { DragEvent } from "react"
 import { t } from "../strings"
-import { formatSize } from "../utils"
+import { formatEta, formatSize, formatThroughput } from "../utils"
 import type {
   ManifestProgressState,
   SendEntry,
@@ -245,13 +245,7 @@ export function SendScreen({
                         <div className="receive-transfer-metrics">
                           <div>
                             <span>{t("receiveThroughputLabel")}</span>
-                            <strong>
-                              {entry.ewmaThroughput < 1024
-                                ? `${entry.ewmaThroughput.toFixed(0)} B/s`
-                                : entry.ewmaThroughput < 1024 * 1024
-                                  ? `${(entry.ewmaThroughput / 1024).toFixed(1)} KB/s`
-                                  : `${(entry.ewmaThroughput / (1024 * 1024)).toFixed(1)} MB/s`}
-                            </strong>
+                            <strong>{formatThroughput(entry.ewmaThroughput)}</strong>
                           </div>
                           <div>
                             <span>{t("receiveMovedLabel")}</span>
@@ -273,6 +267,17 @@ export function SendScreen({
                               {entry.isRelayed
                                 ? t("receiveRouteRelayed")
                                 : t("receiveRouteDirect")}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>{t("receiveEtaLabel")}</span>
+                            <strong>
+                              {formatEta(
+                                manifestProgress.totalSize,
+                                entry.bytesMoved,
+                                entry.skippedBytes,
+                                entry.ewmaThroughput,
+                              )}
                             </strong>
                           </div>
                         </div>

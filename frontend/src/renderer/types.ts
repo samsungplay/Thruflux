@@ -91,6 +91,7 @@ export type TranslationKey =
   | "receiveSkippedLabel"
   | "receiveFilesDoneLabel"
   | "receiveRouteLabel"
+  | "receiveEtaLabel"
   | "receivePercentLabel"
   | "receiveRouteDirect"
   | "receiveRouteRelayed"
