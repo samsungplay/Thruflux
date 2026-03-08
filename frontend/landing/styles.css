@@ -612,13 +612,12 @@ body {
 
 .downloads-version {
   margin-top: 8px;
-  font-size: 0.98rem;
   color: var(--text-soft);
+  font-size: 0.98rem;
 }
 
 .downloads-version strong {
   color: #dceaff;
-  font-weight: 700;
 }
 
 .download-btn {
