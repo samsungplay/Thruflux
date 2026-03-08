@@ -92,10 +92,10 @@ namespace common {
 
         static void destroy() {
             if (receiverAgentContext_.agent) {
-                g_object_unref(receiverAgentContext_.agent);
+                nice_agent_close_async(receiverAgentContext_.agent, nullptr, nullptr);
             }
             for (auto &agentContext: agentsMap_ | std::views::values) {
-                g_object_unref(agentContext.agent);
+                nice_agent_close_async(agentContext.agent, nullptr, nullptr);
             }
         }
 
