@@ -14,6 +14,7 @@
 #include "../ui/UIData.hpp"
 
 namespace receiver {
+
     class ReceiverStream : public common::Stream {
         static void watchProgress() {
             g_timeout_add_full(G_PRIORITY_HIGH, 1000, [](gpointer data)-> gboolean {
@@ -331,10 +332,11 @@ namespace receiver {
                             lsquic_stream_wantread(stream, 0);
                             break;
                         } else {
-                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == 140) {
                                 break;
                             }
-                            spdlog::error("Unexpected error while reading manifest stream: error code={} {}", errno, strerror(errno));
+                            spdlog::error("Unexpected error while reading manifest stream: error code={} {}", errno,
+                                          strerror(errno));
                             ui::eventStream.sendMessage("manifest_receive_error", nlohmann::json{{"code", errno}});
                             break;
                         }
