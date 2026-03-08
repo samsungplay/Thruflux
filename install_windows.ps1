@@ -79,21 +79,32 @@ Remove-Item -Force $tmp -ErrorAction SilentlyContinue
 
 function Add-ToUserPath([string]$dir) {
   $dirNorm = $dir.TrimEnd('\')
-  $current = [Environment]::GetEnvironmentVariable("Path", "User")
-  if ([string]::IsNullOrWhiteSpace($current)) { $current = "" }
 
-  $parts = $current -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+  $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+  if ([string]::IsNullOrWhiteSpace($current)) {
+    $current = ''
+  }
 
-  foreach ($p in $parts) {
-    if ($p.TrimEnd('\') -ieq $dirNorm) {
-      Info "User PATH already contains install dir."
-      return
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  $parts = New-Object System.Collections.Generic.List[string]
+
+  foreach ($p in ($current -split ';')) {
+    $item = $p.Trim()
+    if ([string]::IsNullOrWhiteSpace($item)) { continue }
+
+    $itemNorm = $item.TrimEnd('\')
+    if ($seen.Add($itemNorm)) {
+      [void]$parts.Add($itemNorm)
     }
   }
 
-  $newPath = (($parts + $dirNorm) -join ';')
-  [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-  Warn "Added to User PATH. Restart your terminal to pick it up."
+  if ($seen.Add($dirNorm)) {
+    [void]$parts.Add($dirNorm)
+    [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
+    Warn "Added to User PATH. Restart your terminal to pick it up."
+  } else {
+    Info "User PATH already contains install dir."
+  }
 }
 
 Add-ToUserPath $InstallDir
