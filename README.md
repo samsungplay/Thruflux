@@ -1,13 +1,18 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
 
-**News:** Desktop UI version is coming very soon (within a week from March 4th). The implementation is more or less complete, just needs some additional tests to ensure the basic functionalities and installers work as expected across different platforms.
 
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
 
 Built in C++, Thruflux is a cross-platform, **highly speed-focused, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**. Unlike traditional p2p file tools, Thruflux is entirely focused on use of the modern QUIC UDP protocol.
 
-It consists of four core subcommands:
+
+Thruflux provides both:
+
+- 🖥 **Desktop UI application**
+- 💻 **Command-line interface (CLI)**
+
+CLI consists of four core subcommands:
 
 thru server - opens a lightweight signaling server for discovery & ICE negotiation (for self-hosting).
 
@@ -17,15 +22,30 @@ thru join - join an existing host session to download the files served by the ho
 
 thru ui - opens a local web interface that lets you host/join via REST endpoint (mainly for internal use for the app version)
 
-## Demo
+---
 
+# Website
+
+For the **desktop application download** and **project landing page**:
+
+https://thruflux.bytepipe.app/
+
+---
+## Desktop Demo
+https://github.com/user-attachments/assets/f21e6749-8360-4538-b4c4-9439e608b1e6
+
+## CLI Demo
 https://github.com/user-attachments/assets/50624352-120a-4d9f-8a8c-e5d8aac5f3df
-
-
 
 ## Quickstart 🚀
 
-**Install**
+**Dekstop UI Install**
+
+Install from here: 
+https://thruflux.bytepipe.app/ 
+or directly from github releases
+
+**CLI Install**
 
 **Linux Kernel 3.10+ / glibc 2.17+ (Ubuntu, Debian, CentOS, etc.)**
 ```bash
