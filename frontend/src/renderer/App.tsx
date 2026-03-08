@@ -545,11 +545,18 @@ export default function App(): JSX.Element {
         setReceiveManifestTotalSize(event.message.total_size);
         return;
       case "manifest_receive_error":
-        resetReceiveFlow();
-        setActiveTransferRole(null);
+        const manifestErrorCode = readMessageValue(
+          event.message,
+          ["errno", "code", "error", "reason"],
+          "unknown",
+        );
+        const manifestErrorText = readString(
+          manifestErrorCode,
+          String(manifestErrorCode),
+        ).trim();
         openDialog(
           t("receiveManifestErrorTitle"),
-          `Code: ${String(event.message.errno)}`,
+          `Code: ${manifestErrorText.length > 0 ? manifestErrorText : "unknown"}`,
           "error",
         );
         return;
