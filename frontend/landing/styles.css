@@ -610,6 +610,17 @@ body {
   gap: 12px;
 }
 
+.downloads-version {
+  margin-top: 8px;
+  font-size: 0.98rem;
+  color: var(--text-soft);
+}
+
+.downloads-version strong {
+  color: #dceaff;
+  font-weight: 700;
+}
+
 .download-btn {
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -621,7 +632,8 @@ body {
   justify-items: start;
   align-content: start;
   text-align: left;
-  cursor: not-allowed;
+  cursor: pointer;
+  text-decoration: none;
 }
 
 .download-btn i {
