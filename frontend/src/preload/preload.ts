@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { ThrufluxBridge } from "../common/ipc";
 
 const bridge: ThrufluxBridge = {
@@ -17,6 +17,13 @@ const bridge: ThrufluxBridge = {
     ipcRenderer.invoke("app:showNotification", title, body),
   shareText: (title: string, text: string) =>
     ipcRenderer.invoke("app:shareText", title, text),
+  resolveDroppedPath: (file: unknown) => {
+    try {
+      return webUtils.getPathForFile(file as File) || null;
+    } catch {
+      return null;
+    }
+  },
 };
 
 contextBridge.exposeInMainWorld("thruflux", bridge);

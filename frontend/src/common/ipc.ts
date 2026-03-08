@@ -39,4 +39,5 @@ export interface ThrufluxBridge {
     title: string,
     text: string,
   ) => Promise<{ ok: boolean; error?: string; method?: string }>
+  resolveDroppedPath: (file: unknown) => string | null
 }

@@ -46,6 +46,9 @@ export const entriesFromDrop = (dataTransfer: DataTransfer): SendEntry[] => {
   const next: SendEntry[] = []
   const seen = new Set<string>()
   const items = Array.from(dataTransfer.items)
+  const droppedFiles = Array.from(dataTransfer.files) as Array<
+    File & { path?: string }
+  >
 
   for (const item of items) {
     const maybeEntry = (
@@ -57,10 +60,19 @@ export const entriesFromDrop = (dataTransfer: DataTransfer): SendEntry[] => {
     ).webkitGetAsEntry?.()
 
     if (maybeEntry && maybeEntry.isDirectory) {
+      const dropped = item.getAsFile() as (File & { path?: string }) | null
+      const resolvedPath = dropped
+        ? window.thruflux.resolveDroppedPath(dropped)?.trim() ?? ""
+        : ""
+      const droppedPath = dropped?.path?.trim() ?? ""
       const path =
-        maybeEntry.fullPath && maybeEntry.fullPath.length > 0
-          ? maybeEntry.fullPath.replace(/^\/+/, "")
-          : maybeEntry.name ?? "Folder"
+        resolvedPath.length > 0
+          ? resolvedPath
+          : droppedPath.length > 0
+          ? droppedPath
+          : maybeEntry.fullPath && maybeEntry.fullPath.length > 0
+            ? maybeEntry.fullPath
+            : maybeEntry.name ?? "Folder"
       const key = `true:${path}`
       if (seen.has(key)) {
         continue
@@ -75,8 +87,24 @@ export const entriesFromDrop = (dataTransfer: DataTransfer): SendEntry[] => {
       if (!file) {
         continue
       }
+      const resolvedPath = window.thruflux.resolveDroppedPath(file)?.trim() ?? ""
+      const fileWithPath = file as File & { path?: string }
+      const droppedPath = fileWithPath.path?.trim() ?? ""
+      const fallbackFilePath =
+        droppedFiles.find(
+          (dropped) =>
+            dropped.name === file.name &&
+            dropped.size === file.size &&
+            (dropped.path?.trim().length ?? 0) > 0,
+        )?.path?.trim() ?? ""
       const path =
-        file.webkitRelativePath && file.webkitRelativePath.length > 0
+        resolvedPath.length > 0
+          ? resolvedPath
+          : droppedPath.length > 0
+          ? droppedPath
+          : fallbackFilePath.length > 0
+            ? fallbackFilePath
+          : file.webkitRelativePath && file.webkitRelativePath.length > 0
           ? file.webkitRelativePath
           : file.name
       const key = `false:${path}`
