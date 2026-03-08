@@ -19,7 +19,7 @@ export const defaultSettings: SettingsState = {
   forceTurn: false,
   quicConnWindowBytes: 268435456,
   quicStreamWindowBytes: 33554432,
-  overwrite: true,
+  overwrite: false,
   udpBufferBytes: 8388608,
   maxReceivers: 10,
   notifyReceiverSessionComplete: true,

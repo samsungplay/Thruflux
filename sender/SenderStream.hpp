@@ -77,7 +77,7 @@ namespace sender {
                             postfix.reserve(256);
                             postfix += common::Utils::sizeToReadableFormat(ewmaThroughput);
                             postfix += "/s sent ";
-                            postfix += common::Utils::sizeToReadableFormat(context->bytesMoved);
+                            postfix += common::Utils::sizeToReadableFormat(static_cast<SenderConnectionContext *>(context)->logicalBytesMoved);
                             postfix += " resumed ";
                             postfix += common::Utils::sizeToReadableFormat(context->skippedBytes);
                             postfix += " files ";
@@ -98,7 +98,7 @@ namespace sender {
                         ui::UIProgressSnapshot snapshot{
                             .receiverId = static_cast<SenderConnectionContext *>(context)->receiverId,
                             .ewmaThroughput = ewmaThroughput,
-                            .bytesMoved = context->bytesMoved,
+                            .bytesMoved = static_cast<SenderConnectionContext *>(context)->logicalBytesMoved,
                             .skippedBytes = context->skippedBytes,
                             .percent = p,
                             .filesMoved = context->filesMoved,
@@ -140,7 +140,7 @@ namespace sender {
                             std::string postfix;
                             postfix.reserve(256);
                             postfix += " sent ";
-                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += common::Utils::sizeToReadableFormat(ctx->logicalBytesMoved);
                             postfix += " resumed ";
                             postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
                             postfix += " files ";
@@ -160,7 +160,7 @@ namespace sender {
                         ui::UIProgressSnapshot snapshot{
                             .receiverId = ctx->receiverId,
                             .ewmaThroughput = ctx->ewmaThroughput,
-                            .bytesMoved = ctx->bytesMoved,
+                            .bytesMoved = ctx->logicalBytesMoved,
                             .skippedBytes = ctx->skippedBytes,
                             .percent = 100,
                             .filesMoved = ctx->filesMoved,
@@ -179,7 +179,7 @@ namespace sender {
                             std::string postfix;
                             postfix.reserve(256);
                             postfix += " sent ";
-                            postfix += common::Utils::sizeToReadableFormat(ctx->bytesMoved);
+                            postfix += common::Utils::sizeToReadableFormat(ctx->logicalBytesMoved);
                             postfix += " resumed ";
                             postfix += common::Utils::sizeToReadableFormat(ctx->skippedBytes);
                             postfix += " files ";
@@ -202,7 +202,7 @@ namespace sender {
                         ui::UIProgressSnapshot snapshot{
                             .receiverId = ctx->receiverId,
                             .ewmaThroughput = ctx->ewmaThroughput,
-                            .bytesMoved = ctx->bytesMoved,
+                            .bytesMoved = ctx->logicalBytesMoved,
                             .skippedBytes = ctx->skippedBytes,
                             .percent = p,
                             .filesMoved = ctx->filesMoved,
@@ -290,8 +290,9 @@ namespace sender {
                             }
                         }
 
-                        connCtx->currentFileIndex = connCtx->resumeFileId;
+                        connCtx->currentFileIndex =  connCtx->resumeFileId;
                         connCtx->currentFileOffset = connCtx->resumeOffset;
+                        connCtx->filesMoved = connCtx->resumeFileId;
 
                         uint64_t resumedBytes = 0;
                         for (uint32_t i = 0; i < connCtx->resumeFileId && i < senderPersistentContext.files.size(); ++i)
