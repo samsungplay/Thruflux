@@ -334,7 +334,7 @@ namespace receiver {
                             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                                 break;
                             }
-                            spdlog::error("Unexpected error while reading manifest stream: error code={}", errno);
+                            spdlog::error("Unexpected error while reading manifest stream: error code={} {}", errno, strerror(errno));
                             ui::eventStream.sendMessage("manifest_receive_error", nlohmann::json{{"code", errno}});
                             break;
                         }
