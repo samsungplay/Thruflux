@@ -214,7 +214,10 @@ namespace common {
 
 
             for (const auto &context: connectionContexts_) {
-                delete context;
+                if (context->connection) {
+                    lsquic_conn_close(context->connection);
+                    context->connection = nullptr;
+                }
             }
 
 

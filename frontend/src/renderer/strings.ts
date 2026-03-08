@@ -69,7 +69,7 @@ const translations: Record<Locale, Record<TranslationKey, string>> = {
     receiveEtaLabel: "ETA",
     receivePercentLabel: "Progress",
     receiveRouteDirect: "Direct",
-    receiveRouteRelayed: "Routed",
+    receiveRouteRelayed: "Relayed",
     receiveStartFailedTitle: "Could not start receiving",
     receiveP2PFailedTitle: "Could not make a direct link",
     receiveManifestErrorTitle: "Could not read the file list",
