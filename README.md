@@ -1,5 +1,5 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
-
+Project Status: There are some bug fixes and improvements to make (received some suggestions from users); however, right now I'm currently a bit caught up with work, and I plan to catch up on the issues and additional features hopefully by next month. But the basic functionalities should all work and you are welcome to use the tool at any time, as the server will remain operational.
 
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
