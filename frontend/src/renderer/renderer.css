@@ -357,6 +357,51 @@ body {
   cursor: pointer;
 }
 
+.desktop-download-panel {
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  min-width: 0;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.desktop-download-panel:hover {
+  transform: translateY(-1px);
+  border-color: rgba(25, 118, 255, 0.44);
+  background: var(--surface);
+}
+
+.desktop-download-panel i {
+  color: #1976ff;
+  font-size: 1rem;
+  width: 20px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
+.desktop-download-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.desktop-download-copy strong {
+  font-size: 0.88rem;
+  line-height: 1.2;
+}
+
+.desktop-download-copy small {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
 .home-version-note {
   margin: 2px 0 0;
   display: flex;

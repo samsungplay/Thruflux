@@ -93,6 +93,18 @@ export function HomeScreen({
           <span>{t("openSettings")}</span>
         </button>
       </section>
+      <a
+        className="desktop-download-panel"
+        href="https://thruflux.bytepipe.app/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <i className="fa-solid fa-desktop" aria-hidden="true"></i>
+        <span className="desktop-download-copy">
+          <strong>Move files between any devices. Get Thruflux for</strong>
+          <small>Mac • Windows • Linux • Android</small>
+        </span>
+      </a>
       <p className="home-version-note">
         <span>{versionString}</span>
         <span>{t("appMadeBy")}</span>

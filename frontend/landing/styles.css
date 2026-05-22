@@ -662,6 +662,25 @@ body {
   text-decoration: none;
 }
 
+.download-btn.coming-soon {
+  border-color: rgba(255, 209, 131, 0.35);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 209, 131, 0.1),
+    rgba(47, 144, 255, 0.08)
+  );
+  cursor: default;
+}
+
+.download-btn.coming-soon i {
+  color: #ffd183;
+}
+
+.download-btn.coming-soon small:last-child {
+  color: #ffe1a8;
+  font-weight: 700;
+}
+
 .footer {
   margin-top: 16px;
   padding: 14px 16px;

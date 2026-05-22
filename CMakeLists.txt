@@ -88,3 +88,9 @@ target_link_libraries(thru PRIVATE
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(thru PRIVATE anl)
 endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_options(thru PRIVATE
+            "-Wl,-z,max-page-size=16384"
+    )
+endif()
