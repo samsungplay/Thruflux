@@ -437,22 +437,23 @@ thru host PATH [PATH ...] \
           [--stun-server URL] [--turn-server URL] [--force-turn] \
           [--quic-stream-window-bytes N] [--quic-conn-window-bytes N] \
           [--quic-max-streams N] [--total-streams N] \
-          [--udp-buffer-bytes N]
+          [--udp-buffer-bytes N] [--custom-join-code CODE]
 ```
 
-| Option                       | Default                           | Description                                             |
-| ---------------------------- | --------------------------------- | ------------------------------------------------------- |
-| `PATH`                       | —                                 | File(s) or directory(ies) to transfer (required)        |
-| `--version`                  | —                                 | Print version                       |
-| `--help`                  | —       | Print Help        |
-| `--server-url`               | `wss://bytepipe.app/ws`           | WebSocket URL of signaling server (`ws://` or `wss://`) |
-| `--max-receivers`            | `10`                              | Max concurrent receivers                                |
-| `--stun-server`              | `stun://stun.cloudflare.com:3478` | STUN server URL (`stun://`)                             |
-| `--turn-server`              | —                                 | TURN server URL (`turn://user:pass@host:port`)          |
-| `--force-turn`               | `false`                           | Force TURN relay                                        |
-| `--quic-stream-window-bytes` | `33554432`                        | Initial QUIC stream flow-control window (bytes)         |
-| `--quic-conn-window-bytes`   | `268435456`                       | Initial QUIC connection flow-control window (bytes)     |
-| `--udp-buffer-bytes`         | `8388608`                         | UDP socket buffer size (bytes). Must be raised on your OS as well. Default installer raises max to 16 MiB                         |
+| Option                       | Default                          | Description                                    |
+|------------------------------|----------------------------------| ---------------------------------------------- |
+| `PATH`                       | —                                | File(s) or directory(ies) to transfer (required) |
+| `--version`                  | —                                | Print version              |
+| `--help`                     | —                                | Print Help |
+| `--server-url`               | `wss://bytepipe.app/ws`          | WebSocket URL of signaling server (`ws://` or `wss://`) |
+| `--max-receivers`            | `10`                             | Max concurrent receivers                       |
+| `--stun-server`              | `stun://stun.cloudflare.com:3478` | STUN server URL (`stun://`)                    |
+| `--turn-server`              | —                                | TURN server URL (`turn://user:pass@host:port`) |
+| `--force-turn`               | `false`                          | Force TURN relay                               |
+| `--quic-stream-window-bytes` | `33554432`                       | Initial QUIC stream flow-control window (bytes) |
+| `--quic-conn-window-bytes`   | `268435456`                      | Initial QUIC connection flow-control window (bytes) |
+| `--udp-buffer-bytes`         | `8388608`                        | UDP socket buffer size (bytes). Must be raised on your OS as well. Default installer raises max to 16 MiB                |
+| `--custom-join-code`         | —                                | Option to specify your own custom join code (use at your own risk)    |
 
 
 ### `thru join` (receiver)
