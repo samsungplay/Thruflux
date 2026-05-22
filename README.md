@@ -12,6 +12,7 @@ Thruflux provides all of these:
 - 💻 **Command-line interface (CLI)**
 - 📱 **Android App (COMING SOON)**
 - IOS app is planned after the Android app port
+
 CLI consists of four core subcommands:
 
 thru server - opens a lightweight signaling server for discovery & ICE negotiation (for self-hosting).
