@@ -85,6 +85,6 @@ target_link_libraries(thru PRIVATE
         httplib::httplib
 )
 
-if(UNIX AND NOT APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(thru PRIVATE anl)
 endif()
