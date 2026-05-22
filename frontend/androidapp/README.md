@@ -1,6 +1,6 @@
 # Thruflux Android
 
-Minimal Jetpack Compose Android shell for Thruflux.
+Android UI app module for Thruflux.
 
 ## Requirements
 
@@ -14,5 +14,3 @@ Minimal Jetpack Compose Android shell for Thruflux.
 ```bash
 ./gradlew :app:assembleDebug
 ```
-
-The app currently shows only `Thruflux`.
