@@ -2,6 +2,8 @@ import type { SettingsState } from "./types"
 
 export const HEALTH_POLL_INTERVAL_MS = 1000
 export const SETTINGS_STORAGE_KEY = "thruflux_settings_v1"
+export const PC_JOIN_CODE_STORAGE_KEY = "thruflux_pc_join_code_v1"
+export const SAVED_PCS_STORAGE_KEY = "thruflux_saved_pcs_v1"
 
 export const QSW_MIN = 256 * 1024
 export const QSW_MAX = 2 * 1024 * 1024 * 1024
@@ -22,6 +24,7 @@ export const defaultSettings: SettingsState = {
   overwrite: false,
   udpBufferBytes: 8388608,
   maxReceivers: 10,
+  randomJoinCodeMode: false,
   notifyReceiverSessionComplete: true,
   notifySenderReceiverJoined: true,
   notifySenderReceiverComplete: true,

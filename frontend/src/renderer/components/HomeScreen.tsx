@@ -4,14 +4,24 @@ interface HomeScreenProps {
   onGoSend: () => void
   onGoReceive: () => void
   onGoSettings: () => void
+  onCopyPcCode: () => void
+  onSharePcCode: () => void
+  onRegeneratePcCode: () => void
   versionString: string
+  pcJoinCode: string
+  randomJoinCodeMode: boolean
 }
 
 export function HomeScreen({
   onGoSend,
   onGoReceive,
   onGoSettings,
+  onCopyPcCode,
+  onSharePcCode,
+  onRegeneratePcCode,
   versionString,
+  pcJoinCode,
+  randomJoinCodeMode,
 }: HomeScreenProps): JSX.Element {
   return (
     <main className="home-shell">
@@ -43,8 +53,40 @@ export function HomeScreen({
 
       <section className="settings-panel">
         <div className="settings-panel-text">
-          <h2>{t("settingsPanelTitle")}</h2>
-          <p>{t("settingsPanelBody")}</p>
+          <h2>{t("thisPcCodeTitle")}</h2>
+          <p>{randomJoinCodeMode ? t("thisPcCodeRandomBody") : t("thisPcCodeBody")}</p>
+        </div>
+        <div className="home-code-wrap">
+          <div className={`home-code-box ${randomJoinCodeMode ? "muted" : ""}`}>
+            {randomJoinCodeMode ? "RANDOM" : pcJoinCode}
+          </div>
+          <button
+            className="home-code-btn"
+            type="button"
+            onClick={onCopyPcCode}
+            disabled={randomJoinCodeMode}
+            title={t("copyPcCode")}
+          >
+            <i className="fa-solid fa-copy"></i>
+          </button>
+          <button
+            className="home-code-btn"
+            type="button"
+            onClick={onSharePcCode}
+            disabled={randomJoinCodeMode}
+            title={t("sharePcCode")}
+          >
+            <i className="fa-solid fa-share-nodes"></i>
+          </button>
+          <button
+            className="home-code-btn"
+            type="button"
+            onClick={onRegeneratePcCode}
+            disabled={randomJoinCodeMode}
+            title={t("regeneratePcCode")}
+          >
+            <i className="fa-solid fa-rotate"></i>
+          </button>
         </div>
         <button className="settings-open-btn" type="button" onClick={onGoSettings}>
           <i className="fa-solid fa-sliders"></i>

@@ -1,6 +1,11 @@
-import { defaultSettings, SETTINGS_STORAGE_KEY } from "./constants"
+import {
+  defaultSettings,
+  PC_JOIN_CODE_STORAGE_KEY,
+  SAVED_PCS_STORAGE_KEY,
+  SETTINGS_STORAGE_KEY,
+} from "./constants"
 import { t } from "./strings"
-import type { SendEntry, SettingsErrors, SettingsState } from "./types"
+import type { SavedPc, SendEntry, SettingsErrors, SettingsState } from "./types"
 
 export const formatSize = (size: number): string => {
   if (size < 1024) {
@@ -80,6 +85,76 @@ export const validateSettings = (state: SettingsState): SettingsErrors => {
     stunServer: stunOk ? null : t("stunServerError"),
     turnServers: turnInvalid ? t("turnServersError") : null,
     quicRelation: relationOk ? null : t("quicRelationError"),
+  }
+}
+
+export const isValidJoinCode = (value: string): boolean =>
+  /^[A-Za-z0-9]{16}$/.test(value.trim()) ||
+  /^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/.test(
+    value.trim(),
+  )
+
+export const generatePcJoinCode = (): string => {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  const values = new Uint8Array(16)
+  if (globalThis.crypto) {
+    globalThis.crypto.getRandomValues(values)
+  } else {
+    for (let idx = 0; idx < values.length; idx += 1) {
+      values[idx] = Math.floor(Math.random() * 256)
+    }
+  }
+  let suffix = ""
+  for (const value of values) {
+    suffix += alphabet[value % alphabet.length]
+  }
+  return `${suffix.slice(0, 4)}-${suffix.slice(4, 8)}-${suffix.slice(8, 12)}-${suffix.slice(12)}`
+}
+
+export const loadPcJoinCodeFromStorage = (): string => {
+  const existing = localStorage.getItem(PC_JOIN_CODE_STORAGE_KEY)?.trim() ?? ""
+  if (
+    isValidJoinCode(existing) &&
+    !existing.toUpperCase().startsWith("THRU-") &&
+    existing.includes("-") &&
+    existing.replace(/-/g, "").length === 16
+  ) {
+    return existing
+  }
+  const next = generatePcJoinCode()
+  localStorage.setItem(PC_JOIN_CODE_STORAGE_KEY, next)
+  return next
+}
+
+export const loadSavedPcsFromStorage = (): SavedPc[] => {
+  const raw = localStorage.getItem(SAVED_PCS_STORAGE_KEY)
+  if (!raw) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<SavedPc>[]
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed
+      .filter(
+        (entry): entry is SavedPc =>
+          typeof entry.id === "string" &&
+          typeof entry.name === "string" &&
+          typeof entry.joinCode === "string" &&
+          typeof entry.createdAt === "number" &&
+          typeof entry.updatedAt === "number" &&
+          entry.name.trim().length > 0 &&
+          isValidJoinCode(entry.joinCode),
+      )
+      .map((entry) => ({
+        ...entry,
+        name: entry.name.trim(),
+        joinCode: entry.joinCode.trim(),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  } catch {
+    return []
   }
 }
 

@@ -2,6 +2,7 @@ import { t } from "../strings"
 import type {
   ReceiveFlowStage,
   ReceiveTransferProgressState,
+  SavedPc,
 } from "../types"
 import { formatEta, formatSize, formatThroughput } from "../utils"
 
@@ -15,8 +16,12 @@ interface ReceiveScreenProps {
   manifestSummaryFilesCount: number
   manifestSummaryTotalSize: number
   transferProgress: ReceiveTransferProgressState
+  savedPcs: SavedPc[]
   onBack: () => void
   onJoinCodeChange: (value: string) => void
+  onSelectSavedPc: (savedPc: SavedPc) => void
+  onSaveCurrentPc: () => void
+  onRemoveSavedPc: (id: string) => void
   onSelectDirectory: () => void
   onOverwriteChange: (value: boolean) => void
   onReceive: () => void
@@ -35,8 +40,12 @@ export function ReceiveScreen({
   manifestSummaryFilesCount,
   manifestSummaryTotalSize,
   transferProgress,
+  savedPcs,
   onBack,
   onJoinCodeChange,
+  onSelectSavedPc,
+  onSaveCurrentPc,
+  onRemoveSavedPc,
   onSelectDirectory,
   onOverwriteChange,
   onReceive,
@@ -295,17 +304,56 @@ export function ReceiveScreen({
 
         <label className="receive-field" htmlFor="receive-join-code">
           <span>{t("receiveJoinCodeLabel")}</span>
-          <input
-            id="receive-join-code"
-            type="text"
-            value={joinCode}
-            onChange={(event) => onJoinCodeChange(event.currentTarget.value)}
-            placeholder={t("receiveJoinCodePlaceholder")}
-            autoComplete="off"
-            spellCheck={false}
-          />
+          <div className="receive-code-row">
+            <input
+              id="receive-join-code"
+              type="text"
+              value={joinCode}
+              onChange={(event) => onJoinCodeChange(event.currentTarget.value)}
+              placeholder={t("receiveJoinCodePlaceholder")}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button className="receive-save-pc-btn" type="button" onClick={onSaveCurrentPc}>
+              <i className="fa-solid fa-bookmark"></i>
+              <span>{t("savePc")}</span>
+            </button>
+          </div>
           <small>{t("receiveJoinCodeHint")}</small>
         </label>
+
+        <section className="saved-pcs-panel">
+          <div className="saved-pcs-head">
+            <h2>{t("savedPcsTitle")}</h2>
+          </div>
+          {savedPcs.length > 0 ? (
+            <div className="saved-pcs-list">
+              {savedPcs.map((savedPc) => (
+                <div className="saved-pc-item" key={savedPc.id}>
+                  <button
+                    className="saved-pc-main"
+                    type="button"
+                    onClick={() => onSelectSavedPc(savedPc)}
+                  >
+                    <span>{savedPc.name}</span>
+                    <strong>{savedPc.joinCode}</strong>
+                  </button>
+                  <button
+                    className="saved-pc-remove"
+                    type="button"
+                    onClick={() => onRemoveSavedPc(savedPc.id)}
+                    title={t("removeSavedPc")}
+                    aria-label={t("removeSavedPc")}
+                  >
+                    <i className="fa-solid fa-trash"></i>
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="saved-pcs-empty">{t("savedPcsEmpty")}</p>
+          )}
+        </section>
 
         <label className="receive-field" htmlFor="receive-save-directory">
           <span>{t("receiveSaveDirectoryLabel")}</span>

@@ -58,9 +58,10 @@ namespace common {
         int maxReceivers = 0;
         std::uint64_t totalSize;
         int filesCount;
+        std::string customJoinCode;
     };
 
-    NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateTransferSessionPayload, type, maxReceivers, totalSize, filesCount);
+    NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CreateTransferSessionPayload, type, maxReceivers, totalSize, filesCount, customJoinCode);
 
     struct CreatedTransferSessionPayload {
         std::string type = "created_transfer_session_payload";

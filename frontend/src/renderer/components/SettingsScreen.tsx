@@ -161,6 +161,16 @@ export function SettingsScreen({
         <label className="toggle-row">
           <input
             type="checkbox"
+            checked={state.randomJoinCodeMode}
+            onChange={(e) => onPatch({ randomJoinCodeMode: e.currentTarget.checked })}
+          />
+          <span>{t("randomJoinCodeMode")}</span>
+        </label>
+        <small className="field-hint">{t("randomJoinCodeModeHint")}</small>
+
+        <label className="toggle-row">
+          <input
+            type="checkbox"
             checked={state.overwrite}
             onChange={(e) => onPatch({ overwrite: e.currentTarget.checked })}
           />

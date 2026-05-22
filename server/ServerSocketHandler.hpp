@@ -65,10 +65,13 @@ namespace server {
                         session->end(4000, "Only one session creation attempt is allowed per connection");
                         return;
                     }
+
                     session->getUserData()->sessionCreationAttempted = true;
                     const auto payload = j.get<common::CreateTransferSessionPayload>();
                     if (payload.maxReceivers > ServerConfig::maxReceiversPerSender) {
-                        session->end(4000, "Server forbids sender to have max receivers of more than " + std::to_string(ServerConfig::maxReceiversPerSender));
+                        session->end(
+                            4000, "Server forbids sender to have max receivers of more than " + std::to_string(
+                                      ServerConfig::maxReceiversPerSender));
                         return;
                     }
                     if (const auto currentTransfer = TransferSessionStore::instance().getTransferSession(
@@ -76,12 +79,25 @@ namespace server {
                         session->end(4000, "Duplicate Session");
                         return;
                     }
+
+                    if (!payload.customJoinCode.empty()) {
+                        if (payload.customJoinCode.length() > 19) {
+                            session->end(4000, "Custom join code is too long");
+                            return;
+                        }
+                        const auto existingSession = TransferSessionStore::instance().getTransferSessionByJoinCode(
+                            payload.customJoinCode);
+                        if (existingSession.has_value()) {
+                            session->end(4000, "This custom join code is already in use");
+                            return;
+                        }
+                    }
+
                     const auto transferSession = TransferSessionStore::instance().createSessionFrom(session, payload);
                     if (!transferSession) {
                         session->end(4000, "Server has reached max number of sessions");
                         return;
                     }
-
 
                     session->send(nlohmann::json(common::CreatedTransferSessionPayload{
                         .joinCode = transferSession->joinCode()
@@ -121,8 +137,7 @@ namespace server {
                     } else {
                         session->end(4004, "No Session Found While Acknowledging");
                     }
-                }
-                else if (isSender && type == "reject_transfer_session_payload") {
+                } else if (isSender && type == "reject_transfer_session_payload") {
                     auto payload = j.get<common::RejectTransferSessionPayload>();
                     const auto receiverSession = sessionTracker[payload.receiverId];
                     if (receiverSession) {

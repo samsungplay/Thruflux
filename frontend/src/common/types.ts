@@ -21,6 +21,7 @@ export interface StartHostPayload {
   quicStreamWindowBytes: number;
   quicConnWindowBytes: number;
   udpBufferBytes: number;
+  "custom-join-code"?: string;
 }
 
 export interface AbortReceiverPayload {

@@ -21,7 +21,9 @@ namespace server {
                         const common::CreateTransferSessionPayload &payload) : senderSessionId_(
                                                                                    std::move(senderSessionId)),
                                                                                joinCode_(
-                                                                                   common::Utils::generateJoinCode()),
+                                                                                   payload.customJoinCode.empty()
+                                                                                       ? common::Utils::generateJoinCode()
+                                                                                       : payload.customJoinCode),
                                                                                maxReceivers_(payload.maxReceivers),
                                                                                totalSize_(payload.totalSize),
                                                                                filesCount_(payload.filesCount) {

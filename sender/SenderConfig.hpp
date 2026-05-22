@@ -21,10 +21,10 @@ namespace sender {
         inline static std::int64_t quicStreamWindowBytes = 32LL * 1024 * 1024;
         inline static std::int64_t quicConnWindowBytes = 256LL * 1024 * 1024;
         inline static int udpBufferBytes = 8 * 1024 * 1024;
+        inline static std::string customJoinCode;
 
 
-        static void initialize(CLI::App* app) {
-
+        static void initialize(CLI::App *app) {
             const auto isWsUrl = CLI::Validator(
                 [](const std::string &s) -> std::string {
                     if (s.rfind("ws://", 0) == 0 || s.rfind("wss://", 0) == 0) return {};
@@ -81,30 +81,43 @@ namespace sender {
                     ->capture_default_str();
 
             app->add_option("--turn-server,--turnServers", turnServers,
-                           "TURN server URL (optional). Example: turn://user:pass@turn.example.com:3478")
+                            "TURN server URL (optional). Example: turn://user:pass@turn.example.com:3478")
                     ->check(isTurnUrl);
 
             app->add_flag("--force-turn,--forceTurn", forceTurn, "Force TURN relay");
 
             app->add_option("--quic-stream-window-bytes,--quicStreamWindowBytes", quicStreamWindowBytes,
-                           "Initial QUIC stream flow-control window (bytes)")
+                            "Initial QUIC stream flow-control window (bytes)")
                     ->check(CLI::Range(256 * KiB, 2 * GiB))
                     ->capture_default_str();
 
             app->add_option("--quic-conn-window-bytes,--quicConnWindowBytes", quicConnWindowBytes,
-                           "Initial QUIC connection flow-control window (bytes)")
+                            "Initial QUIC connection flow-control window (bytes)")
                     ->check(CLI::Range(1 * MiB, 8 * GiB))
                     ->capture_default_str();
 
 
-            app->add_option("--udp-buffer-bytes,--udpBufferBytes", udpBufferBytes, "UDP socket buffer size (bytes). You must raise the max on your OS too. Default installer should have raised it to 16 MiB.")
+            app->add_option("--udp-buffer-bytes,--udpBufferBytes", udpBufferBytes,
+                            "UDP socket buffer size (bytes). You must raise the max on your OS too. Default installer should have raised it to 16 MiB.")
                     ->check(CLI::Range(256 * 1024, 256 * 1024 * 1024))
                     ->capture_default_str();
+
+            app->add_option("--custom-join-code", customJoinCode,
+                            "Option to specify your own custom join code (use at your own risk)")
+                    ->check([](const std::string &val) {
+                        if (val.size() < 12)
+                            return std::string("Join code must be at least 12 characters");
+
+                        for (char c: val) {
+                            if (!std::isalnum(c) && c != '-')
+                                return std::string("Only [a-zA-Z0-9-] allowed");
+                        }
+                        return std::string{};
+                    })->capture_default_str();
 
             app->set_version_flag("--version", common::versionString);
 
             app->parse_complete_callback([&]() {
-
                 if (quicConnWindowBytes < quicStreamWindowBytes) {
                     throw CLI::ValidationError("--quic-conn-window-bytes",
                                                "must be >= --quic-stream-window-bytes");
@@ -114,7 +127,6 @@ namespace sender {
                     spdlog::warn("udp-buffer-bytes is < 1MiB; this may limit throughput");
                 }
             });
-
         }
     };
 }

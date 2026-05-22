@@ -119,6 +119,25 @@ export type TranslationKey =
   | "engineNotReadyRestartBody"
   | "restartAppNow"
   | "openSettings"
+  | "thisPcCodeTitle"
+  | "thisPcCodeBody"
+  | "thisPcCodeRandomBody"
+  | "copyPcCode"
+  | "sharePcCode"
+  | "regeneratePcCode"
+  | "savedPcsTitle"
+  | "savedPcsEmpty"
+  | "savePc"
+  | "savePcTitle"
+  | "savePcNameLabel"
+  | "savePcNamePlaceholder"
+  | "savePcConfirm"
+  | "cancel"
+  | "removeSavedPc"
+  | "savedPcInvalidCodeTitle"
+  | "savedPcInvalidCodeBody"
+  | "randomJoinCodeMode"
+  | "randomJoinCodeModeHint"
   | "serverUrl"
   | "stunServer"
   | "turnServers"
@@ -219,6 +238,7 @@ export interface SettingsState {
   overwrite: boolean
   udpBufferBytes: number
   maxReceivers: number
+  randomJoinCodeMode: boolean
   notifyReceiverSessionComplete: boolean
   notifySenderReceiverJoined: boolean
   notifySenderReceiverComplete: boolean
@@ -239,6 +259,14 @@ export interface AppDialogState {
   actionLabel?: string
   onAction?: () => void
   blocking?: boolean
+}
+
+export interface SavedPc {
+  id: string
+  name: string
+  joinCode: string
+  createdAt: number
+  updatedAt: number
 }
 
 export interface ManifestProgressState {

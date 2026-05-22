@@ -16,7 +16,12 @@ import type {
   ThrufluxEvent,
   Unsubscribe,
 } from "../common/types";
-import { HEALTH_POLL_INTERVAL_MS, SETTINGS_STORAGE_KEY } from "./constants";
+import {
+  HEALTH_POLL_INTERVAL_MS,
+  PC_JOIN_CODE_STORAGE_KEY,
+  SAVED_PCS_STORAGE_KEY,
+  SETTINGS_STORAGE_KEY,
+} from "./constants";
 import { AppDialog } from "./components/AppDialog";
 import { HomeScreen } from "./components/HomeScreen";
 import { ReceiveScreen } from "./components/ReceiveScreen";
@@ -31,6 +36,7 @@ import type {
   ManifestProgressState,
   ReceiveFlowStage,
   ReceiveTransferProgressState,
+  SavedPc,
   SendEntry,
   SendFlowStage,
   SenderTransferProgressState,
@@ -41,6 +47,10 @@ import type {
 import {
   entriesFromDrop,
   entriesFromNativePicker,
+  generatePcJoinCode,
+  isValidJoinCode,
+  loadPcJoinCodeFromStorage,
+  loadSavedPcsFromStorage,
   loadSettingsFromStorage,
   mergeUniqueEntries,
   splitTurnServers,
@@ -64,6 +74,14 @@ export default function App(): JSX.Element {
   const [hasSettledHealth, setHasSettledHealth] = useState(false);
   const [screen, setScreen] = useState<AppScreen>("home");
   const [receiveJoinCode, setReceiveJoinCode] = useState("");
+  const [pcJoinCode, setPcJoinCode] = useState(() =>
+    loadPcJoinCodeFromStorage(),
+  );
+  const [savedPcs, setSavedPcs] = useState<SavedPc[]>(() =>
+    loadSavedPcsFromStorage(),
+  );
+  const [savePcDialogCode, setSavePcDialogCode] = useState<string | null>(null);
+  const [savePcName, setSavePcName] = useState("");
   const [receiveSaveDirectory, setReceiveSaveDirectory] = useState("");
   const [isReceiveDirectoryValid, setIsReceiveDirectoryValid] = useState(false);
   const [receiveFlowStage, setReceiveFlowStage] =
@@ -160,6 +178,10 @@ export default function App(): JSX.Element {
       } satisfies SettingsState),
     );
   }, [settingsState]);
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_PCS_STORAGE_KEY, JSON.stringify(savedPcs));
+  }, [savedPcs]);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -903,6 +925,9 @@ export default function App(): JSX.Element {
       quicConnWindowBytes: settingsState.quicConnWindowBytes,
       udpBufferBytes: settingsState.udpBufferBytes,
     };
+    if (!settingsState.randomJoinCodeMode) {
+      payload["custom-join-code"] = pcJoinCode;
+    }
 
     setIsStartingSend(true);
     setJoinCode("");
@@ -1105,6 +1130,134 @@ export default function App(): JSX.Element {
     })();
   };
 
+  const sharePcCode = (): void => {
+    if (settingsState.randomJoinCodeMode) {
+      return;
+    }
+    void (async () => {
+      try {
+        const shareResult = await window.thruflux.shareText(
+          t("thisPcCodeTitle"),
+          pcJoinCode,
+        );
+        if (shareResult.ok) {
+          if (shareResult.method === "clipboard-only") {
+            openDialog(t("thisPcCodeTitle"), t("codeCopiedMessage"), "success");
+          }
+          return;
+        }
+      } catch {}
+      try {
+        if (navigator.share) {
+          await navigator.share({ text: pcJoinCode, title: t("thisPcCodeTitle") });
+          return;
+        }
+      } catch {}
+      try {
+        await navigator.clipboard.writeText(pcJoinCode);
+        openDialog(t("thisPcCodeTitle"), t("codeCopiedMessage"), "success");
+      } catch {
+        openDialog(t("thisPcCodeTitle"), pcJoinCode, "info");
+      }
+    })();
+  };
+
+  const copyPcCode = (): void => {
+    if (settingsState.randomJoinCodeMode) {
+      return;
+    }
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(pcJoinCode);
+        openDialog(t("thisPcCodeTitle"), t("codeCopiedMessage"), "success");
+      } catch {
+        openDialog(t("thisPcCodeTitle"), pcJoinCode, "info");
+      }
+    })();
+  };
+
+  const regeneratePcCode = (): void => {
+    if (settingsState.randomJoinCodeMode) {
+      return;
+    }
+    const next = generatePcJoinCode();
+    localStorage.setItem(PC_JOIN_CODE_STORAGE_KEY, next);
+    setPcJoinCode(next);
+  };
+
+  const openSavePcDialog = (): void => {
+    const code = receiveJoinCode.trim();
+    if (!isValidJoinCode(code)) {
+      openDialog(
+        t("savedPcInvalidCodeTitle"),
+        t("savedPcInvalidCodeBody"),
+        "error",
+      );
+      return;
+    }
+    const existing = savedPcs.find(
+      (entry) => entry.joinCode.toLowerCase() === code.toLowerCase(),
+    );
+    setSavePcDialogCode(code);
+    setSavePcName(existing?.name ?? "");
+  };
+
+  const confirmSavePc = (): void => {
+    const code = savePcDialogCode?.trim() ?? "";
+    const name = savePcName.trim();
+    if (!isValidJoinCode(code) || name.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    setSavedPcs((prev) => {
+      const existingIdx = prev.findIndex(
+        (entry) => entry.joinCode.toLowerCase() === code.toLowerCase(),
+      );
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        next[existingIdx] = {
+          ...next[existingIdx],
+          name,
+          joinCode: code,
+          updatedAt: now,
+        };
+        return next.sort((a, b) => b.updatedAt - a.updatedAt);
+      }
+      const id =
+        globalThis.crypto && "randomUUID" in globalThis.crypto
+          ? globalThis.crypto.randomUUID()
+          : `${now}-${Math.random().toString(36).slice(2)}`;
+      return [
+        {
+          id,
+          name,
+          joinCode: code,
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...prev,
+      ];
+    });
+    setSavePcDialogCode(null);
+    setSavePcName("");
+  };
+
+  const removeSavedPc = (id: string): void => {
+    setSavedPcs((prev) => prev.filter((entry) => entry.id !== id));
+  };
+
+  const selectSavedPc = (savedPc: SavedPc): void => {
+    setReceiveJoinCode(savedPc.joinCode);
+    setScreen("receive");
+    setSavedPcs((prev) =>
+      prev
+        .map((entry) =>
+          entry.id === savedPc.id ? { ...entry, updatedAt: Date.now() } : entry,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    );
+  };
+
   const openReceiveFolder = (): void => {
     if (!receiveSaveDirectory) {
       return;
@@ -1134,7 +1287,12 @@ export default function App(): JSX.Element {
           onGoSend={() => setScreen("send")}
           onGoReceive={() => setScreen("receive")}
           onGoSettings={() => setScreen("settings")}
+          onCopyPcCode={copyPcCode}
+          onSharePcCode={sharePcCode}
+          onRegeneratePcCode={regeneratePcCode}
           versionString={versionString}
+          pcJoinCode={pcJoinCode}
+          randomJoinCodeMode={settingsState.randomJoinCodeMode}
         />
       ) : null}
 
@@ -1225,8 +1383,12 @@ export default function App(): JSX.Element {
           manifestSummaryFilesCount={receiveManifestSummaryFilesCount}
           manifestSummaryTotalSize={receiveManifestSummaryTotalSize}
           transferProgress={receiveTransferProgress}
+          savedPcs={savedPcs}
           onBack={goHome}
           onJoinCodeChange={setReceiveJoinCode}
+          onSelectSavedPc={selectSavedPc}
+          onSaveCurrentPc={openSavePcDialog}
+          onRemoveSavedPc={removeSavedPc}
           onSelectDirectory={() => {
             void pickReceiveDirectory();
           }}
@@ -1252,6 +1414,53 @@ export default function App(): JSX.Element {
       {toastMessage ? (
         <div className="app-toast" role="status" aria-live="polite">
           {toastMessage}
+        </div>
+      ) : null}
+
+      {savePcDialogCode ? (
+        <div
+          className="dialog-backdrop"
+          role="presentation"
+          onClick={() => setSavePcDialogCode(null)}
+        >
+          <section
+            className="dialog-card tone-info save-pc-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("savePcTitle")}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-accent" aria-hidden="true"></div>
+            <h2>{t("savePcTitle")}</h2>
+            <div className="save-pc-code">{savePcDialogCode}</div>
+            <label className="save-pc-field">
+              <span>{t("savePcNameLabel")}</span>
+              <input
+                type="text"
+                value={savePcName}
+                onChange={(event) => setSavePcName(event.currentTarget.value)}
+                placeholder={t("savePcNamePlaceholder")}
+                autoFocus
+              />
+            </label>
+            <div className="dialog-actions">
+              <button
+                className="dialog-btn"
+                type="button"
+                onClick={confirmSavePc}
+                disabled={savePcName.trim().length === 0}
+              >
+                {t("savePcConfirm")}
+              </button>
+              <button
+                className="dialog-btn"
+                type="button"
+                onClick={() => setSavePcDialogCode(null)}
+              >
+                {t("cancel")}
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
 

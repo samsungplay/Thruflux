@@ -50,6 +50,7 @@ namespace sender {
                                         .maxReceivers = SenderConfig::maxReceivers,
                                         .totalSize = senderPersistentContext.totalExpectedBytes,
                                         .filesCount = senderPersistentContext.totalExpectedFilesCount,
+                                        .customJoinCode = SenderConfig::customJoinCode
                                     };
 
                             socket.send(nlohmann::json(createTransferSessionPayload).dump());
