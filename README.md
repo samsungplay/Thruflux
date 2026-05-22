@@ -1,6 +1,5 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
-Project Status: There are some bug fixes and improvements to make (received some suggestions from users); however, right now I'm currently a bit caught up with work, and I plan to catch up on the issues and additional features hopefully by next month. But the basic functionalities should all work and you are welcome to use the tool at any time, as the server will remain operational.
-
+**New Update**: By some miracle, I managed to compile the binaries in android, which means I can finally port Thruflux as an android app. I'm actively working on it, so stay tuned for updates!
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
 
@@ -393,6 +392,70 @@ codesign --force --sign - --timestamp=none thru
 
 ```bash
 lipo -create -output build_universal_mac/thru build/thru build_intel_mac/thru
+```
+
+
+## Android (Building on mac)
+
+> Produces a native Android CLI binary (`thru`) for **Android 9+ (API 28+)** on **arm64-v8a** devices.
+
+### 1) Install prerequisites
+
+Install:
+
+- Android Studio
+- Android NDK **r27+** (recommended: `27.3.13750724`)
+- CMake >= 3.24
+- vcpkg
+- Ninja
+- pkgconf
+
+macOS example:
+
+```bash
+brew install cmake ninja pkgconf bison nasm
+```
+
+Set NDK path:
+
+```bash
+export ANDROID_NDK_HOME="$HOME/Library/Android/sdk/ndk/27.3.13750724"
+```
+
+### 2) Configure and build
+
+```bash
+git clone https://github.com/samsungplay/Thruflux.git
+cd Thruflux
+
+cmake -S . -B build_android -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(which ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DVCPKG_TARGET_TRIPLET=arm64-android \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DPKG_CONFIG_EXECUTABLE="$(which pkgconf)"
+
+cmake --build build_android --parallel
+```
+
+### 3) Output binary
+
+```bash
+./build_android/thru
+```
+
+Verify architecture:
+
+```bash
+file build_android/thru
+```
+
+Expected:
+
+```txt
+ELF 64-bit LSB pie executable, ARM aarch64
 ```
 
 
