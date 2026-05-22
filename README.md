@@ -431,6 +431,7 @@ git clone https://github.com/samsungplay/Thruflux.git
 cd Thruflux
 
 cmake -S . -B build_android -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_MAKE_PROGRAM="$(which ninja)" \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
