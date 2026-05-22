@@ -6,11 +6,12 @@
 Built in C++, Thruflux is a cross-platform, **highly speed-focused, peer-to-peer** file transfer toolkit built for moving multiple files and folders **as fast as your network allows** between **any two random devices**. Unlike traditional p2p file tools, Thruflux is entirely focused on use of the modern QUIC UDP protocol.
 
 
-Thruflux provides both:
+Thruflux provides all of these:
 
 - 🖥 **Desktop UI application**
 - 💻 **Command-line interface (CLI)**
-
+- 📱 **Android App (COMING SOON)**
+- IOS app is planned after the Android app port
 CLI consists of four core subcommands:
 
 thru server - opens a lightweight signaling server for discovery & ICE negotiation (for self-hosting).
