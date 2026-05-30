@@ -12,7 +12,7 @@ android {
         applicationId = "app.thruflux.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
+        versionCode = 4
         versionName = "0.1.0"
     }
 
@@ -45,6 +45,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
     debugImplementation(composeBom)
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

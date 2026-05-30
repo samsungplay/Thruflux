@@ -10,6 +10,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -43,12 +44,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +59,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DarkMode
@@ -64,7 +68,9 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Inbox
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
@@ -75,6 +81,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -87,6 +96,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,9 +127,21 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -169,6 +191,8 @@ private fun ThrufluxApp() {
             val notifiedCompleted = remember { mutableSetOf<String>() }
             val notifiedFailed = remember { mutableSetOf<String>() }
             val mainHandler = remember { Handler(Looper.getMainLooper()) }
+            val snackbarHostState = remember { SnackbarHostState() }
+            val snackbarScope = rememberCoroutineScope()
             val engineState by EngineStatus.state.collectAsState()
             val engineBaseUrl by EngineStatus.baseUrl.collectAsState()
             val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -213,6 +237,13 @@ private fun ThrufluxApp() {
                     )
                 } else {
                     readPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                }
+            }
+            fun copyWithSnackbar(label: String, text: String) {
+                copyText(context, label, text)
+                snackbarScope.launch {
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    snackbarHostState.showSnackbar("$label copied")
                 }
             }
             fun resetSenderState() {
@@ -290,11 +321,9 @@ private fun ThrufluxApp() {
                                     }
                                 }
                                 "progress" -> {
-                                    val receiverId = event.message.optString("receiverId", "").ifBlank {
-                                        "receiver-${senderTransfers.size + 1}"
-                                    }
-                                    val hasError = event.message.optBoolean("hasError", false)
-                                    val percent = event.message.optDouble("percent", 0.0)
+                                    val receiverId = senderReceiverId(event.message, senderTransfers) ?: return@post
+                                    val hasError = event.message.optBooleanAny(listOf("hasError", "has_error"), false)
+                                    val percent = event.message.optDoubleAny(listOf("percent"), 0.0)
                                     val status = when {
                                         hasError -> TransferStatus.Failed
                                         percent >= 100.0 -> TransferStatus.Completed
@@ -302,12 +331,12 @@ private fun ThrufluxApp() {
                                     }
                                     val next = SenderTransferProgress(
                                         receiverId = receiverId,
-                                        ewmaThroughput = event.message.optDouble("ewmaThroughput", 0.0),
-                                        bytesMoved = event.message.optLong("bytesMoved", 0L),
-                                        skippedBytes = event.message.optLong("skippedBytes", 0L),
-                                        filesMoved = event.message.optInt("filesMoved", 0),
-                                        totalExpectedFilesCount = event.message.optInt("totalExpectedFilesCount", 0),
-                                        isRelayed = event.message.optBoolean("isRelayed", false),
+                                        ewmaThroughput = event.message.optDoubleAny(listOf("ewmaThroughput", "ewma_throughput"), 0.0),
+                                        bytesMoved = event.message.optLongAny(listOf("bytesMoved", "bytes_moved"), 0L),
+                                        skippedBytes = event.message.optLongAny(listOf("skippedBytes", "skipped_bytes"), 0L),
+                                        filesMoved = event.message.optIntAny(listOf("filesMoved", "files_moved"), 0),
+                                        totalExpectedFilesCount = event.message.optIntAny(listOf("totalExpectedFilesCount", "total_expected_files_count"), 0),
+                                        isRelayed = event.message.optBooleanAny(listOf("isRelayed", "is_relayed"), false),
                                         percent = percent,
                                         hasError = hasError,
                                         status = status,
@@ -443,7 +472,11 @@ private fun ThrufluxApp() {
                     },
                     onError = { message ->
                         mainHandler.post {
-                            if (receiveFlowStage != ReceiveFlowStage.Idle) {
+                            if (
+                                receiveFlowStage != ReceiveFlowStage.Idle &&
+                                receiveFlowStage != ReceiveFlowStage.Complete &&
+                                receiveFlowStage != ReceiveFlowStage.Failed
+                            ) {
                                 appDialog = AppDialog("Connection issue", message)
                             }
                         }
@@ -616,6 +649,7 @@ private fun ThrufluxApp() {
                     senderEventThread?.interrupt()
                 }
             }
+            Box(modifier = Modifier.fillMaxSize()) {
             when (screen) {
                 AppScreen.Home -> HomeScreen(
                     engineState = engineState,
@@ -633,7 +667,7 @@ private fun ThrufluxApp() {
                         }
                         saveThemePreference(context, themePreference)
                     },
-                    onCopyDeviceCode = { copyText(context, "Device code", deviceCode) },
+                    onCopyDeviceCode = { copyWithSnackbar("Device code", deviceCode) },
                     onShareDeviceCode = { shareText(context, deviceCode) },
                     onRegenerateDeviceCode = {
                         deviceCode = generateDeviceCode()
@@ -668,7 +702,7 @@ private fun ThrufluxApp() {
                     onConfirm = { startSending() },
                     onAbort = { goHomeFromSend() },
                     onShareJoinCode = { if (sendJoinCode.isNotBlank()) shareText(context, sendJoinCode) },
-                    onCopyJoinCode = { if (sendJoinCode.isNotBlank()) copyText(context, "Join code", sendJoinCode) },
+                    onCopyJoinCode = { if (sendJoinCode.isNotBlank()) copyWithSnackbar("Join code", sendJoinCode) },
                     onAbortReceiver = { receiverId -> abortReceiver(receiverId) },
                 )
                 AppScreen.Receive -> ReceiveScreen(
@@ -716,11 +750,7 @@ private fun ThrufluxApp() {
                     },
                     onReceive = { startReceiving() },
                     onAbort = { goHomeFromReceive() },
-                    onOpenSaveFolder = {
-                        openFolder(context, receiveSaveDirectory) { message ->
-                            appDialog = AppDialog("Could not open folder", message)
-                        }
-                    },
+                    onCopySavePath = { copyWithSnackbar("Save path", receiveSaveDirectory) },
                     onRetry = { resetReceiveState() },
                 )
                 AppScreen.Settings -> SettingsShell(
@@ -742,6 +772,7 @@ private fun ThrufluxApp() {
                         }
                         saveThemePreference(context, themePreference)
                     },
+                    onOpenPrivacyPolicy = { openUrl(context, PRIVACY_POLICY_URL) },
                     onBack = { screen = AppScreen.Home },
                 )
             }
@@ -886,6 +917,21 @@ private fun ThrufluxApp() {
             if (showSplash) {
                 SplashOverlay(themePreference = themePreference)
             }
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .safeDrawingPadding()
+                    .padding(16.dp),
+            ) { data ->
+                Snackbar(
+                    containerColor = palette(themePreference).surfaceStrong,
+                    contentColor = palette(themePreference).text,
+                    actionColor = Color(0xFF1976FF),
+                    snackbarData = data,
+                )
+            }
+            }
         }
     }
 }
@@ -940,6 +986,7 @@ private data class PickerEntry(
     val name: String,
     val size: Long?,
     val isDirectory: Boolean,
+    val lastModified: Long,
 )
 
 private data class QuickFolder(
@@ -1128,28 +1175,35 @@ private fun HomeScreen(
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         val compactHeight = maxHeight < 700.dp
-        HomeContent(
-            scrollable = compactHeight,
-            engineState = engineState,
-            themePreference = themePreference,
-            palette = palette,
-            deviceCode = deviceCode,
-            randomJoinCodeMode = randomJoinCodeMode,
-            onSend = onSend,
-            onReceive = onReceive,
-            onBlockedNavigation = onBlockedNavigation,
-            onToggleTheme = onToggleTheme,
-            onCopyDeviceCode = onCopyDeviceCode,
-            onShareDeviceCode = onShareDeviceCode,
-            onRegenerateDeviceCode = onRegenerateDeviceCode,
-            onOpenSettings = onOpenSettings,
-            onOpenDesktopDownload = onOpenDesktopDownload,
-        )
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            HomeContent(
+                modifier = Modifier
+                    .widthIn(max = 680.dp)
+                    .fillMaxWidth()
+                    .fillMaxHeight(),
+                scrollable = compactHeight,
+                engineState = engineState,
+                themePreference = themePreference,
+                palette = palette,
+                deviceCode = deviceCode,
+                randomJoinCodeMode = randomJoinCodeMode,
+                onSend = onSend,
+                onReceive = onReceive,
+                onBlockedNavigation = onBlockedNavigation,
+                onToggleTheme = onToggleTheme,
+                onCopyDeviceCode = onCopyDeviceCode,
+                onShareDeviceCode = onShareDeviceCode,
+                onRegenerateDeviceCode = onRegenerateDeviceCode,
+                onOpenSettings = onOpenSettings,
+                onOpenDesktopDownload = onOpenDesktopDownload,
+            )
+        }
     }
 }
 
 @Composable
 private fun HomeContent(
+    modifier: Modifier = Modifier,
     scrollable: Boolean,
     engineState: EngineState,
     themePreference: ThemePreference,
@@ -1168,11 +1222,10 @@ private fun HomeContent(
 ) {
     Column(
         modifier = if (scrollable) {
-            Modifier
-                .fillMaxSize()
+            modifier
                 .verticalScroll(rememberScrollState())
         } else {
-            Modifier.fillMaxSize()
+            modifier
         },
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1502,6 +1555,8 @@ private fun ThemedModal(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 560.dp)
+                .heightIn(max = 680.dp)
                 .clip(RoundedCornerShape(24.dp))
                 .background(Brush.linearGradient(listOf(palette.surfaceStrong, palette.surface)))
                 .border(1.dp, palette.border, RoundedCornerShape(24.dp))
@@ -1524,7 +1579,10 @@ private fun ThemedModal(
                 )
             }
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 content = body,
             )
@@ -1578,31 +1636,38 @@ private fun SendScreen(
             .background(Brush.linearGradient(listOf(palette.bg, palette.bgAccent)))
             .safeDrawingPadding()
             .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        if (flowStage == SendFlowStage.Idle) {
-            SendIdleContent(
-                palette = palette,
-                entries = entries,
-                canSend = canSend && !isStarting,
-                isStarting = isStarting,
-                onBack = onBack,
-                onPick = onPick,
-                onRemove = onRemove,
-                onConfirm = onConfirm,
-            )
-        } else {
-            SendStateContent(
-                palette = palette,
-                flowStage = flowStage,
-                joinCode = joinCode,
-                manifestProgress = manifestProgress,
-                senderTransfers = senderTransfers,
-                onBack = onBack,
-                onAbort = onAbort,
-                onShareJoinCode = onShareJoinCode,
-                onCopyJoinCode = onCopyJoinCode,
-                onAbortReceiver = onAbortReceiver,
-            )
+        Box(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .fillMaxSize(),
+        ) {
+            if (flowStage == SendFlowStage.Idle) {
+                SendIdleContent(
+                    palette = palette,
+                    entries = entries,
+                    canSend = canSend && !isStarting,
+                    isStarting = isStarting,
+                    onBack = onBack,
+                    onPick = onPick,
+                    onRemove = onRemove,
+                    onConfirm = onConfirm,
+                )
+            } else {
+                SendStateContent(
+                    palette = palette,
+                    flowStage = flowStage,
+                    joinCode = joinCode,
+                    manifestProgress = manifestProgress,
+                    senderTransfers = senderTransfers,
+                    onBack = onBack,
+                    onAbort = onAbort,
+                    onShareJoinCode = onShareJoinCode,
+                    onCopyJoinCode = onCopyJoinCode,
+                    onAbortReceiver = onAbortReceiver,
+                )
+            }
         }
     }
 }
@@ -1625,10 +1690,13 @@ private fun SendIdleContent(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SenderTopActions(palette = palette, onBack = onBack, onAbort = null)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill(label = "$fileCount files selected", icon = Icons.Rounded.InsertDriveFile, palette = palette, modifier = Modifier.weight(1f))
-            SummaryPill(label = "$folderCount folders selected", icon = Icons.Rounded.Folder, palette = palette, modifier = Modifier.weight(1f))
-        }
+        SummaryPillRow(
+            firstLabel = "$fileCount files selected",
+            firstIcon = Icons.Rounded.InsertDriveFile,
+            secondLabel = "$folderCount folders selected",
+            secondIcon = Icons.Rounded.Folder,
+            palette = palette,
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1874,7 +1942,38 @@ private fun SummaryPill(label: String, icon: ImageVector, palette: HomePalette, 
     ) {
         Icon(icon, contentDescription = null, tint = palette.text, modifier = Modifier.size(16.dp))
         Box(modifier = Modifier.size(6.dp))
-        Text(label, color = palette.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = label,
+            color = palette.text,
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun SummaryPillRow(
+    firstLabel: String,
+    firstIcon: ImageVector,
+    secondLabel: String,
+    secondIcon: ImageVector,
+    palette: HomePalette,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (maxWidth < 360.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                SummaryPill(firstLabel, firstIcon, palette, Modifier.fillMaxWidth())
+                SummaryPill(secondLabel, secondIcon, palette, Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                SummaryPill(firstLabel, firstIcon, palette, Modifier.weight(1f))
+                SummaryPill(secondLabel, secondIcon, palette, Modifier.weight(1f))
+            }
+        }
     }
 }
 
@@ -1966,13 +2065,13 @@ private fun LoadingIcon(icon: ImageVector, loading: Boolean) {
 
 @Composable
 private fun ManifestSummary(progress: ManifestProgress, palette: HomePalette) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        SummaryPill("Items found: ${progress.filesCount}", Icons.Rounded.InsertDriveFile, palette, Modifier.weight(1f))
-        SummaryPill("Total size: ${formatSize(progress.totalSize)}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-    }
+    SummaryPillRow(
+        firstLabel = "Items found: ${progress.filesCount}",
+        firstIcon = Icons.Rounded.InsertDriveFile,
+        secondLabel = "Total size: ${formatSize(progress.totalSize)}",
+        secondIcon = Icons.Rounded.Upload,
+        palette = palette,
+    )
 }
 
 @Composable
@@ -2040,18 +2139,27 @@ private fun SenderTransferRow(
             )
         }
         Text("${transfer.percent.roundToInt().coerceIn(0, 100)}%", color = palette.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Speed: ${formatThroughput(transfer.ewmaThroughput)}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-            SummaryPill("Moved: ${formatSize(transfer.bytesMoved)}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Skipped: ${formatSize(transfer.skippedBytes)}", Icons.Rounded.InsertDriveFile, palette, Modifier.weight(1f))
-            SummaryPill("Files: ${transfer.filesMoved}/${transfer.totalExpectedFilesCount}", Icons.Rounded.Folder, palette, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Route: ${if (transfer.isRelayed) "Relayed" else "Direct"}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-            SummaryPill("ETA: ${formatEta(manifestProgress.totalSize, transfer.bytesMoved, transfer.skippedBytes, transfer.ewmaThroughput)}", Icons.Rounded.Settings, palette, Modifier.weight(1f))
-        }
+        SummaryPillRow(
+            firstLabel = "Speed: ${formatThroughput(transfer.ewmaThroughput)}",
+            firstIcon = Icons.Rounded.Upload,
+            secondLabel = "Moved: ${formatSize(transfer.bytesMoved)}",
+            secondIcon = Icons.Rounded.Upload,
+            palette = palette,
+        )
+        SummaryPillRow(
+            firstLabel = "Skipped: ${formatSize(transfer.skippedBytes)}",
+            firstIcon = Icons.Rounded.InsertDriveFile,
+            secondLabel = "Files: ${transfer.filesMoved}/${transfer.totalExpectedFilesCount}",
+            secondIcon = Icons.Rounded.Folder,
+            palette = palette,
+        )
+        SummaryPillRow(
+            firstLabel = "Route: ${if (transfer.isRelayed) "Relayed" else "Direct"}",
+            firstIcon = Icons.Rounded.Upload,
+            secondLabel = "ETA: ${formatEta(manifestProgress.totalSize, transfer.bytesMoved, transfer.skippedBytes, transfer.ewmaThroughput)}",
+            secondIcon = Icons.Rounded.Settings,
+            palette = palette,
+        )
         if (transfer.status == TransferStatus.Ongoing) {
             Button(onClick = { onAbortReceiver(transfer.receiverId) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Stop receiver")
@@ -2075,6 +2183,7 @@ private fun FilePickerDialog(
     var pickerEntries by remember { mutableStateOf<List<PickerEntry>>(emptyList()) }
     var isListing by remember { mutableStateOf(true) }
     var listingError by remember { mutableStateOf<String?>(null) }
+    var infoEntry by remember { mutableStateOf<PickerEntry?>(null) }
     val quickFolders = remember { commonPickerFolders() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     DisposableEffect(currentDir.absolutePath) {
@@ -2095,6 +2204,7 @@ private fun FilePickerDialog(
                             name = it.name,
                             size = if (it.isDirectory) null else it.length(),
                             isDirectory = it.isDirectory,
+                            lastModified = it.lastModified(),
                         )
                     }
                     .sortedWith(compareBy<PickerEntry> { !it.isDirectory }.thenBy { it.name.lowercase(Locale.US) })
@@ -2249,6 +2359,7 @@ private fun FilePickerDialog(
                                     selected = if (selected.contains(entry)) selected - entry else selected + entry
                                 }
                             },
+                            onInfo = { infoEntry = pickerEntry },
                         )
                     }
                 }
@@ -2265,6 +2376,21 @@ private fun FilePickerDialog(
             }
         },
     )
+    infoEntry?.let { entry ->
+        ThemedModal(
+            palette = palette,
+            onDismissRequest = { infoEntry = null },
+            title = "Item info",
+            body = {
+                FileInfoDetails(entry = entry, palette = palette)
+            },
+            actions = {
+                Button(onClick = { infoEntry = null }) {
+                    Text("Close")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -2367,10 +2493,11 @@ private fun FilePickerRow(
     canOpen: Boolean,
     onOpen: () -> Unit,
     onSelect: () -> Unit,
+    onInfo: () -> Unit,
 ) {
     val rowClick = if (canOpen) Modifier.clickable(onClick = onOpen) else Modifier
     val imageBitmap = remember(path) {
-        if (isPreviewableImage(path)) decodeImagePreview(path) else null
+        decodeMediaPreview(path)
     }
     Column(
         modifier = Modifier
@@ -2406,19 +2533,65 @@ private fun FilePickerRow(
                 Text(name, color = palette.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text(detail, color = palette.textSoft, fontSize = 11.sp, maxLines = 1)
             }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(if (selected) Color(0xFF1976FF) else palette.surfaceStrong)
-                    .border(1.dp, if (selected) Color(0xFF1976FF) else palette.border, RoundedCornerShape(999.dp))
-                    .clickable(onClick = onSelect)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(if (selected) "Selected" else "Select", color = if (selected) Color.White else palette.text, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.surfaceStrong)
+                        .border(1.dp, palette.border, RoundedCornerShape(999.dp))
+                        .clickable(onClick = onInfo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Info, contentDescription = "Info", tint = palette.text, modifier = Modifier.size(16.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (selected) Color(0xFF1976FF) else palette.surfaceStrong)
+                        .border(1.dp, if (selected) Color(0xFF1976FF) else palette.border, RoundedCornerShape(999.dp))
+                        .clickable(onClick = onSelect)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(if (selected) "Selected" else "Select", color = if (selected) Color.White else palette.text, fontSize = 11.sp)
+                }
             }
         }
     }
+}
+
+@Composable
+private fun FileInfoDetails(entry: PickerEntry, palette: HomePalette) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FileInfoRow("Name", entry.name, palette)
+        FileInfoRow("Type", if (entry.isDirectory) "Folder" else "File", palette)
+        FileInfoRow("Size", if (entry.isDirectory) "Folder" else formatSize(entry.size ?: 0L), palette)
+        FileInfoRow("Modified", formatModifiedTime(entry.lastModified), palette)
+        FileInfoRow("Path", entry.path, palette)
+    }
+}
+
+@Composable
+private fun FileInfoRow(label: String, value: String, palette: HomePalette) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(palette.surface)
+            .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(label, color = palette.textSoft, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(value, color = palette.text, fontSize = 13.sp, lineHeight = 17.sp)
+    }
+}
+
+private fun decodeMediaPreview(path: String) = when {
+    isPreviewableImage(path) -> decodeImagePreview(path)
+    isPreviewableVideo(path) -> decodeVideoPreview(path)
+    else -> null
 }
 
 private fun isPreviewableImage(path: String): Boolean {
@@ -2429,6 +2602,18 @@ private fun isPreviewableImage(path: String): Boolean {
         lower.endsWith(".webp") ||
         lower.endsWith(".gif") ||
         lower.endsWith(".bmp")
+}
+
+private fun isPreviewableVideo(path: String): Boolean {
+    val lower = path.lowercase(Locale.US)
+    return lower.endsWith(".mp4") ||
+        lower.endsWith(".m4v") ||
+        lower.endsWith(".mov") ||
+        lower.endsWith(".mkv") ||
+        lower.endsWith(".webm") ||
+        lower.endsWith(".3gp") ||
+        lower.endsWith(".3gpp") ||
+        lower.endsWith(".avi")
 }
 
 private fun decodeImagePreview(path: String) = runCatching {
@@ -2448,6 +2633,16 @@ private fun decodeImagePreview(path: String) = runCatching {
         inSampleSize = sampleSize
     }
     BitmapFactory.decodeFile(path, options)
+}.getOrNull()
+
+private fun decodeVideoPreview(path: String) = runCatching {
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(path)
+        retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    } finally {
+        retriever.release()
+    }
 }.getOrNull()
 
 @Composable
@@ -2472,7 +2667,7 @@ private fun ReceiveScreen(
     onOverwriteChange: (Boolean) -> Unit,
     onReceive: () -> Unit,
     onAbort: () -> Unit,
-    onOpenSaveFolder: () -> Unit,
+    onCopySavePath: () -> Unit,
     onRetry: () -> Unit,
 ) {
     val palette = palette(themePreference)
@@ -2482,38 +2677,45 @@ private fun ReceiveScreen(
             .background(Brush.linearGradient(listOf(palette.bg, palette.bgAccent)))
             .safeDrawingPadding()
             .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        if (flowStage == ReceiveFlowStage.Idle) {
-            ReceiveIdleContent(
-                palette = palette,
-                joinCode = joinCode,
-                saveDirectory = saveDirectory,
-                overwrite = overwrite,
-                savedDevices = savedDevices,
-                canReceive = canReceive,
-                onBack = onBack,
-                onJoinCodeChange = onJoinCodeChange,
-                onSelectSavedDevice = onSelectSavedDevice,
-                onSaveCurrentDevice = onSaveCurrentDevice,
-                onRemoveSavedDevice = onRemoveSavedDevice,
-                onSelectDirectory = onSelectDirectory,
-                onOverwriteChange = onOverwriteChange,
-                onReceive = onReceive,
-            )
-        } else {
-            ReceiveStateContent(
-                palette = palette,
-                flowStage = flowStage,
-                saveDirectory = saveDirectory,
-                manifestTotalSize = manifestTotalSize,
-                manifestSummaryFilesCount = manifestSummaryFilesCount,
-                manifestSummaryTotalSize = manifestSummaryTotalSize,
+        Box(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .fillMaxSize(),
+        ) {
+            if (flowStage == ReceiveFlowStage.Idle) {
+                ReceiveIdleContent(
+                    palette = palette,
+                    joinCode = joinCode,
+                    saveDirectory = saveDirectory,
+                    overwrite = overwrite,
+                    savedDevices = savedDevices,
+                    canReceive = canReceive,
+                    onBack = onBack,
+                    onJoinCodeChange = onJoinCodeChange,
+                    onSelectSavedDevice = onSelectSavedDevice,
+                    onSaveCurrentDevice = onSaveCurrentDevice,
+                    onRemoveSavedDevice = onRemoveSavedDevice,
+                    onSelectDirectory = onSelectDirectory,
+                    onOverwriteChange = onOverwriteChange,
+                    onReceive = onReceive,
+                )
+            } else {
+                ReceiveStateContent(
+                    palette = palette,
+                    flowStage = flowStage,
+                    saveDirectory = saveDirectory,
+                    manifestTotalSize = manifestTotalSize,
+                    manifestSummaryFilesCount = manifestSummaryFilesCount,
+                    manifestSummaryTotalSize = manifestSummaryTotalSize,
                 transferProgress = transferProgress,
                 onBack = onBack,
                 onAbort = onAbort,
-                onOpenSaveFolder = onOpenSaveFolder,
+                onCopySavePath = onCopySavePath,
                 onRetry = onRetry,
             )
+        }
         }
     }
 }
@@ -2674,7 +2876,7 @@ private fun ReceiveStateContent(
     transferProgress: ReceiveTransferProgress,
     onBack: () -> Unit,
     onAbort: () -> Unit,
-    onOpenSaveFolder: () -> Unit,
+    onCopySavePath: () -> Unit,
     onRetry: () -> Unit,
 ) {
     Column(
@@ -2705,7 +2907,7 @@ private fun ReceiveStateContent(
                 }
                 ReceiveFlowStage.ManifestParsing -> StatePanel(Icons.Rounded.InsertDriveFile, "Preparing your transfer", "Checking file details and finding the best place to continue", palette, loading = true)
                 ReceiveFlowStage.QuicReady -> StatePanel(Icons.Rounded.Upload, "Secure channel ready", "Preparing to move files", palette)
-                ReceiveFlowStage.Transfer, ReceiveFlowStage.Complete, ReceiveFlowStage.Failed -> ReceiveTransferPanel(flowStage, saveDirectory, manifestSummaryFilesCount, manifestSummaryTotalSize, transferProgress, palette, onAbort, onOpenSaveFolder, onRetry)
+                ReceiveFlowStage.Transfer, ReceiveFlowStage.Complete, ReceiveFlowStage.Failed -> ReceiveTransferPanel(flowStage, saveDirectory, manifestSummaryFilesCount, manifestSummaryTotalSize, transferProgress, palette, onAbort, onCopySavePath, onRetry)
                 ReceiveFlowStage.Idle -> Unit
             }
         }
@@ -2721,7 +2923,7 @@ private fun ReceiveTransferPanel(
     progress: ReceiveTransferProgress,
     palette: HomePalette,
     onAbort: () -> Unit,
-    onOpenSaveFolder: () -> Unit,
+    onCopySavePath: () -> Unit,
     onRetry: () -> Unit,
 ) {
     Column(
@@ -2742,27 +2944,39 @@ private fun ReceiveTransferPanel(
             else -> "Files are moving now"
         }
         StatePanel(Icons.Rounded.Download, title, body, palette, loading = flowStage == ReceiveFlowStage.Transfer)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Expected files: $filesCount", Icons.Rounded.InsertDriveFile, palette, Modifier.weight(1f))
-            SummaryPill("Expected size: ${formatSize(totalSize)}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-        }
+        SummaryPillRow(
+            firstLabel = "Expected files: $filesCount",
+            firstIcon = Icons.Rounded.InsertDriveFile,
+            secondLabel = "Expected size: ${formatSize(totalSize)}",
+            secondIcon = Icons.Rounded.Upload,
+            palette = palette,
+        )
         Text(saveDirectory, color = palette.textSoft, fontSize = 11.sp, maxLines = 2, textAlign = TextAlign.Center)
         Text("${progress.percent.roundToInt().coerceIn(0, 100)}%", color = palette.text, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Speed: ${formatThroughput(progress.ewmaThroughput)}", Icons.Rounded.Download, palette, Modifier.weight(1f))
-            SummaryPill("Moved: ${formatSize(progress.bytesMoved)}", Icons.Rounded.Download, palette, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Skipped: ${formatSize(progress.skippedBytes)}", Icons.Rounded.InsertDriveFile, palette, Modifier.weight(1f))
-            SummaryPill("Files: ${progress.filesMoved}/${progress.totalExpectedFilesCount}", Icons.Rounded.Folder, palette, Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            SummaryPill("Route: ${if (progress.isRelayed) "Relayed" else "Direct"}", Icons.Rounded.Upload, palette, Modifier.weight(1f))
-            SummaryPill("ETA: ${formatEta(totalSize, progress.bytesMoved, progress.skippedBytes, progress.ewmaThroughput)}", Icons.Rounded.Settings, palette, Modifier.weight(1f))
-        }
+        SummaryPillRow(
+            firstLabel = "Speed: ${formatThroughput(progress.ewmaThroughput)}",
+            firstIcon = Icons.Rounded.Download,
+            secondLabel = "Moved: ${formatSize(progress.bytesMoved)}",
+            secondIcon = Icons.Rounded.Download,
+            palette = palette,
+        )
+        SummaryPillRow(
+            firstLabel = "Skipped: ${formatSize(progress.skippedBytes)}",
+            firstIcon = Icons.Rounded.InsertDriveFile,
+            secondLabel = "Files: ${progress.filesMoved}/${progress.totalExpectedFilesCount}",
+            secondIcon = Icons.Rounded.Folder,
+            palette = palette,
+        )
+        SummaryPillRow(
+            firstLabel = "Route: ${if (progress.isRelayed) "Relayed" else "Direct"}",
+            firstIcon = Icons.Rounded.Upload,
+            secondLabel = "ETA: ${formatEta(totalSize, progress.bytesMoved, progress.skippedBytes, progress.ewmaThroughput)}",
+            secondIcon = Icons.Rounded.Settings,
+            palette = palette,
+        )
         when (flowStage) {
             ReceiveFlowStage.Transfer -> Button(onClick = onAbort, modifier = Modifier.fillMaxWidth()) { Text("Stop transfer") }
-            ReceiveFlowStage.Complete -> Button(onClick = onOpenSaveFolder, modifier = Modifier.fillMaxWidth()) { Text("Open save folder") }
+            ReceiveFlowStage.Complete -> Button(onClick = onCopySavePath, modifier = Modifier.fillMaxWidth()) { Text("Copy saved path") }
             ReceiveFlowStage.Failed -> Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
             else -> Unit
         }
@@ -2776,6 +2990,7 @@ private fun SettingsShell(
     onPatchSettings: ((AppSettings) -> AppSettings) -> Unit,
     onRestoreDefaults: () -> Unit,
     onToggleTheme: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
     onBack: () -> Unit,
 ) {
     val palette = palette(themePreference)
@@ -2786,9 +3001,11 @@ private fun SettingsShell(
             .background(Brush.linearGradient(listOf(palette.bg, palette.bgAccent)))
             .safeDrawingPadding()
             .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
         Column(
             modifier = Modifier
+                .widthIn(max = 760.dp)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -2839,6 +3056,13 @@ private fun SettingsShell(
                 }
             }
             SettingsNotice(palette)
+            SettingsActionButton(
+                label = "View privacy policy",
+                hint = "Opens the Thruflux privacy policy in your browser",
+                icon = Icons.Rounded.Lock,
+                palette = palette,
+                onClick = onOpenPrivacyPolicy,
+            )
             SettingsSectionTitle("Connection", palette)
             SettingsTextField(
                 label = "Server URL",
@@ -3026,6 +3250,41 @@ private fun SettingsSectionTitle(text: String, palette: HomePalette) {
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+@Composable
+private fun SettingsActionButton(
+    label: String,
+    hint: String,
+    icon: ImageVector,
+    palette: HomePalette,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.surfaceStrong)
+            .border(1.dp, palette.border, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0x221976FF)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = Color(0xFF1976FF), modifier = Modifier.size(18.dp))
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label, color = palette.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(hint, color = palette.textSoft, fontSize = 11.sp, lineHeight = 14.sp)
+        }
+    }
 }
 
 @Composable
@@ -3578,6 +3837,7 @@ private fun defaultReceiveDirectory(): String {
 private fun commonPickerFolders(): List<QuickFolder> {
     return listOf(
         QuickFolder("Downloads", "$SHARED_STORAGE_ROOT/Download", Icons.Rounded.Download),
+        QuickFolder("DCIM", "$SHARED_STORAGE_ROOT/DCIM", Icons.Rounded.CameraAlt),
         QuickFolder("Photos", "$SHARED_STORAGE_ROOT/Pictures", Icons.Rounded.InsertDriveFile),
         QuickFolder("Videos", "$SHARED_STORAGE_ROOT/Movies", Icons.Rounded.InsertDriveFile),
         QuickFolder("Music", "$SHARED_STORAGE_ROOT/Music", Icons.Rounded.Folder),
@@ -3704,26 +3964,50 @@ private fun subscribeSenderEvents(
     onError: (String) -> Unit,
 ): Thread {
     val thread = Thread {
-        runCatching {
-            val connection = URL("$baseUrl/events").openConnection() as HttpURLConnection
-            connection.connectTimeout = 2000
-            connection.readTimeout = 0
-            connection.requestMethod = "GET"
-            connection.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    if (Thread.currentThread().isInterrupted) {
-                        return@Thread
-                    }
-                    if (line.startsWith("data:")) {
-                        parseEventLine(line.removePrefix("data:").trim())?.let(onEvent)
-                    }
+        var failures = 0
+        while (!Thread.currentThread().isInterrupted) {
+            val done = CountDownLatch(1)
+            val lastError = AtomicReference<String?>(null)
+            val sourceRef = AtomicReference<EventSource?>(null)
+            val request = Request.Builder()
+                .url("$baseUrl/events")
+                .build()
+            val listener = object : EventSourceListener() {
+                override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                    failures = 0
+                    parseEventLine(data.trim())?.let(onEvent)
+                }
+
+                override fun onClosed(eventSource: EventSource) {
+                    done.countDown()
+                }
+
+                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                    lastError.set(t?.message ?: response?.message ?: "Could not listen for updates")
+                    done.countDown()
                 }
             }
-            connection.disconnect()
-        }.onFailure {
-            if (!Thread.currentThread().isInterrupted) {
-                onError(it.message ?: "Could not listen for updates")
+            sourceRef.set(eventSourceFactory.newEventSource(request, listener))
+            try {
+                done.await()
+            } catch (_: InterruptedException) {
+                sourceRef.get()?.cancel()
+                Thread.currentThread().interrupt()
+                return@Thread
             }
+            if (Thread.currentThread().isInterrupted) {
+                sourceRef.get()?.cancel()
+                return@Thread
+            }
+            val message = lastError.get()
+            if (message != null) {
+                failures += 1
+                if (failures >= 4) {
+                    onError(message)
+                    return@Thread
+                }
+            }
+            Thread.sleep((500L * (failures + 1)).coerceAtMost(2000L))
         }
     }
     thread.start()
@@ -3734,9 +4018,81 @@ private fun parseEventLine(payload: String): ThrufluxEvent? {
     return runCatching {
         val json = JSONObject(payload)
         val messageValue = json.opt("message")
-        val message = if (messageValue is JSONObject) messageValue else JSONObject()
+        val message = when (messageValue) {
+            is JSONObject -> messageValue
+            is String -> messageValue.trim().takeIf { it.startsWith("{") }?.let { JSONObject(it) } ?: JSONObject()
+            else -> if (json.has("receiverId") || json.has("receiver_id") || json.has("percent")) json else JSONObject()
+        }
         ThrufluxEvent(type = json.optString("type"), message = message)
     }.getOrNull()
+}
+
+private val eventHttpClient: OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(3, TimeUnit.SECONDS)
+    .readTimeout(0, TimeUnit.MILLISECONDS)
+    .retryOnConnectionFailure(true)
+    .build()
+
+private val eventSourceFactory = EventSources.createFactory(eventHttpClient)
+
+private fun senderReceiverId(message: JSONObject, existing: List<SenderTransferProgress>): String? {
+    val explicit = message.optStringAny(listOf("receiverId", "receiver_id", "receiverID", "id"), "")
+    if (explicit.isNotBlank()) {
+        return explicit
+    }
+    return when (existing.size) {
+        0 -> "receiver-1"
+        1 -> existing.first().receiverId
+        else -> null
+    }
+}
+
+private fun JSONObject.optStringAny(keys: List<String>, fallback: String): String {
+    for (key in keys) {
+        if (has(key) && !isNull(key)) {
+            val value = optString(key, "").trim()
+            if (value.isNotBlank()) {
+                return value
+            }
+        }
+    }
+    return fallback
+}
+
+private fun JSONObject.optDoubleAny(keys: List<String>, fallback: Double): Double {
+    for (key in keys) {
+        if (has(key) && !isNull(key)) {
+            return optDouble(key, fallback)
+        }
+    }
+    return fallback
+}
+
+private fun JSONObject.optLongAny(keys: List<String>, fallback: Long): Long {
+    for (key in keys) {
+        if (has(key) && !isNull(key)) {
+            return optLong(key, fallback)
+        }
+    }
+    return fallback
+}
+
+private fun JSONObject.optIntAny(keys: List<String>, fallback: Int): Int {
+    for (key in keys) {
+        if (has(key) && !isNull(key)) {
+            return optInt(key, fallback)
+        }
+    }
+    return fallback
+}
+
+private fun JSONObject.optBooleanAny(keys: List<String>, fallback: Boolean): Boolean {
+    for (key in keys) {
+        if (has(key) && !isNull(key)) {
+            return optBoolean(key, fallback)
+        }
+    }
+    return fallback
 }
 
 private fun isNormalClosure(reason: String): Boolean {
@@ -3859,6 +4215,13 @@ private fun formatEta(totalBytes: Long, movedBytes: Long, skippedBytes: Long, by
     return if (remMinutes == 0) "${hours}h" else "${hours}h ${remMinutes}m"
 }
 
+private fun formatModifiedTime(value: Long): String {
+    if (value <= 0L) {
+        return "Unknown"
+    }
+    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(value))
+}
+
 private fun startEngineService(context: Context) {
     val intent = Intent(context, EngineService::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -3871,6 +4234,7 @@ private fun startEngineService(context: Context) {
 private const val DEFAULT_SERVER_URL = "wss://bytepipe.app/ws"
 private const val DEFAULT_STUN_SERVER = "stun://stun.cloudflare.com:3478"
 private const val DESKTOP_DOWNLOAD_URL = "https://thruflux.bytepipe.app/"
+private const val PRIVACY_POLICY_URL = "https://yielding-alibi-e88.notion.site/Privacy-Policy-Thruflux-368bfd7f3a4f80c289e3fa3391e6383e?source=copy_link"
 private const val QSW_MIN = 256L * 1024L
 private const val QSW_MAX = 2L * 1024L * 1024L * 1024L
 private const val QCW_MIN = 1L * 1024L * 1024L
