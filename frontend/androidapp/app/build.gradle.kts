@@ -12,7 +12,7 @@ android {
         applicationId = "app.thruflux.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
+        versionCode = 6
         versionName = "0.1.0"
     }
 

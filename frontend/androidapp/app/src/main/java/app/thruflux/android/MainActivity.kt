@@ -699,6 +699,7 @@ private fun ThrufluxApp() {
                         }
                     },
                     onRemove = { entry -> sendEntries = sendEntries.filterNot { it == entry } },
+                    onClear = { sendEntries = emptyList() },
                     onConfirm = { startSending() },
                     onAbort = { goHomeFromSend() },
                     onShareJoinCode = { if (sendJoinCode.isNotBlank()) shareText(context, sendJoinCode) },
@@ -1623,6 +1624,7 @@ private fun SendScreen(
     onBack: () -> Unit,
     onPick: () -> Unit,
     onRemove: (SendEntry) -> Unit,
+    onClear: () -> Unit,
     onConfirm: () -> Unit,
     onAbort: () -> Unit,
     onShareJoinCode: () -> Unit,
@@ -1652,6 +1654,7 @@ private fun SendScreen(
                     onBack = onBack,
                     onPick = onPick,
                     onRemove = onRemove,
+                    onClear = onClear,
                     onConfirm = onConfirm,
                 )
             } else {
@@ -1681,6 +1684,7 @@ private fun SendIdleContent(
     onBack: () -> Unit,
     onPick: () -> Unit,
     onRemove: (SendEntry) -> Unit,
+    onClear: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     val fileCount = entries.count { !it.isDirectory }
@@ -1738,8 +1742,13 @@ private fun SendIdleContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("You can still add more files", color = palette.textSoft, fontSize = 12.sp)
-                    Button(onClick = onPick) {
-                        Text("Add")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onClear) {
+                            Text("Clear")
+                        }
+                        Button(onClick = onPick) {
+                            Text("Add")
+                        }
                     }
                 }
                 Column(
@@ -2184,6 +2193,7 @@ private fun FilePickerDialog(
     var isListing by remember { mutableStateOf(true) }
     var listingError by remember { mutableStateOf<String?>(null) }
     var infoEntry by remember { mutableStateOf<PickerEntry?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     val quickFolders = remember { commonPickerFolders() }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     DisposableEffect(currentDir.absolutePath) {
@@ -2191,6 +2201,7 @@ private fun FilePickerDialog(
         isListing = true
         listingError = null
         pickerEntries = emptyList()
+        searchQuery = ""
         val dir = currentDir
         val thread = Thread {
             val result = runCatching {
@@ -2241,6 +2252,18 @@ private fun FilePickerDialog(
                     onOpen = { path -> currentDir = File(path) },
                 )
                 Text(currentDir.absolutePath, fontSize = 11.sp, color = palette.textSoft, maxLines = 2)
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search this folder") },
+                    singleLine = true,
+                    colors = themedTextFieldColors(palette),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val listedEntries = if (directoryOnly) pickerEntries.filter { it.isDirectory } else pickerEntries
+                val filteredEntries = searchQuery.trim().takeIf { it.isNotBlank() }?.let { query ->
+                    listedEntries.filter { it.name.contains(query, ignoreCase = true) }
+                } ?: listedEntries
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2333,9 +2356,24 @@ private fun FilePickerDialog(
                                     .padding(12.dp),
                             )
                         }
+                    } else if (filteredEntries.isEmpty()) {
+                        item(key = "no-results") {
+                            Text(
+                                text = "No matching files",
+                                color = palette.textSoft,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(palette.surface)
+                                    .border(1.dp, palette.border, RoundedCornerShape(12.dp))
+                                    .padding(12.dp),
+                            )
+                        }
                     }
                     items(
-                        if (directoryOnly) pickerEntries.filter { it.isDirectory } else pickerEntries,
+                        filteredEntries,
                         key = { it.path },
                     ) { pickerEntry ->
                         val entry = SendEntry(pickerEntry.path, pickerEntry.size, pickerEntry.isDirectory)
