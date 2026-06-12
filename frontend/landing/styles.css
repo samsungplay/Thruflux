@@ -662,22 +662,21 @@ body {
   text-decoration: none;
 }
 
-.download-btn.coming-soon {
-  border-color: rgba(255, 209, 131, 0.35);
+.download-btn.android {
+  border-color: rgba(31, 212, 167, 0.35);
   background: linear-gradient(
     135deg,
-    rgba(255, 209, 131, 0.1),
+    rgba(31, 212, 167, 0.12),
     rgba(47, 144, 255, 0.08)
   );
-  cursor: default;
 }
 
-.download-btn.coming-soon i {
-  color: #ffd183;
+.download-btn.android i {
+  color: #53e6bf;
 }
 
-.download-btn.coming-soon small:last-child {
-  color: #ffe1a8;
+.download-btn.android small:last-child {
+  color: #8ff0d5;
   font-weight: 700;
 }
 
