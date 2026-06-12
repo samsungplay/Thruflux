@@ -1,5 +1,8 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
-**New Update**: Android version has been released! Check the website (link down below) for more information.
+**New Update**: Android version has been released! Check the website (link down below) for more information, or just directly view the app here:
+
+[Android App Link](https://play.google.com/store/apps/details?id=app.thruflux.android)
+
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
 
