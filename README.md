@@ -1,5 +1,8 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
-**New Update**: By some miracle, I managed to compile the binaries in android, which means I can finally port Thruflux as an android app. I'm actively working on it, so stay tuned for updates!
+**New Update**: Android version has been released! Check the website (link down below) for more information, or just directly view the app here:
+
+[Android App Link](https://play.google.com/store/apps/details?id=app.thruflux.android)
+
 <img width="2816" height="1536" alt="Thruflux_Logo" src="https://github.com/user-attachments/assets/cf853fd9-50ff-4d43-ac86-7de4c9042371" />
 
 
@@ -10,8 +13,8 @@ Thruflux provides all of these:
 
 - 🖥 **Desktop UI application**
 - 💻 **Command-line interface (CLI)**
-- 📱 **Android App (COMING SOON)**
-- IOS app is planned after the Android app port
+- 📱 **Android App**
+- IOS app is planned
 
 CLI consists of four core subcommands:
 
@@ -27,7 +30,7 @@ thru ui - opens a local web interface that lets you host/join via REST endpoint 
 
 # Website
 
-For the **desktop application download** and **project landing page**:
+For the **desktop/android application download** and **project landing page**:
 
 https://thruflux.bytepipe.app/
 
