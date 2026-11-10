@@ -1,5 +1,5 @@
 # Thruflux (Open Beta, Newly Re-written in C++)
-**New Update**: Android version has been released! Check the website (link down below) for more information, or just directly view the app here:
+**New Update**: Matters have become quite busy in real life so it is becoming increasingly difficult to allocate time for the further development of this tool. However, I have not abandoned this tool entirely; the core functionalities are in place and sever will remain operational. I hope this tool benefits your day in whatever way possible.
 
 [Android App Link](https://play.google.com/store/apps/details?id=app.thruflux.android)
 
